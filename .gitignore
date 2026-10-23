@@ -1,0 +1,34 @@
+# C++ intermediate compilation files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.d
+*.pch
+*.gch
+*.gcda
+*.gcno
+*.gcov
+*.mod
+*.smod
+
+# Executables
+*.exe
+*.out
+*.app/
+
+# Build directories
+build/
+Build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Images
+*.png
+*.gif

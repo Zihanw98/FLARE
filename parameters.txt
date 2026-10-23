@@ -1,0 +1,15 @@
+# Temporary 1-D Sod shock tube. Keys are case-sensitive.
+# Blank lines and text after # are ignored. Unknown keys are ignored.
+
+Xa = 100.0           # Active-region length
+nxa = 1000            # Active cells
+nxg = 1              # Ghost cells on EACH side
+ndim = 1            #dimension
+
+
+tmax = 40.0
+output_every = 20
+boundary_conditions = zero_gradient
+output_name = test
+# nx and dxa are derived, not input parameters.
+# The initial left/right states and gamma remain the Sod defaults.
