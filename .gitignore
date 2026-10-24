@@ -32,3 +32,6 @@ cmake_install.cmake
 # Images
 *.png
 *.gif
+
+#IDE
+.vscode/
