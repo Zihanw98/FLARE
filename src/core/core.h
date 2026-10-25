@@ -104,15 +104,22 @@ namespace hd_core
     {
         Conserved W;
         W[RHO] = data[RHO];
-        double E_k = 0;
+        auto vel = Velocity();
         for(int i=0;i<NDIM;i++)
         {
             W[MOMDEN(i)] = W[RHO] * data[VEL(i)];
         }
-        W[ENERGY] = data[PRE] / (gamma - 1);
+        W[ENERGY] = data[PRE] / (gamma - 1) + 0.5 * W[RHO] * vel.squared_norm();
     }
     inline Primitives Conserved::to_Primtivies(double gamma) const
     {
         Primitives W;
+        W[RHO] = data[RHO];
+        auto vel = Velocity();
+        for(int i=0;i<NDIM;i++)
+        {
+            W[VEL(i)] = data[MOMDEN(i)] / W[RHO];
+        }
+        W[PRE] = (gamma - 1) * (data[ENERGY] - 0.5 * W[RHO] * vel.squared_norm());
     }
 }
