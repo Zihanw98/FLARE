@@ -11,6 +11,11 @@ int MeshBlock::total(int d) const
     if (d < 0 || d >= NDIM)
         throw std::out_of_range("Invalid mesh direction");
 
+    if (nactive[d] <= 0 || nghost[d] < 0)
+        throw std::invalid_argument("Invalid mesh size");
+    if (nghost[d] > (std::numeric_limits<int>::max() - nactive[d]) / 2)
+        throw std::overflow_error("Mesh size overflow");
+
     return nactive[d] + 2 * nghost[d];
 }
 
@@ -19,7 +24,14 @@ double MeshBlock::spacing(int d) const
     if (d < 0 || d >= NDIM)
         throw std::out_of_range("Invalid mesh direction");
 
-    return length[d] / nactive[d];
+    if (nactive[d] <= 0)
+        throw std::invalid_argument("Active cell count must be positive");
+    if (!std::isfinite(length[d]) || length[d] <= 0.0)
+        throw std::invalid_argument("Domain length must be finite and positive");
+    const double result = length[d] / nactive[d];
+    if (!std::isfinite(result) || result <= 0.0)
+        throw std::invalid_argument("Invalid derived cell spacing");
+    return result;
 }
 
 void MeshBlock::allocate()
@@ -28,6 +40,7 @@ void MeshBlock::allocate()
 
     for (int d = 0; d < NDIM; ++d)
     {
+        (void)spacing(d); // Also reject underflow to a zero cell width.
         if (nactive[d] <= 0 || nghost[d] < 0)
             throw std::invalid_argument("Invalid mesh size");
 

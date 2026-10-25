@@ -12,8 +12,8 @@ namespace hd_core
         
         int total(int d) const;
         
-        std::array<int,NDIM> dx;
-        std::array<int,NDIM> length;
+        std::array<double,NDIM> dx{};
+        std::array<double,NDIM> length{};
 
         double spacing(int d) const;
         
