@@ -61,7 +61,10 @@ namespace hd_core
         }
         return USER_BEGIN + i;
     }
+    struct Primitives;
     struct Conserved;
+    
+
     struct Primitives
     {
         std::array<double,NVAR> data{};
@@ -78,6 +81,8 @@ namespace hd_core
         // Constant-gamma ideal gas; vacuum states are not supported.
         void validate(double gamma) const;
     };
+
+
     struct Conserved
     {
         std::array<double,NVAR> data{};
@@ -93,21 +98,41 @@ namespace hd_core
         hdmath::Vector Velocity() const;
         void validate(double gamma) const;
     };
+
     inline void Primitives::validate(double gamma) const
     {
         if (!std::isfinite(gamma) || gamma <= 1.0)
-            throw std::invalid_argument("Primitives: gamma must be finite and > 1");
+            throw std::invalid_argument("Invalid gamma");
 
-        // Extra components must be finite, but their physical bounds depend
-        // on the user's definition (not every extra is a mass fraction).
         for (double value : data)
+        {
             if (!std::isfinite(value))
-                throw std::invalid_argument("Primitives: state contains NaN or infinity");
+                throw std::invalid_argument("Non-finite primitive state");
+        }
 
-        if (data[RHO] <= 0.0)
-            throw std::invalid_argument("Primitives: density must be positive");
+        if (data[RHO] == 0.0)
+        {
+            if (data[PRE] != 0.0)
+                throw std::invalid_argument(
+                    "Vacuum must have zero pressure"
+                );
+
+            for (int d = 0; d < NDIM; ++d)
+            {
+                if (data[VEL(d)] != 0.0)
+                    throw std::invalid_argument(
+                        "Vacuum velocity must be stored as zero"
+                    );
+            }
+
+            return;
+        }
+
+        if (data[RHO] < 0.0)
+            throw std::invalid_argument("Negative density");
+
         if (data[PRE] <= 0.0)
-            throw std::invalid_argument("Primitives: pressure must be positive");
+            throw std::invalid_argument("Gas pressure must be positive");
     }
 
     inline void Conserved::validate(double gamma) const
@@ -120,8 +145,26 @@ namespace hd_core
                 throw std::invalid_argument("Conserved: state contains NaN or infinity");
 
         const double rho = data[RHO];
-        if (rho <= 0.0)
-            throw std::invalid_argument("Conserved: density must be positive");
+        if (rho == 0.0)
+        {
+            for (int d = 0; d < NDIM; ++d)
+            {
+                if (data[MOMDEN(d)] != 0.0)
+                    throw std::invalid_argument(
+                        "Vacuum must have zero momentum"
+                    );
+            }
+
+            if (data[ENERGY] != 0.0)
+                throw std::invalid_argument(
+                    "Vacuum must have zero energy"
+                );
+
+            return;
+        }
+
+        if (rho < 0.0)
+            throw std::invalid_argument("Negative density");
 
         double kinetic = 0.0;
         for (int d = 0; d < NDIM; ++d)
@@ -152,12 +195,43 @@ namespace hd_core
     }
     inline hdmath::Vector Conserved::Velocity() const
     {
-        std::vector<double> part(data.begin() + 1, data.begin() + NDIM +1 );
-        auto momden = hdmath::Vector(part);
-        return hdmath::Vector(momden/data[RHO]);
+        const double rho = data[RHO];
+
+        if (!std::isfinite(rho) || rho < 0.0)
+            throw std::invalid_argument("Invalid density");
+
+        if (rho == 0.0)
+        {
+            for (int d = 0; d < NDIM; ++d)
+            {
+                if (data[MOMDEN(d)] != 0.0)
+                    throw std::invalid_argument(
+                        "Vacuum must have zero momentum"
+                    );
+            }
+
+            if (data[ENERGY] != 0.0)
+                throw std::invalid_argument(
+                    "Vacuum must have zero energy"
+                );
+
+            return hdmath::Vector(NDIM, 0.0);
+        }
+
+        std::vector<double> part(
+            data.begin() + 1,
+            data.begin() + NDIM + 1
+        );
+        
+        return hdmath::Vector(part) / rho;
     }
+
     inline Conserved Primitives::to_Conserved(double gamma) const
     {
+        if (data[RHO] == 0.0)
+        {
+            return Conserved{};
+        }
         Conserved W;
         W[RHO] = data[RHO];
         auto vel = Velocity();
@@ -166,10 +240,15 @@ namespace hd_core
             W[MOMDEN(i)] = W[RHO] * data[VEL(i)];
         }
         W[ENERGY] = data[PRE] / (gamma - 1) + 0.5 * W[RHO] * vel.squared_norm();
+        W.validate(gamma);
         return W;
     }
     inline Primitives Conserved::to_Primtivies(double gamma) const
     {
+        if (data[RHO] == 0.0)
+        {
+            return Primitives{};
+        }
         Primitives W;
         W[RHO] = data[RHO];
         auto vel = Velocity();
@@ -178,6 +257,7 @@ namespace hd_core
             W[VEL(i)] = data[MOMDEN(i)] / W[RHO];
         }
         W[PRE] = (gamma - 1) * (data[ENERGY] - 0.5 * W[RHO] * vel.squared_norm());
+        W.validate(gamma);
         return W;
     }
 }

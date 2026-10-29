@@ -10,7 +10,7 @@ namespace hd_core
         std::array<int,NDIM> nactive{};
         std::array<int,NDIM> nghost{};
         
-        int total(int d) const;
+        int ntotal(int d) const;
         
         // Tensor-product coordinates, including ghost faces.
         // face[d].size() == total(d) + 1.
@@ -33,6 +33,6 @@ namespace hd_core
         void allocate();
 
         std::vector<Cell> cells;
-
+ 
     };
 }

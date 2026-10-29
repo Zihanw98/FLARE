@@ -26,7 +26,7 @@ void validate_axis(const std::vector<double>& faces, int count)
 }
 }
 
-int MeshBlock::total(int d) const
+int MeshBlock::ntotal(int d) const
 {
     if (d < 0 || d >= NDIM)
         throw std::out_of_range("Invalid mesh direction");
@@ -41,7 +41,7 @@ int MeshBlock::total(int d) const
 
 void MeshBlock::set_uniform_faces(int d, double lower, double upper)
 {
-    const int count = total(d); // Checks direction, sizes, and integer overflow.
+    const int count = ntotal(d); // Checks direction, sizes, and integer overflow.
     if (!std::isfinite(lower) || !std::isfinite(upper) || upper <= lower)
         throw std::invalid_argument("Uniform grid bounds must be finite and increasing");
 
@@ -69,7 +69,7 @@ void MeshBlock::set_uniform_faces(int d, double lower, double upper)
 
 double MeshBlock::cell_width(int d, int i) const
 {
-    const int count = total(d);
+    const int count = ntotal(d);
     if (i < 0 || i >= count)
         throw std::out_of_range("Invalid mesh cell index");
     if (face[d].size() != static_cast<std::size_t>(count) + 1)
@@ -93,7 +93,7 @@ double MeshBlock::cell_center(int d, int i) const
 
 double MeshBlock::active_length(int d) const
 {
-    const int count = total(d);
+    const int count = ntotal(d);
     validate_axis(face[d], count);
     const auto first = static_cast<std::size_t>(nghost[d]);
     const auto last = first + static_cast<std::size_t>(nactive[d]);
@@ -116,7 +116,7 @@ void MeshBlock::allocate()
 
     for (int d = 0; d < NDIM; ++d)
     {
-        const auto n = static_cast<std::size_t>(total(d));
+        const auto n = static_cast<std::size_t>(ntotal(d));
 
         if (count > cells.max_size() / n)
             throw std::length_error("Too many mesh cells");
