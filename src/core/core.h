@@ -12,7 +12,7 @@ namespace hd_core
     inline constexpr int NCOMP = HD_NCOMP;
     inline constexpr int NUSER = HD_NUSER;
     using VECDIM = std::array<double, NDIM>;
-
+    using Index = std::array<int, NDIM>;
     //Total Number of Variables: for conservatives and primitives...
     inline constexpr int NVAR = 2 + NDIM + NCOMP + NUSER;
 
@@ -94,10 +94,86 @@ namespace hd_core
         {
             return data[i];
         }
+
+        // Component-wise arithmetic also applies to fluxes and RHS values,
+        // which need not satisfy physical-state positivity constraints.
+        Conserved& operator+=(const Conserved& other)
+        {
+            for (int k = 0; k < NVAR; ++k)
+                data[k] += other.data[k];
+            return *this;
+        }
+
+        Conserved& operator-=(const Conserved& other)
+        {
+            for (int k = 0; k < NVAR; ++k)
+                data[k] -= other.data[k];
+            return *this;
+        }
+
+        Conserved operator+(const Conserved& other) const
+        {
+            Conserved result = *this;
+            result += other;
+            return result;
+        }
+
+        Conserved operator-(const Conserved& other) const
+        {
+            Conserved result = *this;
+            result -= other;
+            return result;
+        }
+
+        Conserved operator-() const
+        {
+            Conserved result = *this;
+            for (double& value : result.data)
+                value = -value;
+            return result;
+        }
+
+        Conserved& operator*=(double scalar)
+        {
+            for (double& value : data)
+                value *= scalar;
+            return *this;
+        }
+
+        Conserved operator*(double scalar) const
+        {
+            Conserved result = *this;
+            result *= scalar;
+            return result;
+        }
+
+        Conserved& operator/=(double scalar)
+        {
+            if (scalar == 0.0)
+                throw std::domain_error("Conserved: division by zero");
+
+            // Divide directly to avoid overflowing the reciprocal of a tiny scalar.
+            for (double& value : data)
+                value /= scalar;
+            return *this;
+        }
+
+        Conserved operator/(double scalar) const
+        {
+            Conserved result = *this;
+            result /= scalar;
+            return result;
+        }
+
         Primitives to_Primtivies(double gamma) const;
         hdmath::Vector Velocity() const;
         void validate(double gamma) const;
     };
+
+    inline Conserved operator*(double scalar, const Conserved& state)
+    {
+        return state * scalar;
+    }
 
     inline void Primitives::validate(double gamma) const
     {

@@ -1,4 +1,3 @@
-#pragma once
 #include "flux.h"
 
 
@@ -28,6 +27,5 @@ namespace hydro
         }
         F[hd_core::ENERGY] = (U[hd_core::ENERGY] + p) * v_n;
         return F;
-        
     }
 }

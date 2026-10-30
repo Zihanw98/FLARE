@@ -1,6 +1,6 @@
-#pragma once
 #include "exact.h"
 #include "core.h"
+#include "flux.h"
 #include <cmath>
 #include <optional>
 #include <utility>
@@ -397,11 +397,13 @@ namespace hydro
             InterfaceState interfaceState;
             if(vacuum_R)
             {
-                interfaceState = gas_to_vacuum();
+                //left gas to right vacuum
+                interfaceState = gas_to_vacuum(WL,gamma_L,Side::Left,direction);
             }
             else if(vacuum_L)
             {
-                interfaceState = gas_to_vacuum();
+                //right gas to left vacuum
+                interfaceState = gas_to_vacuum(WR,gamma_R,Side::Right,direction);
             }
             else
             {
