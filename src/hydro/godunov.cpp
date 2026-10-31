@@ -1,9 +1,11 @@
-#include "flux.h"
 #include "godunov.h"
-#include "riemann.h"
+#include "wave_timestep.h"
+#include "riemann/riemann.h"
 #include "facefield.h"
 #include "core.h"
-#include "mesh.h"
+#include "core/mesh.h"
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 namespace hydro
 {
@@ -13,15 +15,22 @@ namespace hydro
         std::vector<hd_core::Conserved>& rhs
     )
     {
+        // 每次 RHS 都重新统计，避免沿用上一个时间步的限制。
+        wave_timestep = {};
+        if (mesh.cells.empty() || rhs.size() != mesh.cells.size())
+            throw std::invalid_argument("Godunov requires allocated mesh and matching RHS storage");
+        mesh.validate_geometry();
         auto nactive = mesh.nactive;
         auto nghost = mesh.nghost;
-        auto ntotal = mesh.ntotal();
         std::array<FaceField, hd_core::NDIM> flux;
+        // 与面通量使用相同的 flat 下标，避免重新求解 Riemann 问题。
+        std::array<std::vector<double>, hd_core::NDIM> face_speed;
         for(int n=0;n<hd_core::NDIM;n++)
         {
             auto shape = nactive;
             shape[n]++;
             flux[n].allocate(shape);
+            face_speed[n].resize(flux[n].faces.size());
         }
         for (int n = 0; n < hd_core::NDIM; ++n)
         {
@@ -51,8 +60,12 @@ namespace hydro
                 const auto WL = cellLeft.U.to_Primtivies(gamma_L);
                 const auto WR = cellRight.U.to_Primtivies(gamma_R);
 
-                field.faces[i] =
-                    solver.flux(WL, WR, n, gamma_L, gamma_R);
+                // 哨兵值：求解器若忘记写入当前面波速，就报错而不沿用旧值。
+                wave_timestep.face_speed = -1.0;
+                field.faces[i] = solver.flux(WL, WR, n, gamma_L, gamma_R);
+                if (!std::isfinite(wave_timestep.face_speed) || wave_timestep.face_speed < 0.0)
+                    throw std::runtime_error("Invalid Riemann wave speed");
+                face_speed[n][i] = wave_timestep.face_speed;
             }
         }
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
@@ -73,9 +86,8 @@ namespace hydro
             if (!is_active)
                 continue;  
 
-            const auto& cell = mesh.cells[flat];
-
             rhs[flat] = {{}};
+            double inverse_dt = 0.0;
             auto face_left_index = index;
             for(int n=0;n<hd_core::NDIM;n++)
             {
@@ -85,8 +97,14 @@ namespace hydro
                 const auto& F_nL = flux[n].at(face_left_index);
                 const auto& F_nR = flux[n].at(face_right_index);
                 rhs[flat] += -(F_nR-F_nL) / ds_n;
+                const auto left_flat = flux[n].flat_index(face_left_index);
+                const auto right_flat = flux[n].flat_index(face_right_index);
+                inverse_dt += std::max(face_speed[n][left_flat],
+                                       face_speed[n][right_flat]) / ds_n;
             }
+            if (!std::isfinite(inverse_dt))
+                throw std::runtime_error("Non-finite Godunov CFL rate");
+            wave_timestep.max_inverse_dt = std::max(wave_timestep.max_inverse_dt, inverse_dt);
         }
-
     }
 }

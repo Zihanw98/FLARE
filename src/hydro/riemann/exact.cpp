@@ -1,6 +1,8 @@
 #include "exact.h"
+#include "hydro/wave_timestep.h"
 #include "core.h"
 #include "flux.h"
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <utility>
@@ -13,6 +15,19 @@ namespace hydro
             Left,
             Right
         };
+        // 非真空气体一侧的最外层波：激波速度或稀疏波头速度。
+        double outer_wave_speed(const hd_core::Primitives& W, double gamma,
+                                double p_star, Side side, int direction)
+        {
+            const double p = W[hd_core::PRE];
+            const double c = std::sqrt(gamma * p / W[hd_core::RHO]);
+            const double factor = p_star > p
+                ? std::sqrt((gamma + 1.0) / (2.0 * gamma) * (p_star / p)
+                            + (gamma - 1.0) / (2.0 * gamma))
+                : 1.0;
+            return W[hd_core::VEL(direction)]
+                + (side == Side::Left ? -1.0 : 1.0) * c * factor;
+        }
         double wave_condition(double p_star, double rho_K, double p_K, double gamma_K);
         std::optional<std::pair<double, double>> solve_star(const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,double gamma_L, double gamma_R,double tolerance,int max_iterations,int direction);
         hd_core::Primitives sample_rarefraction(const hd_core::Primitives& K, double gamma_K, double v_nstar, double pre_star,Side side, int direction);
@@ -275,10 +290,6 @@ namespace hydro
             double v_nR = W_R[hd_core::VEL(direction)];
             double pre_L = W_L[hd_core::PRE];
             double pre_R = W_R[hd_core::PRE];
-            double cs_L = std::sqrt(gamma_L * pre_L/rho_L);
-            double cs_R = std::sqrt(gamma_R * pre_R/rho_R);
-            double v_sL = v_nL + 2 * cs_L / (gamma_L - 1);
-            double v_sR = v_nR - 2 * cs_R / (gamma_R - 1);
             auto residual = [&](double p) {
                 return wave_condition(p, W_L[hd_core::RHO],W_L[hd_core::PRE],gamma_L) + wave_condition(p, W_R[hd_core::RHO],W_R[hd_core::PRE],gamma_R) + v_nR - v_nL;
             };
@@ -288,7 +299,12 @@ namespace hydro
             }
             double pre_low = 0;
             double pre_high = std::max(pre_L,pre_R);
-            while (residual(pre_high) < 0) pre_high *= 2;
+            while (residual(pre_high) < 0)
+            {
+                pre_high *= 2;
+                if (!std::isfinite(pre_high))
+                    throw std::runtime_error("ExactSolver: pressure bracket overflow");
+            }
             int count = 0;
             do
             {
@@ -304,6 +320,9 @@ namespace hydro
                 }
                 /* code */
             } while ((pre_high - pre_low) > pre_high * tolerance && count<max_iterations);
+            // 未收敛的星区压力不能用于提供可靠的波速限制。
+            if ((pre_high - pre_low) > pre_high * tolerance)
+                throw std::runtime_error("ExactSolver: star pressure did not converge");
             double pre_star = (pre_high+pre_low)/2;
             double v_nstar = (v_nL - wave_condition(pre_star,rho_L,pre_L, gamma_L) + v_nR + wave_condition(pre_star,rho_R,pre_R,gamma_R))/2;
             return std::pair<double, double>{pre_star, v_nstar};
@@ -392,36 +411,41 @@ namespace hydro
             const bool vacuum_R = (WR[hd_core::RHO] == 0.0);
             if (vacuum_L && vacuum_R)
             {
+                wave_timestep.face_speed = 0.0;
                 return hd_core::Conserved{};
             }
+            double min_wave_speed = 0.0;
+            double max_wave_speed = 0.0;
             InterfaceState interfaceState;
             if(vacuum_R)
             {
                 //left gas to right vacuum
                 interfaceState = gas_to_vacuum(WL,gamma_L,Side::Left,direction);
+                const double u = WL[hd_core::VEL(direction)];
+                const double c = std::sqrt(gamma_L * WL[hd_core::PRE] / WL[hd_core::RHO]);
+                min_wave_speed = u - c;
+                max_wave_speed = u + 2.0 * c / (gamma_L - 1.0);
             }
             else if(vacuum_L)
             {
                 //right gas to left vacuum
                 interfaceState = gas_to_vacuum(WR,gamma_R,Side::Right,direction);
+                const double u = WR[hd_core::VEL(direction)];
+                const double c = std::sqrt(gamma_R * WR[hd_core::PRE] / WR[hd_core::RHO]);
+                min_wave_speed = u - 2.0 * c / (gamma_R - 1.0);
+                max_wave_speed = u + c;
             }
             else
             {
 
-                auto rho_L = WL[hd_core::RHO];
-                auto rho_R = WR[hd_core::RHO];
-
-                auto v_nL = WL[hd_core::VEL(direction)];
-                auto v_nR = WR[hd_core::VEL(direction)];
-
-                auto p_L = WL[hd_core::PRE];
-                auto p_R = WL[hd_core::PRE];
-
-                
                 auto star = solve_star(WL,WR,gamma_L,gamma_R,tolerance_,max_iterations_,direction);
                 if(star.has_value())
                 {
                     auto [p_star, vn_star] = *star;
+
+                    // 无论界面采样在哪一侧，都计算左右两侧波速。
+                    min_wave_speed = outer_wave_speed(WL, gamma_L, p_star, Side::Left, direction);
+                    max_wave_speed = outer_wave_speed(WR, gamma_R, p_star, Side::Right, direction);
 
                     interfaceState = sample_interface(
                         WL,WR,
@@ -431,6 +455,9 @@ namespace hydro
                 }
                 else
                 {
+                    // 中间生成真空：最外侧边界仍是左右稀疏波头。
+                    min_wave_speed = outer_wave_speed(WL, gamma_L, 0.0, Side::Left, direction);
+                    max_wave_speed = outer_wave_speed(WR, gamma_R, 0.0, Side::Right, direction);
                     interfaceState = sample_vacuum(
                         WL,WR,
                         gamma_L,gamma_R,
@@ -438,11 +465,15 @@ namespace hydro
                     );
                 }
             }
-            if (interfaceState.W[hd_core::RHO] == 0.0)
-            {
-                return hd_core::Conserved{};
-            }
+            if (!std::isfinite(min_wave_speed) ||
+                !std::isfinite(max_wave_speed) ||
+                min_wave_speed > max_wave_speed)
+                throw std::runtime_error("ExactSolver: invalid wave-speed bounds");
 
+            // 即使界面通量为零，也把本次最大传播速度交给网格循环。
+            wave_timestep.face_speed = std::max(std::abs(min_wave_speed), std::abs(max_wave_speed));
+            if (interfaceState.W[hd_core::RHO] == 0.0)
+                return hd_core::Conserved{};
             return physical_flux(interfaceState.W, direction, interfaceState.gamma);
         }
 }

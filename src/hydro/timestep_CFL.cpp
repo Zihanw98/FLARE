@@ -1,11 +1,26 @@
 #include "timestep_CFL.h"
+#include "wave_timestep.h"
 #include "core.h"
 #include "mesh.h"
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <limits>
 namespace hydro
 {
+    WaveTimestep wave_timestep{};
+
+    double compute_cfl_dt(double cfl)
+    {
+        if (!std::isfinite(cfl) || cfl <= 0.0)
+            throw std::invalid_argument("CFL must be finite and positive");
+        if (!std::isfinite(wave_timestep.max_inverse_dt) || wave_timestep.max_inverse_dt < 0.0)
+            throw std::invalid_argument("CFL rate must be finite and nonnegative");
+        if (wave_timestep.max_inverse_dt == 0.0)
+            return std::numeric_limits<double>::infinity();
+        return cfl / wave_timestep.max_inverse_dt;
+    }
+
     double compute_cfl_dt(
         const hd_core::MeshBlock& mesh,
         double cfl

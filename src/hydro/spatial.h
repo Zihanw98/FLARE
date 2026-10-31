@@ -10,13 +10,14 @@ namespace hd_core
 
 namespace hydro
 {
-class RiemannSolver;    //Link to spatial.cpp->godunov.h->godunov.cpp->riemman.h->RiemannSolver
+class RiemannSolver;
 
 enum class SpatialScheme
 {
     Godunov
 };
 SpatialScheme parse_spatial_scheme(const std::string& name);
+// 填充 rhs，同时通过 wave_timestep 更新本次波速限制。
 void compute_hydro_rhs(
     const hd_core::MeshBlock& mesh,
     SpatialScheme scheme,
