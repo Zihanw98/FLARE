@@ -8,7 +8,7 @@ namespace hd_core
     struct MeshBlock;
 }
 
-namespace hd_time
+namespace time
 {
     enum class TimeIntegrator
     {
