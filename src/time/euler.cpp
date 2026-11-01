@@ -18,7 +18,7 @@ namespace hd_time
     {
         if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0)
             throw std::invalid_argument("Euler requires finite time and a finite positive dt_limit");
-        // 对当前一阶 Godunov 和相邻面最大波速的求和约定使用保守限制。
+
         if (!std::isfinite(cfl) || cfl <= 0.0 || cfl > 0.5)
             throw std::invalid_argument("Euler requires 0 < CFL <= 0.5");
 
@@ -29,7 +29,7 @@ namespace hd_time
             !std::isfinite(time + dt) || time + dt <= time)
             throw std::runtime_error("Euler time step cannot advance time");
 
-        // 先形成并检查候选状态，避免中途报错时只更新了一部分单元。
+
         auto next_cells = mesh.cells;
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {

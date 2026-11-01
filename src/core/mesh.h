@@ -15,7 +15,7 @@ namespace hd_core
         int ntotal(int d) const;
         Index ntotal() const;
         
-        // Tensor-product coordinates, including ghost faces.
+        // Face coordinates, including ghost faces.
         // face[d].size() == total(d) + 1.
         // Active faces run from nghost[d] through nghost[d] + nactive[d].
         std::array<std::vector<double>,NDIM> face;
