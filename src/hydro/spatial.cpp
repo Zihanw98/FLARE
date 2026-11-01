@@ -1,7 +1,7 @@
 #include "spatial.h"
 #include "godunov.h"
 #include "mesh.h"
-
+#include "utils.h"
 #include <stdexcept>
 
 namespace hydro
@@ -9,7 +9,7 @@ namespace hydro
 
 SpatialScheme parse_spatial_scheme(const std::string& name)
 {
-    if (name == "godunov")
+    if (utils::iequals(name,"godunov"))
     {
         return SpatialScheme::Godunov;
     }

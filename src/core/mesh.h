@@ -1,6 +1,7 @@
 #pragma once
 #include "core.h"
 #include "cell.h"
+#include "boundary.h"
 #include <array>
 #include <cstddef>
 #include <initializer_list>
@@ -19,7 +20,8 @@ namespace hd_core
         // face[d].size() == total(d) + 1.
         // Active faces run from nghost[d] through nghost[d] + nactive[d].
         std::array<std::vector<double>,NDIM> face;
-
+        std::array<boundary::BoundaryCondition,NDIM> bc_upper;
+        std::array<boundary::BoundaryCondition,NDIM> bc_lower;
         // Set nactive/nghost first. Bounds describe the ACTIVE region;
         // ghost faces are extended with the same uniform spacing.
         void set_uniform_faces(int d, double lower, double upper);

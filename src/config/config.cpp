@@ -1,4 +1,5 @@
 #include "config.h"
+#include "utils.h"
 #include <array>
 #include <string>         // std::string、std::getline、std::to_string
 #include <sstream>        // std::istringstream
@@ -45,6 +46,11 @@ namespace config
         SimulationConfig cfg{};
 
         using Setter = std::function<void(const std::string&)>;
+        for(int d=0;d<hd_core::NDIM;d++)
+        {
+            cfg.boundary_lower[d] = "periodic";
+            cfg.boundary_upper[d] = "periodic";
+        }
         std::unordered_set<std::string> seen;
         std::unordered_map<std::string, Setter> setters = {
             {"t_end", [&cfg](const std::string& v) {
@@ -145,6 +151,7 @@ namespace config
             try
             {
                 it->second(value);
+                seen.insert(key);
             }
             catch (const std::exception& error)
             {
@@ -153,6 +160,7 @@ namespace config
         }
         if (file.bad())
             throw std::runtime_error("Failed to read parameter file: " + filename);
+        validate_cfg(cfg,seen);
         return cfg;
     }
     void validate_config(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
@@ -190,6 +198,13 @@ namespace config
                     axis + " bounds must be finite and upper > lower"
                 );
             }
+            const bool& bc_upper_periodic = utils::iequals(cfg.boundary_upper[d],"periodic");
+            const bool& bc_lower_periodic = utils::iequals(cfg.boundary_lower[d],"periodic");
+            if(bc_upper_periodic!=bc_lower_periodic)
+            {
+                throw std::runtime_error("Periodic boundary condition should be double-sided in axis" + d);
+            }
+        }
         if (!std::isfinite(cfg.t_end) || cfg.t_end <= 0.0)
             throw std::runtime_error("t_end must be finite and > 0");
 
@@ -207,11 +222,18 @@ namespace config
 
         if (cfg.maxsteps <= 0)
             throw std::runtime_error("maxsteps must be > 0");
-        }
     }
     hd_core::MeshBlock build_mesh(const SimulationConfig& cfg)
     {
         hd_core::MeshBlock mesh{};
-        
+        mesh.nactive = cfg.nactive;
+        mesh.nghost = cfg.nghost;
+        for(int d=0;d<hd_core::NDIM;d++)
+        {
+            mesh.set_uniform_faces(d,cfg.lower[d],cfg.upper[d]);
+            mesh.bc_upper[d] = boundary::parse_bc(cfg.boundary_upper[d]);
+            mesh.bc_lower[d] = boundary::parse_bc(cfg.boundary_lower[d]);
+        }
+        mesh.allocate();
     }
 }

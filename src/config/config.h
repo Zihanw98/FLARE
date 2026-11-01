@@ -1,6 +1,7 @@
 #pragma once
 #include "core.h"
 #include "mesh.h"
+#include "boundary.h"
 #include <array>
 #include <cstddef>
 #include <string>
@@ -45,6 +46,6 @@ namespace config
     std::string trim(const std::string& text);
     template<typename T>T parse_value(const std::string& text);
     template<> std::string parse_value<std::string>(const std::string& text);
-    void validate_cfg(const SimulationConfig& cfg);
-    hd_core::MeshBlock build_mesh(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen);
+    void validate_cfg(const SimulationConfig& cfg,const std::unordered_set<std::string>& seen);
+    hd_core::MeshBlock build_mesh(const SimulationConfig& cfg);
 }

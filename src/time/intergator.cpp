@@ -1,11 +1,12 @@
 #include "integrator.h"
+#include "utils.h"
 #include <stdexcept>
 
 namespace hd_time
 {
     TimeIntegrator parse_time_integrator(const std::string& name)
     {
-        if (name == "euler")
+        if (utils::iequals(name,"euler"))
             return TimeIntegrator::Euler;
         throw std::invalid_argument("Unknown or unavailable time integrator: " + name);
     }
