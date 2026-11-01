@@ -1,0 +1,25 @@
+# Standard Sod tube: (rho, u, p)_L = (1, 0, 1), (rho, u, p)_R = (0.125, 0, 0.1).
+# The initial discontinuity is at x=0.5; initial states are set in user_problem.cpp.
+nxa = 400
+nxg = 2
+x_lower = 0.0
+x_upper = 1.0
+gamma = 1.4
+
+t_end = 0.2
+cfl = 0.4
+maxsteps = 10000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+time_integrator = euler
+
+# userbc implements zero-gradient outflow on both sides.
+boundary_x_lower = user
+boundary_x_upper = user
+
+# Save enough snapshots to resolve the evolution in animations.
+step_every = 10
+output_directory = output
+output_suffix = sod
