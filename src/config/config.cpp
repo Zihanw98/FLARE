@@ -39,6 +39,21 @@ namespace config
     {
         return text; // Keep internal spaces; no quoting/escaping syntax.
     }
+    template<>
+    bool parse_value<bool>(const std::string& text)
+    {
+        const auto value = trim(text);
+
+        if (utils::iequals(value, "true") || value == "1")
+            return true;
+
+        if (utils::iequals(value, "false") || value == "0")
+            return false;
+
+        throw std::runtime_error(
+            "Expected true, false, 1 or 0; got: " + text
+        );
+    }
     SimulationConfig ReadParameters(const std::string& filename)
     {
         using Setter = std::function<void(const std::string&)>;
@@ -52,11 +67,11 @@ namespace config
             cfg.boundary_upper[d] = "periodic";
         }
         std::unordered_set<std::string> seen;
-        const Setter set_step_every = [&cfg](const std::string& v) {
+        const Setter set_output_step_every = [&cfg](const std::string& v) {
             const int interval = parse_value<int>(v);
             if (interval <= 0)
-                throw std::runtime_error("step_every must be a positive integer");
-            cfg.step_every = static_cast<std::size_t>(interval);
+                throw std::runtime_error("output_step_every must be a positive integer");
+            cfg.output_step_every = static_cast<std::size_t>(interval);
         };
         std::unordered_map<std::string, Setter> setters = {
             {"t_end", [&cfg](const std::string& v) {
@@ -95,9 +110,12 @@ namespace config
             {"output_suffix", [&cfg](const std::string& v) {
                 cfg.output_suffix = v;
             }},
-            {"step_every", set_step_every},
+            {"step_every", set_output_step_every},
             // 兼容原先配置字段的名字。
-            {"output_every_step", set_step_every},
+            {"output_step_every", set_output_step_every},
+            {"constant_gravity_enabled",[&cfg](const std::string& v){
+                cfg.constant_gravity_enabled = parse_value<bool>(v);
+            }},
         };
 
         constexpr std::array<const char*, 3> axes{"x", "y", "z"};
@@ -134,8 +152,13 @@ namespace config
                 [&cfg, d](const std::string& v) {
                     cfg.boundary_upper[d] = v;
                 });
+            setters.emplace("gravity_" + axis,
+                [&cfg,d](const std::string& v)
+                {
+                    cfg.gravity[d] = parse_value<double>(v);
+                }
+            );
         }
-
         std::ifstream file(filename);
         if (!file)
             throw std::runtime_error("Cannot open parameter file: " + filename);
@@ -222,6 +245,8 @@ namespace config
             {
                 throw std::runtime_error("Periodic boundary condition should be double-sided in axis" + d);
             }
+            if(!std::isfinite(cfg.gravity[d]))
+                throw std::runtime_error("gravity not finite");
         }
         if (!std::isfinite(cfg.t_end) || cfg.t_end <= 0.0)
             throw std::runtime_error("t_end must be finite and > 0");

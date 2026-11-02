@@ -4,6 +4,7 @@
 #include "time/integrator.h"
 #include "user/user_api.h"
 #include "boundary/boundary.h"
+#include "source/source.h"
 #include "io/output.h"
 #include <cstddef>
 #include <exception>
@@ -78,6 +79,7 @@ int main(int argc, char* argv[])
         };
         apply_boundaries(t_current);
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
+        auto source_list = hd_source::make_sources(cfg,hooks);
         while(t_current < cfg.t_end)
         {
             if (step_current >= cfg.maxsteps)
@@ -94,6 +96,8 @@ int main(int argc, char* argv[])
                 integrator,
                 spatial,
                 *solver,
+                source_list,
+                cfg,
                 cfg.cfl
             );
             if (!std::isfinite(dt) || dt <= 0.0 ||

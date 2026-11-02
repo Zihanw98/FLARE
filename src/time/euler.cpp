@@ -13,6 +13,8 @@ namespace hd_time
         double dt_limit,
         hydro::SpatialScheme spatial_scheme,
         const hydro::RiemannSolver& solver,
+        hd_source::SourceList source_list,
+        const config::SimulationConfig& cfg,
         double cfl
     )
     {
@@ -24,12 +26,19 @@ namespace hd_time
 
         std::vector<hd_core::Conserved> rhs;
         hydro::compute_hydro_rhs(mesh, spatial_scheme, solver, rhs);
-        const double dt = std::min(dt_limit, hydro::compute_cfl_dt(cfl));
+        double dt_h = std::min(dt_limit, hydro::compute_cfl_dt(cfl));
+        double dt_s = dt_h;
+        for(int i=0;i < source_list.size(); i++)
+        {
+            auto source_function = source_list.at(i).func;
+            source_function(mesh,time,cfg,rhs,dt_s);
+        }
+        const double dt = std::min(dt_h,dt_s);
         if (!std::isfinite(dt) || dt <= 0.0 ||
             !std::isfinite(time + dt) || time + dt <= time)
             throw std::runtime_error("Euler time step cannot advance time");
 
-
+        
         auto next_cells = mesh.cells;
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {

@@ -26,6 +26,6 @@ boundary_y_lower = user
 boundary_y_upper = user
 
 # Save enough snapshots to resolve the evolution in animations.
-step_every = 10
+output_step_every = 10
 output_directory = output
 output_suffix = se2d

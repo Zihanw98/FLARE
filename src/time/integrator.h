@@ -1,5 +1,7 @@
 #pragma once
 #include "hydro/spatial.h"
+#include "source/source.h"
+#include "config/config.h"
 #include <string>
 
 namespace hd_core
@@ -27,6 +29,8 @@ namespace hd_time
         TimeIntegrator integrator,
         hydro::SpatialScheme spatial_scheme,
         const hydro::RiemannSolver& solver,
+        hd_source::SourceList source_list,
+        const config::SimulationConfig& cfg,
         double cfl = 0.4
     );
 
@@ -38,6 +42,8 @@ namespace hd_time
         double dt_limit,
         hydro::SpatialScheme spatial_scheme,
         const hydro::RiemannSolver& solver,
+        hd_source::SourceList source_list,
+        const config::SimulationConfig& cfg,
         double cfl = 0.4
     );
 

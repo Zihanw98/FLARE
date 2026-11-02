@@ -41,13 +41,17 @@ namespace config
         std::string output_directory = "output";
         std::string output_suffix = "test";
         // 每隔多少个完成的时间步输出一次；初始、第一步和末步额外输出。
-        std::size_t step_every = 10;
+        std::size_t output_step_every = 10;
 
+        bool constant_gravity_enabled = false;
+
+        std::array<double,hd_core::NDIM> gravity{};
     };
     SimulationConfig ReadParameters(const std::string& filename);
     std::string trim(const std::string& text);
     template<typename T>T parse_value(const std::string& text);
     template<> std::string parse_value<std::string>(const std::string& text);
+    template<> bool parse_value<bool>(const std::string& text);
     void validate_cfg(const SimulationConfig& cfg,const std::unordered_set<std::string>& seen);
     hd_core::MeshBlock build_mesh(const SimulationConfig& cfg);
 }

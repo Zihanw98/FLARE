@@ -224,7 +224,7 @@ namespace
         config::SimulationConfig cfg;
         cfg.output_directory = (directory / "snapshots").string();
         cfg.output_suffix = "check";
-        cfg.step_every = 3;
+        cfg.output_step_every = 3;
         cfg.t_end = 0.8;
         hd_user::UserHooks hooks;
         hooks.useroutput = user_output;
@@ -277,9 +277,9 @@ namespace
         const double small_dt = 1.2345678901234567e-12;
         io::Output(mesh, cfg, {}, large_step, precise_time, small_dt);
         check_csv(snapshot(cfg, large_step), mesh, large_step, precise_time, small_dt);
-        cfg.step_every = 0;
+        cfg.output_step_every = 0;
         expect_failure([&] { io::Output(mesh, cfg, hooks, 6, 0.6, 0.1); });
-        cfg.step_every = 3;
+        cfg.output_step_every = 3;
         const auto blocked = directory / "regular_file";
         std::ofstream(blocked) << "not a directory";
         cfg.output_directory = blocked.string();
@@ -298,13 +298,13 @@ namespace
                      << axes[d] << "_lower=0\n" << axes[d] << "_upper=1\n";
             file << extra;
         };
-        write("step_every=7\n");
-        assert(config::ReadParameters(path.string()).step_every == 7);
+        write("output_step_every=7\n");
+        assert(config::ReadParameters(path.string()).output_step_every == 7);
         write("output_every_step=4\n");
-        assert(config::ReadParameters(path.string()).step_every == 4);
+        assert(config::ReadParameters(path.string()).output_step_every == 4);
         for (const auto& value : {"0", "-1", "2.5"})
         {
-            write(std::string("step_every=") + value + '\n');
+            write(std::string("output_step_every=") + value + '\n');
             expect_failure([&] { config::ReadParameters(path.string()); });
         }
         write("riemann_tolerance=1e-12\nriemann_max_iterations=240\nmaxsteps=500000\n");

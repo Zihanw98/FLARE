@@ -25,15 +25,15 @@ namespace io
         double dt
     )
     {
-        if (cfg.step_every == 0)
-            throw std::invalid_argument("step_every must be positive");
+        if (cfg.output_step_every == 0)
+            throw std::invalid_argument("output_step_every must be positive");
         if (!std::isfinite(time) || !std::isfinite(dt) || time < 0.0 || dt < 0.0)
             throw std::invalid_argument("Output requires finite nonnegative time and dt");
         if (mesh.cells.empty())
             throw std::invalid_argument("Cannot output an unallocated mesh");
         mesh.validate_geometry();
 
-        const bool write_snapshot = step <= 1 || step % cfg.step_every == 0
+        const bool write_snapshot = step <= 1 || step % cfg.output_step_every == 0
                                  || time >= cfg.t_end || step >= cfg.maxsteps;
         std::filesystem::path filename;
         std::ofstream csv;

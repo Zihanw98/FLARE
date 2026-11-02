@@ -18,7 +18,7 @@ namespace io
      * @param[in] dt 刚完成一步使用的步长；初始状态传 0。
      * @return 无返回值。
      * @note 每次调用打印活跃单元的密度/压力范围、总质量和总能量。
-     *       step=0、step=1、达到 t_end/maxsteps 或 step_every 的倍数时写 CSV。
+     *       step=0、step=1、达到 t_end/maxsteps 或 output_step_every 的倍数时写 CSV。
      *       x/y/z 为单元中心；缺失方向的坐标和速度填 0，is_ghost 标记 ghost。
      *       文件前 3 行为 # step=...、# time=...、# dt=...，记录该快照的
      *       步数、物理时间和本步步长；初始快照三者均为 0，第 4 行为 CSV 列名。

@@ -18,13 +18,15 @@ namespace hd_time
         TimeIntegrator integrator,
         hydro::SpatialScheme spatial_scheme,
         const hydro::RiemannSolver& solver,
+        hd_source::SourceList source_list,
+        const config::SimulationConfig& cfg,
         double cfl
     )
     {
         switch (integrator)
         {
             case TimeIntegrator::Euler:
-                return advance_euler(mesh, time, dt_limit, spatial_scheme, solver, cfl);
+                return advance_euler(mesh, time, dt_limit, spatial_scheme, solver, source_list ,cfg,cfl);
         }
         throw std::invalid_argument("Invalid time integrator");
     }
