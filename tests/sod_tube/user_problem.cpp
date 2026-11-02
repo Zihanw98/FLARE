@@ -1,3 +1,4 @@
+#include "user_config.h"  // Load this problem's settings before framework headers.
 #include "user/user_api.h"
 #include "core/mesh.h"
 #include "config/config.h"

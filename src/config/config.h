@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <unordered_set>
 namespace config
 {
     struct SimulationConfig
@@ -39,7 +40,8 @@ namespace config
         //Output
         std::string output_directory = "output";
         std::string output_suffix = "test";
-        double output_every_step = 10;
+        // 每隔多少个完成的时间步输出一次；初始、第一步和末步额外输出。
+        std::size_t step_every = 10;
 
     };
     SimulationConfig ReadParameters(const std::string& filename);

@@ -4,6 +4,8 @@
 #include "time/integrator.h"
 #include "user/user_api.h"
 #include "boundary/boundary.h"
+#include "io/output.h"
+#include <cstddef>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
@@ -61,15 +63,28 @@ int main(int argc, char* argv[])
         hooks.initialize(mesh,cfg);
         
         double t_current = 0;
-        int step_current = 0;
+        std::size_t step_current = 0;
+        // 逐方向填充边界；横向 ghost 随后续方向的填充形成完整角区。
+        const auto apply_boundaries = [&](double time)
+        {
+            for (int direction = 0; direction < hd_core::NDIM; ++direction)
+            {
+                for (const auto side : {boundary::BoundarySide::Lower,
+                                        boundary::BoundarySide::Upper})
+                {
+                    boundary::ApplyBoundaryCondition(mesh, direction, side, time, hooks);
+                }
+            }
+        };
+        apply_boundaries(t_current);
+        io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         while(t_current < cfg.t_end)
         {
             if (step_current >= cfg.maxsteps)
             throw std::runtime_error(
                 "Maximum number of steps reached before t_end"
             );
-            boundary::ApplyBoundaryCondition(mesh);
-            //Apply BC before every step
+            // 初始状态和上一步末尾已经填好当前时刻的边界。
             const double remaining = cfg.t_end - t_current;
             //Avoid too small remaining time
             const double dt = hd_time::advance_one_step(
@@ -92,7 +107,8 @@ int main(int argc, char* argv[])
 
             step_current++;
 
-            std::cout << "step = " << step_current<< ", time = " << t_current<< ", dt = " << dt << '\n';
+            apply_boundaries(t_current);
+            io::Output(mesh, cfg, hooks, step_current, t_current, dt);
         }
 
     }

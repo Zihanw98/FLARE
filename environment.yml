@@ -1,0 +1,13 @@
+name: flare
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=1.26,<3
+  - pandas
+  - astropy
+  - matplotlib-base>=3.8,<4  # GIF
+  - pillow>=10             # GIF coding
+  - plotly>=6,<8           # HTML interactive visualization
+  - ffmpeg                 # MP4
+  - tk                     # Matplotlib --show

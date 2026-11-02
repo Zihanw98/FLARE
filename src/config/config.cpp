@@ -52,6 +52,12 @@ namespace config
             cfg.boundary_upper[d] = "periodic";
         }
         std::unordered_set<std::string> seen;
+        const Setter set_step_every = [&cfg](const std::string& v) {
+            const int interval = parse_value<int>(v);
+            if (interval <= 0)
+                throw std::runtime_error("step_every must be a positive integer");
+            cfg.step_every = static_cast<std::size_t>(interval);
+        };
         std::unordered_map<std::string, Setter> setters = {
             {"t_end", [&cfg](const std::string& v) {
                 cfg.t_end = parse_value<double>(v);
@@ -60,13 +66,22 @@ namespace config
                 cfg.cfl = parse_value<double>(v);
             }},
             {"maxsteps", [&cfg](const std::string& v) {
-                cfg.maxsteps = parse_value<int>(v);
+                // 无符号流提取也可能接受 -1，因此必须在转换前拒绝负号。
+                if (v.empty() || v.front() == '-')
+                    throw std::runtime_error("maxsteps must be a positive integer");
+                cfg.maxsteps = parse_value<std::size_t>(v);
             }},
             {"gamma", [&cfg](const std::string& v) {
                 cfg.gamma = parse_value<double>(v);
             }},
             {"riemann_solver", [&cfg](const std::string& v) {
                 cfg.riemann_solver = v;
+            }},
+            {"riemann_tolerance", [&cfg](const std::string& v) {
+                cfg.riemann_tolerance = parse_value<double>(v);
+            }},
+            {"riemann_max_iterations", [&cfg](const std::string& v) {
+                cfg.riemann_max_iterations = parse_value<int>(v);
             }},
             {"spatial_scheme", [&cfg](const std::string& v) {
                 cfg.spatial_scheme = v;
@@ -80,6 +95,9 @@ namespace config
             {"output_suffix", [&cfg](const std::string& v) {
                 cfg.output_suffix = v;
             }},
+            {"step_every", set_step_every},
+            // 兼容原先配置字段的名字。
+            {"output_every_step", set_step_every},
         };
 
         constexpr std::array<const char*, 3> axes{"x", "y", "z"};
@@ -163,7 +181,7 @@ namespace config
         validate_cfg(cfg,seen);
         return cfg;
     }
-    void validate_config(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
+    void validate_cfg(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
     {
         const auto require = [&seen](const std::string& key)
         {
@@ -220,6 +238,11 @@ namespace config
         if (!std::isfinite(cfg.gamma) || cfg.gamma <= 1.0)
             throw std::runtime_error("gamma must be finite and > 1");
 
+        if (!std::isfinite(cfg.riemann_tolerance) || cfg.riemann_tolerance <= 0.0)
+            throw std::runtime_error("riemann_tolerance must be finite and > 0");
+        if (cfg.riemann_max_iterations <= 0)
+            throw std::runtime_error("riemann_max_iterations must be > 0");
+
         if (cfg.maxsteps <= 0)
             throw std::runtime_error("maxsteps must be > 0");
     }
@@ -235,5 +258,6 @@ namespace config
             mesh.bc_lower[d] = boundary::parse_bc(cfg.boundary_lower[d]);
         }
         mesh.allocate();
+        return mesh;
     }
 }

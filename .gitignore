@@ -17,17 +17,37 @@
 *.smod
 
 # Executables
+flare
+.flare-*
 *.exe
 *.out
 *.app/
 
 # Build directories
+.build/
 build/
 Build/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
+
+# Test outputs, visualizations and run logs
+/tests/**/output/
+/tests/**/animations/
+/tests/**/diagnostics/
+/tests/**/figures/
+/tests/**/*.log
+/unit_test/**/output/
+/unit_test/**/*.log
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local documentation (temporarily excluded)
+/ANIMATE_README.md
 
 # Images
 *.png
