@@ -66,18 +66,7 @@ int main(int argc, char* argv[])
         double t_current = 0;
         std::size_t step_current = 0;
         // 逐方向填充边界；横向 ghost 随后续方向的填充形成完整角区。
-        const auto apply_boundaries = [&](double time)
-        {
-            for (int direction = 0; direction < hd_core::NDIM; ++direction)
-            {
-                for (const auto side : {boundary::BoundarySide::Lower,
-                                        boundary::BoundarySide::Upper})
-                {
-                    boundary::ApplyBoundaryCondition(mesh, direction, side, time, hooks);
-                }
-            }
-        };
-        apply_boundaries(t_current);
+        boundary::FillBoundary(mesh,t_current,hooks);
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         auto source_list = hd_source::make_sources(cfg,hooks);
         while(t_current < cfg.t_end)
@@ -98,6 +87,7 @@ int main(int argc, char* argv[])
                 *solver,
                 source_list,
                 cfg,
+                hooks,
                 cfg.cfl
             );
             if (!std::isfinite(dt) || dt <= 0.0 ||
@@ -111,7 +101,6 @@ int main(int argc, char* argv[])
 
             step_current++;
 
-            apply_boundaries(t_current);
             io::Output(mesh, cfg, hooks, step_current, t_current, dt);
         }
 

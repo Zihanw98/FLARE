@@ -116,6 +116,9 @@ namespace config
             {"constant_gravity_enabled",[&cfg](const std::string& v){
                 cfg.constant_gravity_enabled = parse_value<bool>(v);
             }},
+            {"integrator_retry_max",[&cfg](const std::string& v){
+                cfg.integrator_retry_max = parse_value<int>(v);
+            }}
         };
 
         constexpr std::array<const char*, 3> axes{"x", "y", "z"};

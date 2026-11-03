@@ -3,7 +3,9 @@
 #include "source/source.h"
 #include "config/config.h"
 #include <string>
-
+#include <array>
+#include <vector>
+#include <utility>
 namespace hd_core
 {
     struct MeshBlock;
@@ -31,6 +33,7 @@ namespace hd_time
         const hydro::RiemannSolver& solver,
         hd_source::SourceList source_list,
         const config::SimulationConfig& cfg,
+        const hd_user::UserHooks& hooks,
         double cfl = 0.4
     );
 
@@ -44,8 +47,27 @@ namespace hd_time
         const hydro::RiemannSolver& solver,
         hd_source::SourceList source_list,
         const config::SimulationConfig& cfg,
+        const hd_user::UserHooks& hooks,
         double cfl = 0.4
     );
 
-    // 以后在这里声明 advance_rk2()，使用相同参数。
+    double advance_rk2(
+        hd_core::MeshBlock& mesh,
+        double time,
+        double dt_limit,
+        hydro::SpatialScheme spatial_scheme,
+        const hydro::RiemannSolver& solver,
+        hd_source::SourceList source_list,
+        const config::SimulationConfig& cfg,
+        const hd_user::UserHooks& hooks,
+        double cfl=0.4
+    );
+    std::pair<double,std::vector<hd_core::Conserved>> evaluate_RHS(
+        const hd_core::MeshBlock& mesh,
+        hydro::SpatialScheme scheme,
+        const hd_source::SourceList& source_list,
+        const hydro::RiemannSolver& solver,
+        const config::SimulationConfig& cfg,
+        double cfl=0.4
+    );
 }

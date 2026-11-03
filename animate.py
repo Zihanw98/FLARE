@@ -21,6 +21,8 @@ because physical coordinates are not stored in those files.
 2D: rho/vx/vy/pressure maps, with x profiles at the nearest --slice-y row
 (default: domain midpoint), or y profiles at the nearest --slice-x column.
 These options are mutually exclusive. A dashed line marks the cut on each map.
+--streamlines overlays instantaneous velocity streamlines on 2D rho/pressure
+maps, including HTML output. Nonuniform grids are interpolated for tracing.
 Scales are fixed over selected frames; ghost cells are excluded. Stride counts
 saved files, not solver steps. First/last frames are retained. Playback uses
 equal frame durations, not equal physical-time intervals.
@@ -208,6 +210,8 @@ def prepare(files):
 def select_profile(reference, args):
     """Use the same slice and coordinate labels in both rendering backends."""
     is_2d = len(reference.y) > 1
+    if args.streamlines and not is_2d:
+        raise ValueError("--streamlines requires a 2D snapshot")
     if not is_2d and (args.slice_x is not None or args.slice_y is not None):
         raise ValueError("--slice-x/--slice-y require a 2D snapshot")
     along_y = args.slice_x is not None
@@ -222,6 +226,46 @@ def select_profile(reference, args):
     profile_label = "y" if along_y else reference.xlabel
     cut_label = f" at {'x' if along_y else 'y'} = {fixed_axis[cut_index]:.6g}" if is_2d else ""
     return is_2d, along_y, fixed_axis, cut_index, profile_axis, profile_label, cut_label
+
+
+def streamline_segments(snapshot):
+    """Shared line/arrow geometry for both backends, in physical coordinates.
+
+    Matplotlib traces on a uniform lattice. Resample only the velocity used
+    for tracing; the scalar maps and profiles retain their original samples.
+    """
+    from matplotlib.figure import Figure
+
+    x, y = snapshot.x, snapshot.y
+    if len(y) < 2:
+        raise ValueError("--streamlines requires a 2D snapshot")
+    fields = {name: snapshot.values[k] for k, (name, _, _) in enumerate(snapshot.fields)}
+    u, v = fields["vx"], fields["vy"]
+    if not np.any(u) and not np.any(v):
+        return []
+    uniform_x = np.linspace(x[0], x[-1], len(x))
+    uniform_y = np.linspace(y[0], y[-1], len(y))
+
+    def resample(values):
+        rows = np.array([np.interp(uniform_x, x, row) for row in values])
+        return np.array([np.interp(uniform_y, y, col) for col in rows.T]).T
+
+    figure = Figure(figsize=(6, 4))
+    try:
+        ax = figure.subplots()
+        ax.set(xlim=(x[0], x[-1]), ylim=(y[0], y[-1]), aspect="equal")
+        ax.apply_aspect()
+        flow = ax.streamplot(uniform_x, uniform_y, resample(u), resample(v),
+                             density=1, color="white", linewidth=0.7,
+                             arrowstyle="->", arrowsize=0.9)
+        segments = list(flow.lines.get_segments())
+        # streamplot adds individual arrow patches to the axes. Their public
+        # paths are in data coordinates, independent of the output backend.
+        for arrow in ax.patches:
+            segments.extend(arrow.get_path().to_polygons(closed_only=False))
+        return segments
+    finally:
+        figure.clear()
 
 
 def animate(reference, records, lower, upper, args):
@@ -241,6 +285,7 @@ def animate(reference, records, lower, upper, args):
     fig, axes = plt.subplots(nfields, 2, figsize=(12, 3 * nfields), layout="constrained")
     title = fig.suptitle("")
     maps, lines = [], []
+    streamlines = []
     xedges = edges(reference.x)
     yedges = edges(reference.y) if is_2d else np.linspace(0, 1, 25)
 
@@ -275,6 +320,14 @@ def animate(reference, records, lower, upper, args):
         right.grid(alpha=0.25)
         maps.append(mesh)
         lines.append(line)
+        if args.streamlines and name in ("rho", "p"):
+            from matplotlib.collections import LineCollection
+            import matplotlib.patheffects as effects
+            overlay = LineCollection([], colors="white", linewidths=0.7, zorder=3,
+                                     path_effects=[effects.Stroke(linewidth=1.5, foreground="#333333"),
+                                                   effects.Normal()])
+            left.add_collection(overlay)
+            streamlines.append(overlay)
 
     def update(index):
         step, path, stamp = records[index]
@@ -290,7 +343,11 @@ def animate(reference, records, lower, upper, args):
         for k, (mesh, line) in enumerate(zip(maps, lines)):
             mesh.set_array(map_values(snapshot, k).ravel())
             line.set_ydata(profile_values(snapshot, k))
-        return [title, *maps, *lines]
+        if streamlines:
+            segments = streamline_segments(snapshot)
+            for overlay in streamlines:
+                overlay.set_segments(segments)
+        return [title, *maps, *lines, *streamlines]
 
     try:
         if args.show:
@@ -380,6 +437,9 @@ async function draw() {
         while (current !== target) {
             const next = target, frame = frames[next];
             const data = viewer.figure.data.map((trace, i) => {
+                if (trace.meta && trace.meta.streamlines) {
+                    return {...trace, x: frame.streamlines.x, y: frame.streamlines.y};
+                }
                 const field = frame.values[Math.floor(i / 2)];
                 if (i % 2 === 0) {
                     return {...trace, z: viewer.is2d ? field : [field[0], field[0]]};
@@ -487,6 +547,15 @@ def save_plotly(reference, records, lower, upper, args):
                          autorange=False, row=row, col=2)
         fig.update_yaxes(title_text=label, range=[float(lower[k]) - pad, float(upper[k]) + pad],
                          autorange=False, row=row, col=2)
+    # Append overlays after all heatmap/profile pairs to preserve their indices.
+    if args.streamlines:
+        for k, (name, _, _) in enumerate(reference.fields):
+            if name in ("rho", "p"):
+                for color, width in (("#333333", 2.2), ("white", 1)):
+                    fig.add_trace(go.Scatter(x=[], y=[], mode="lines", name="Streamlines",
+                                            line=dict(color=color, width=width),
+                                            meta=dict(streamlines=True), hoverinfo="skip"),
+                                  row=k + 1, col=1)
     fig.update_layout(height=310 * len(reference.fields), margin=dict(l=65, r=35, t=45, b=55),
                       template="plotly_white", showlegend=False, uirevision="fixed-grid",
                       font=dict(family="Arial, sans-serif", size=12))
@@ -517,7 +586,14 @@ def save_plotly(reference, records, lower, upper, args):
                 raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
             if index:
                 stream.write(",")
-            stream.write(safe_json(dict(step=step, time=snapshot.time, values=snapshot.values.tolist())))
+            frame = dict(step=step, time=snapshot.time, values=snapshot.values.tolist())
+            if args.streamlines:
+                sx, sy = [], []
+                for segment in streamline_segments(snapshot):
+                    sx.extend(segment[:, 0].tolist() + [None])
+                    sy.extend(segment[:, 1].tolist() + [None])
+                frame["streamlines"] = dict(x=sx, y=sy)
+            stream.write(safe_json(frame))
             if index % 20 == 0 or index == len(records) - 1:
                 print(f"Embedding {index + 1}/{len(records)}", flush=True)
         stream.write('];</script>')
@@ -534,6 +610,8 @@ def main():
     parser.add_argument("--fps", type=float, default=8, help="Playback frames per second (default: 8)")
     parser.add_argument("--dpi", type=int, default=100)
     parser.add_argument("--plotly", action="store_true", help="Save an offline interactive HTML viewer")
+    parser.add_argument("--streamlines", action="store_true",
+                        help="Overlay velocity streamlines on 2D density and pressure maps")
     slices = parser.add_mutually_exclusive_group()
     slices.add_argument("--slice-y", type=float, help="Fix y and plot along x (nearest row; default: middle y)")
     slices.add_argument("--slice-x", type=float, help="Fix x and plot along y (nearest column; 2D only)")

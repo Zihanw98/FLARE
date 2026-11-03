@@ -143,6 +143,28 @@ namespace
             (void)active_length(d); // Validates all faces, including ghost faces.
     }
 
+    void MeshBlock::validate_active() const
+    {
+        // Check dimensions and storage even when cells is empty.
+        (void)flat_index(Index{}, true);
+
+        for (std::size_t flat = 0; flat < cells.size(); ++flat)
+        {
+            const auto index = coordinates_active(flat);
+            bool active = true;
+            for (int d = 0; d < NDIM; ++d)
+            {
+                if (index[d] < 0 || index[d] >= nactive[d])
+                {
+                    active = false;
+                    break;
+                }
+            }
+            if (active)
+                cells[flat].U.validate(cells[flat].gamma);
+        }
+    }
+
     void MeshBlock::allocate()
     {
         validate_geometry();

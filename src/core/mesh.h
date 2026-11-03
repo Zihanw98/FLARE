@@ -131,6 +131,16 @@ namespace hd_core
         void validate_geometry() const;
 
         /**
+         * @brief 使用各单元的 gamma 校验所有活跃单元的守恒状态。
+         * @pre cells 已按当前网格尺寸分配。
+         * @note 跳过 ghost，不修改状态；几何检查仍由 validate_geometry() 完成。
+         * @throws std::invalid_argument 网格尺寸或活跃单元状态不合法。
+         * @throws std::logic_error cells 数量与网格尺寸不匹配。
+         * @see Conserved::validate(double) const
+         */
+        void validate_active() const;
+
+        /**
          * @brief 验证几何并将 cells 调整到包含 ghost 的总单元数。
          * @pre 已设置各方向的 nactive、nghost 和 face。
          * @note 本函数不填充用户物理初态；resize 保留已有元素，新元素使用 Cell 默认值。

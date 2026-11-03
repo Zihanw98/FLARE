@@ -4,7 +4,7 @@
 
 int main()
 {
-    return run_test("mesh indexing and nonuniform geometry", [] {
+    return run_test("mesh indexing, geometry and active-state validation", [] {
         hd_core::MeshBlock mesh{};
         std::size_t count = 1;
         for (int d = 0; d < hd_core::NDIM; ++d)
@@ -73,5 +73,52 @@ int main()
         invalid = mesh;
         invalid.nghost[0] = std::numeric_limits<int>::max();
         expect_throw<std::overflow_error>([&] { invalid.ntotal(0); });
+
+        // Poison every ghost, including edges/corners, and populate active cells.
+        auto states = mesh;
+        std::vector<std::size_t> active_cells;
+        for (std::size_t flat = 0; flat < states.cells.size(); ++flat)
+        {
+            auto& cell = states.cells[flat];
+            cell.U[hd_core::RHO] = -1.0;
+            cell.gamma = std::numeric_limits<double>::quiet_NaN();
+            const auto local = states.coordinates_active(flat);
+            bool active = true;
+            for (int d = 0; d < hd_core::NDIM; ++d)
+                active &= local[d] >= 0 && local[d] < states.nactive[d];
+            if (!active) continue;
+            cell.U[hd_core::RHO] = 1.0;
+            cell.U[hd_core::ENERGY] = 2.0;
+            cell.gamma = flat % 2 ? 1.4 : 5.0 / 3.0;
+            active_cells.push_back(flat);
+        }
+        const auto& const_states = states;
+        const_states.validate_active(); // Invalid ghosts must not be examined.
+        for (auto flat : active_cells)
+        {
+            states.cells[flat].U[hd_core::RHO] = -1.0;
+            expect_throw<std::invalid_argument>([&] { states.validate_active(); });
+            states.cells[flat].U[hd_core::RHO] = 1.0;
+        }
+        auto& last_active = states.cells[active_cells.back()];
+        const auto saved = last_active;
+        last_active.U[hd_core::ENERGY] = -1.0;
+        expect_throw<std::invalid_argument>([&] { states.validate_active(); });
+        last_active = saved;
+        last_active.U[hd_core::MOMDEN(0)] = std::numeric_limits<double>::quiet_NaN();
+        expect_throw<std::invalid_argument>([&] { states.validate_active(); });
+        last_active = saved;
+        last_active.gamma = 1.0;
+        expect_throw<std::invalid_argument>([&] { states.validate_active(); });
+        last_active = saved;
+        last_active.U = {}; // Preserve Conserved::validate's vacuum convention.
+        states.validate_active();
+
+        invalid = states;
+        invalid.cells.clear();
+        expect_throw<std::logic_error>([&] { invalid.validate_active(); });
+        invalid = states;
+        invalid.cells.pop_back();
+        expect_throw<std::logic_error>([&] { invalid.validate_active(); });
     });
 }

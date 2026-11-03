@@ -46,6 +46,8 @@ namespace config
         bool constant_gravity_enabled = false;
 
         std::array<double,hd_core::NDIM> gravity{};
+
+        int integrator_retry_max = 20;
     };
     SimulationConfig ReadParameters(const std::string& filename);
     std::string trim(const std::string& text);

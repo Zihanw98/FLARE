@@ -15,7 +15,8 @@ namespace hd_time
         const hydro::RiemannSolver& solver,
         hd_source::SourceList source_list,
         const config::SimulationConfig& cfg,
-        double cfl
+        const hd_user::UserHooks& hooks,
+        double cfl = 0.4
     )
     {
         if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0)

@@ -122,4 +122,19 @@ namespace boundary
             "Only periodic built-in boundaries are implemented"
         );
     }
+    void FillBoundary(
+        hd_core::MeshBlock& mesh,
+        double time,
+        const hd_user::UserHooks& hooks
+    )
+    {
+            for (int direction = 0; direction < hd_core::NDIM; ++direction)
+            {
+                for (const auto side : {BoundarySide::Lower,
+                                        BoundarySide::Upper})
+                {
+                    ApplyBoundaryCondition(mesh, direction, side, time, hooks);
+                }
+            }
+    }
 }
