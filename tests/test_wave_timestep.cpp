@@ -1,4 +1,5 @@
 #include "core/mesh.h"
+#include "config/config.h"
 #include "hydro/flux.h"
 #include "hydro/riemann/exact.h"
 #include "hydro/spatial.h"
@@ -134,6 +135,8 @@ struct CountingSolver final : hydro::RiemannSolver
 
 void integration_tests()
 {
+    const config::SimulationConfig cfg{};
+    const hd_source::SourceList sources{}; // Existing checks exercise source-free hydro.
     CountingSolver counting;
     auto mesh = make_mesh(true);
     const auto original = mesh.cells;
@@ -162,21 +165,21 @@ void integration_tests()
     assert(counting.calls == face_count);
     counting.calls = 0;
     const double dt = hd_time::advance_one_step(mesh, 0.0, 1.0,
-        hd_time::TimeIntegrator::Euler, hydro::SpatialScheme::Godunov, counting);
+        hd_time::TimeIntegrator::Euler, hydro::SpatialScheme::Godunov, counting, sources, cfg);
     assert(near(dt, 0.4 / expected_rate));
     assert(counting.calls == face_count); // No duplicate Riemann solves for dt.
     same_cells(mesh.cells, original);
     assert(hd_time::advance_euler(mesh, 0.0, dt / 2,
-        hydro::SpatialScheme::Godunov, counting) == dt / 2);
+        hydro::SpatialScheme::Godunov, counting, sources, cfg) == dt / 2);
     counting.invalid_flux = true;
     expect_throw<std::invalid_argument>([&] {
-        hd_time::advance_euler(mesh, 0.0, 1.0, hydro::SpatialScheme::Godunov, counting);
+        hd_time::advance_euler(mesh, 0.0, 1.0, hydro::SpatialScheme::Godunov, counting, sources, cfg);
     });
     same_cells(mesh.cells, original); // Failed candidate update is not committed.
     counting.invalid_flux = false;
     counting.publish_speed = false;
     expect_throw<std::runtime_error>([&] {
-        hd_time::advance_euler(mesh, 0.0, 1.0, hydro::SpatialScheme::Godunov, counting);
+        hd_time::advance_euler(mesh, 0.0, 1.0, hydro::SpatialScheme::Godunov, counting, sources, cfg);
     });
     same_cells(mesh.cells, original);
 
@@ -193,7 +196,7 @@ void integration_tests()
     hydro::compute_hydro_rhs(shock, hydro::SpatialScheme::Godunov, exact, rhs);
     const double expected_shock_dt = hydro::compute_cfl_dt();
     const double shock_dt = hd_time::advance_euler(shock, 0.0, 1.0,
-        hydro::SpatialScheme::Godunov, exact);
+        hydro::SpatialScheme::Godunov, exact, sources, cfg);
     assert(shock_dt < old_estimate);
     assert(near(shock_dt, expected_shock_dt));
     for (std::size_t f = 0; f < shock.cells.size(); ++f)
@@ -205,14 +208,15 @@ void integration_tests()
 
     for (auto& cell : mesh.cells) cell = hd_core::Cell{};
     const auto empty_before = mesh.cells;
-    assert(hd_time::advance_euler(mesh, 0.0, 0.1, hydro::SpatialScheme::Godunov, exact) == 0.1);
+    assert(hd_time::advance_euler(mesh, 0.0, 0.1,
+        hydro::SpatialScheme::Godunov, exact, sources, cfg) == 0.1);
     same_cells(mesh.cells, empty_before);
     assert(std::isinf(hydro::compute_cfl_dt()));
     expect_throw<std::invalid_argument>([&] {
-        hd_time::advance_euler(mesh, 0., 1., hydro::SpatialScheme::Godunov, exact, 0.0);
+        hd_time::advance_euler(mesh, 0., 1., hydro::SpatialScheme::Godunov, exact, sources, cfg, 0.0);
     });
     expect_throw<std::invalid_argument>([&] {
-        hd_time::advance_euler(mesh, 0., -1., hydro::SpatialScheme::Godunov, exact);
+        hd_time::advance_euler(mesh, 0., -1., hydro::SpatialScheme::Godunov, exact, sources, cfg);
     });
     assert(hd_time::parse_time_integrator("euler") == hd_time::TimeIntegrator::Euler);
     expect_throw<std::invalid_argument>([] { hd_time::parse_time_integrator("rk2"); });

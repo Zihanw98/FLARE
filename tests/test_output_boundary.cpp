@@ -140,8 +140,28 @@ namespace
         hd_user::UserHooks hooks;
         hooks.userbc = user_boundary;
         boundary_calls.clear();
+        // Registering a hook must not override explicitly selected periodic boundaries.
+        auto periodic_reference = mesh;
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
+            mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::Periodic;
+            periodic_reference.bc_lower[d] = periodic_reference.bc_upper[d]
+                = boundary::BoundaryCondition::Periodic;
+            for (const auto side : {boundary::BoundarySide::Lower, boundary::BoundarySide::Upper})
+            {
+                boundary::ApplyBoundaryCondition(mesh, d, side, 0.25, hooks);
+                boundary::ApplyBoundaryCondition(periodic_reference, d, side, 0.25, {});
+                assert(boundary_calls.empty());
+                for (std::size_t f = 0; f < mesh.cells.size(); ++f)
+                {
+                    assert(mesh.cells[f].U.data == periodic_reference.cells[f].U.data);
+                    assert(mesh.cells[f].gamma == periodic_reference.cells[f].gamma);
+                }
+            }
+        }
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::User;
             for (const auto side : {boundary::BoundarySide::Lower, boundary::BoundarySide::Upper})
             {
                 const auto count = boundary_calls.size();
@@ -153,7 +173,7 @@ namespace
                 auto index = mesh.nghost;
                 index[d] = side == boundary::BoundarySide::Lower
                     ? mesh.nghost[d] - 1 : mesh.nghost[d] + mesh.nactive[d];
-                // Built-in periodic copying must NOT overwrite the hook's result.
+                // Explicit user boundaries must preserve the hook's result.
                 assert(mesh.at(index).U[hd_core::RHO] == 90.0 + d);
                 assert(mesh.at(index).gamma == 1.7);
             }
@@ -165,10 +185,13 @@ namespace
         });
         boundary::ApplyBoundaryCondition(mesh, 0, boundary::BoundarySide::Lower, 0.5, hooks);
         assert(boundary_calls.back().time == 0.5);
-        // A registered hook also takes precedence over unsupported built-in types.
+        // Unsupported built-in types must still fail even when a hook is registered.
         mesh.bc_upper[0] = boundary::BoundaryCondition::Outflow;
-        boundary::ApplyBoundaryCondition(mesh, 0, boundary::BoundarySide::Upper, 0.75, hooks);
-        assert(boundary_calls.back().time == 0.75);
+        const auto count = boundary_calls.size();
+        expect_failure([&] {
+            boundary::ApplyBoundaryCondition(mesh, 0, boundary::BoundarySide::Upper, 0.75, hooks);
+        });
+        assert(boundary_calls.size() == count);
     }
 
     std::filesystem::path snapshot(const config::SimulationConfig& cfg, std::size_t step)
@@ -300,7 +323,7 @@ namespace
         };
         write("output_step_every=7\n");
         assert(config::ReadParameters(path.string()).output_step_every == 7);
-        write("output_every_step=4\n");
+        write("step_every=4\n"); // Supported compatibility alias for output_step_every.
         assert(config::ReadParameters(path.string()).output_step_every == 4);
         for (const auto& value : {"0", "-1", "2.5"})
         {

@@ -1,0 +1,30 @@
+# Two stationary high-pressure disks: rho=1, p_hot=10, p_ambient=1.
+# Centers (0.75,0.75), (1.25,0.75), radius=0.12 for this domain.
+nxa = 192
+nya = 144
+nxg = 2
+nyg = 2
+x_lower = 0.0
+x_upper = 2.0
+y_lower = 0.0
+y_upper = 1.5
+gamma = 1.4
+t_end = 0.22
+cfl = 0.4
+maxsteps = 10000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+time_integrator = euler
+constant_gravity_enabled = false
+
+# Closed box for mass/energy checks; default duration targets the collision
+# before significant wall interaction. Longer runs include reflected waves.
+boundary_x_lower = reflective
+boundary_x_upper = reflective
+boundary_y_lower = reflective
+boundary_y_upper = reflective
+output_step_every = 5
+output_directory = output
+output_suffix = double_blast2d

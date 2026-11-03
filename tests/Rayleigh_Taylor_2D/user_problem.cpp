@@ -2,17 +2,15 @@
 #include "user/user_api.h"
 #include "core/mesh.h"
 #include "config/config.h"
-#include <stdexcept>
-#include <math.h>
-#include "constants/constants.h"
-static_assert(hd_core::NDIM == 2, "KH rquires 2D setting");
+#include <cmath>
+static_assert(hd_core::NDIM == 2, "RT initialization requires 2D");
 
 namespace
 {
     /**
-     * @brief Initialize the active cells of the standard Sod shock tube.
-     * @param[in,out] mesh Allocated one-dimensional mesh; ghosts are filled by userbc.
-     * @param[in] cfg Supplies the gas gamma; the discontinuity is at x=0.5.
+     * @brief Initialize hydrostatic RT layers with four horizontal perturbation periods.
+     * @param[in,out] mesh Allocated 2D mesh; built-in boundaries fill the ghosts.
+     * @param[in] cfg Supplies the domain, gas gamma, and vertical gravity.
      */
     void initialize_RTI2D(
         hd_core::MeshBlock& mesh,
@@ -26,6 +24,7 @@ namespace
         const double rho_top = 2.0;
         const double p_interface = 2.5;
         const double amplitude = 0.01;
+        constexpr int mode = 4; // Four wavelengths across Lx; 32 cells each at nxa=128.
 
         const double x_lower = cfg.lower[0];
         const double y_lower = cfg.lower[1];
@@ -59,21 +58,13 @@ namespace
                 W[hd_core::VEL(0)] = 0.0;
                 W[hd_core::VEL(1)] =
                     amplitude
-                    * std::cos(2.0 * pi * (x - x_lower) / Lx)
+                    * std::cos(2.0 * pi * mode * (x - x_lower) / Lx)
                     * envelope * envelope;
 
                 mesh.at(index) = hd_core::Cell(W, cfg.gamma);
             }
         }
     }
-
-    /**
-     * @brief Fill every ghost layer by copying the closest active cell (zero gradient).
-     * @param[in,out] mesh Copies both U and gamma; active cells remain unchanged.
-     * @param[in] time Current time; this boundary is time independent.
-     * @param[in] direction Must be 0 for this one-dimensional problem.
-     * @param[in] side Lower or upper end of the tube.
-     */
 }
 
 hd_user::UserHooks hd_user::make_user_hooks()

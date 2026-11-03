@@ -1,7 +1,7 @@
 # Standard Sod tube: (rho, u, p)_L = (1, 0, 1), (rho, u, p)_R = (0.125, 0, 0.1).
 # The initial discontinuity is at x=0.5; initial states are set in user_problem.cpp.
-nxa = 400
-nya = 400
+nxa = 128
+nya = 128
 nxg = 2
 nyg = 2
 x_lower = 0.0
@@ -10,9 +10,9 @@ y_lower = 0.0
 y_upper = 1.0
 gamma = 1.4
 
-t_end = 3.0
+t_end = 20.0
 cfl = 0.4
-maxsteps = 10000
+maxsteps = 100000
 riemann_solver = exact
 riemann_tolerance = 1e-10
 riemann_max_iterations = 200
@@ -33,4 +33,4 @@ output_suffix = RTI2D
 #gravity
 constant_gravity_enabled = true
 gravity_x = 0.0
-gravity_y = -0.1
+gravity_y = -0.2

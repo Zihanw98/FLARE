@@ -1,0 +1,35 @@
+# A finite high-pressure sphere in stationary gas, on a Cartesian cube.
+nxa = 32
+nya = 32
+nza = 32
+nxg = 2
+nyg = 2
+nzg = 2
+x_lower = 0.0
+x_upper = 1.0
+y_lower = 0.0
+y_upper = 1.0
+z_lower = 0.0
+z_upper = 1.0
+gamma = 1.4
+t_end = 0.08
+cfl = 0.4
+maxsteps = 10000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+time_integrator = euler
+constant_gravity_enabled = false
+
+# Closed box: mass and gas energy are conserved. Stop before appreciable
+# wave interaction with the walls; later times describe a reflecting box.
+boundary_x_lower = reflective
+boundary_x_upper = reflective
+boundary_y_lower = reflective
+boundary_y_upper = reflective
+boundary_z_lower = reflective
+boundary_z_upper = reflective
+output_step_every = 3
+output_directory = output
+output_suffix = blast3d
