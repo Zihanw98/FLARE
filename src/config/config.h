@@ -19,13 +19,19 @@ namespace config
         std::array<double,hd_core::NDIM> lower{};
         std::array<double,hd_core::NDIM> upper{};
         double t_end = 1.0;
+        // 保留原 cfl 成员作为目标值；参数文件也支持 cfl_desired 这一别名。
         double cfl = 0.4;
+        double cfl_max = 0.5;
         std::size_t maxsteps = 100000;
 
         //Numerical method settings
         std::string riemann_solver = "exact";
         std::string spatial_scheme = "godunov";
         std::string time_integrator = "euler";
+        std::string reconstructor = "PCM";
+        // Slope limiter for PLM; PCM does not use a limiter.
+        std::string limiter = "minmod";
+        double limiter_beta = 1.5; // Used by mcbeta only; valid range [1, 2].
 
         double riemann_tolerance = 1e-8;
         int riemann_max_iterations = 100;
@@ -48,6 +54,8 @@ namespace config
         std::array<double,hd_core::NDIM> gravity{};
 
         int integrator_retry_max = 20;
+
+
     };
     SimulationConfig ReadParameters(const std::string& filename);
     std::string trim(const std::string& text);

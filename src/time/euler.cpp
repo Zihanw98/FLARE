@@ -16,7 +16,7 @@ namespace hd_time
         hd_source::SourceList source_list,
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
-        double cfl = 0.4
+        double cfl
     )
     {
         if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0)
@@ -39,27 +39,7 @@ namespace hd_time
             !std::isfinite(time + dt) || time + dt <= time)
             throw std::runtime_error("Euler time step cannot advance time");
 
-        
-        auto next_cells = mesh.cells;
-        for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
-        {
-            const auto index = mesh.coordinates_active(flat);
-            bool is_active = true;
-            for (int d = 0; d < hd_core::NDIM; ++d)
-            {
-                if (index[d] < 0 || index[d] >= mesh.nactive[d])
-                {
-                    is_active = false;
-                    break;
-                }
-            }
-            if (!is_active)
-                continue;
-
-            next_cells[flat].U += dt * rhs[flat];
-            next_cells[flat].U.validate(next_cells[flat].gamma);
-        }
-        mesh.cells.swap(next_cells);
+        add_scaled_rhs(mesh, rhs, dt);
         return dt;
     }
 }

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -54,7 +55,7 @@ int main(int argc, char* argv[])
 
         auto spatial = hydro::parse_spatial_scheme("Godunov");
 
-        auto integrator = hd_time::parse_time_integrator("euler");
+        auto integrator = hd_time::parse_time_integrator(cfg.time_integrator);
 
         auto hooks = hd_user::make_user_hooks();
         if(!hooks.initialize)
@@ -69,6 +70,7 @@ int main(int argc, char* argv[])
         boundary::FillBoundary(mesh,t_current,hooks);
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         auto source_list = hd_source::make_sources(cfg,hooks);
+        double dt_next = std::numeric_limits<double>::infinity();
         while(t_current < cfg.t_end)
         {
             if (step_current >= cfg.maxsteps)
@@ -88,7 +90,8 @@ int main(int argc, char* argv[])
                 source_list,
                 cfg,
                 hooks,
-                cfg.cfl
+                cfg.cfl,
+                dt_next
             );
             if (!std::isfinite(dt) || dt <= 0.0 ||
                 dt > remaining || t_current + dt <= t_current)

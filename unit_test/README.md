@@ -23,6 +23,7 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `mesh` | flat/Index、active/ghost 偏移、const 访问、非均匀间距、越界与损坏的几何 |
 | `facefield` | 各方向面数量、flat/Index、const 访问、清零、错误分配和越界 |
 | `godunov` | 每个面的左右单元和 gamma、ghost 偏移、散度负号、非均匀网格宽度、面波速归约 |
+| `limiter` | 五种斜率限制器、none 中心斜率、线性保持与极值归零、极端数值、MC-beta 端点、配置选择及非法参数 |
 | `wave_timestep` | 已有波速回归测试：强激波、真空、CFL、Euler、失败时状态保持不变 |
 | `output_boundary` | 已有边界/输出测试：多层周期 ghost、角点、用户 hook、参数读取、CSV 和输出频率 |
 

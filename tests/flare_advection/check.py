@@ -8,9 +8,10 @@
 Dependencies: numpy, matplotlib, Pillow (requirements.txt).
 
 Two references are used: rigid periodic translation of the initial cell-average
-image, and an independently computed first-order upwind solution using the logged
-time steps. The first is a cold/pressureless limit, NOT an exact positive-pressure
-Euler solution. Numerical diffusion relative to rigid translation is reported;
+image, and an independently computed spatially first-order upwind solution using
+the configured Euler/RK2 method and logged time steps. The first is a
+cold/pressureless limit, NOT an exact positive-pressure Euler solution.
+Numerical diffusion relative to rigid translation is reported;
 it does not by itself fail this translation test. Checks target transport phase,
 conservation, vacuum states, periodic ghosts, and agreement with cold upwinding.
 """
@@ -149,6 +150,8 @@ def plot_results(frames, initial, cfg, output, animate, fps):
 
 
 def analyze(cfg, problem_dir, log_path, animate, fps):
+    method = cfg.get("time_integrator", "euler").lower()
+    require(method in ("euler", "rk2"), "Cold upwind reference supports Euler and RK2")
     for axis in ("x", "y"):
         require(all(cfg[f"boundary_{axis}_{side}"] == "periodic" for side in ("lower", "upper")),
                 "Translation check requires periodic boundaries on both axes")
@@ -186,7 +189,9 @@ def analyze(cfg, problem_dir, log_path, animate, fps):
     metrics, frames = [], []
     for step, time, dt, filename in records:
         if step:
-            scalar = upwind_step(scalar, dt, velocity, spacing)
+            stage = upwind_step(scalar, dt, velocity, spacing)
+            scalar = (stage if method == "euler" else
+                      .5*scalar + .5*upwind_step(stage, dt, velocity, spacing))
         if filename is None:
             continue
         header, values = read_snapshot(problem_dir/filename, cfg)

@@ -1,5 +1,6 @@
 #include "config.h"
 #include "utils.h"
+#include "hydro/limiter/limiter.h"
 #include <array>
 #include <string>         // std::string、std::getline、std::to_string
 #include <sstream>        // std::istringstream
@@ -80,6 +81,12 @@ namespace config
             {"cfl", [&cfg](const std::string& v) {
                 cfg.cfl = parse_value<double>(v);
             }},
+            {"cfl_desired", [&cfg](const std::string& v) {
+                cfg.cfl = parse_value<double>(v);
+            }},
+            {"cfl_max", [&cfg](const std::string& v) {
+                cfg.cfl_max = parse_value<double>(v);
+            }},
             {"maxsteps", [&cfg](const std::string& v) {
                 // 无符号流提取也可能接受 -1，因此必须在转换前拒绝负号。
                 if (v.empty() || v.front() == '-')
@@ -103,6 +110,12 @@ namespace config
             }},
             {"time_integrator", [&cfg](const std::string& v) {
                 cfg.time_integrator = v;
+            }},
+            {"limiter", [&cfg](const std::string& v) {
+                cfg.limiter = v;
+            }},
+            {"limiter_beta", [&cfg](const std::string& v) {
+                cfg.limiter_beta = parse_value<double>(v);
             }},
             {"output_directory", [&cfg](const std::string& v) {
                 cfg.output_directory = v;
@@ -209,6 +222,10 @@ namespace config
     }
     void validate_cfg(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
     {
+        hydro::parse_limiter(cfg.limiter);
+        if (!std::isfinite(cfg.limiter_beta) || cfg.limiter_beta < 1.0 || cfg.limiter_beta > 2.0)
+            throw std::runtime_error("limiter_beta must be finite and in [1, 2]");
+
         const auto require = [&seen](const std::string& key)
         {
             if (seen.count(key) == 0)
@@ -254,14 +271,14 @@ namespace config
         if (!std::isfinite(cfg.t_end) || cfg.t_end <= 0.0)
             throw std::runtime_error("t_end must be finite and > 0");
 
-        if(cfg.time_integrator == "euler")
-        {
-            if (!std::isfinite(cfg.cfl) ||
-                cfg.cfl <= 0.0 || cfg.cfl > 0.5)
-            {
-                throw std::runtime_error("cfl must satisfy 0 < cfl <= 0.5");
-            }
-        }
+        if (seen.count("cfl") && seen.count("cfl_desired"))
+            throw std::runtime_error("Use either cfl or cfl_desired, not both");
+        if (!std::isfinite(cfg.cfl) || !std::isfinite(cfg.cfl_max)
+            || cfg.cfl <= 0.0 || cfg.cfl > cfg.cfl_max
+            || cfg.cfl_max > 0.5)
+            throw std::runtime_error("Require 0 < cfl_desired <= cfl_max <= 0.5");
+        if (cfg.integrator_retry_max < 0)
+            throw std::runtime_error("integrator_retry_max must be nonnegative");
 
         if (!std::isfinite(cfg.gamma) || cfg.gamma <= 1.0)
             throw std::runtime_error("gamma must be finite and > 1");

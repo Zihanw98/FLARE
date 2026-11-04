@@ -1,0 +1,31 @@
+# Full Euler translation of FLARE: rho=2 inside letters, rho=0.5 outside.
+# Uniform p=1 and velocity (1,0.5), set in user_problem.cpp.
+# Domain: [0,2] x [0,1]. At t=1 the exact displacement is (1,0.5).
+# At t=2 the exact density pattern returns to its starting position.
+nxa = 192
+nya = 96
+nxg = 2
+nyg = 2
+x_lower = 0.0
+x_upper = 2.0
+y_lower = 0.0
+y_upper = 1.0
+gamma = 1.4
+
+t_end = 2.0
+cfl = 0.4
+maxsteps = 10000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+time_integrator = rk2
+
+boundary_x_lower = periodic
+boundary_x_upper = periodic
+boundary_y_lower = periodic
+boundary_y_upper = periodic
+
+step_every = 100
+output_directory = output_rk2
+output_suffix = translation

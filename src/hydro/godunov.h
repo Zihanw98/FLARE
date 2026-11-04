@@ -1,5 +1,7 @@
 #pragma once
 #include "core.h"
+#include "reconstruction.h"
+#include "limiter.h"
 #include <vector>
 
 namespace hd_core
@@ -14,6 +16,8 @@ namespace hydro
     void compute_godunov_rhs(
         const hd_core::MeshBlock& mesh,
         const RiemannSolver& solver,
-        std::vector<hd_core::Conserved>& rhs
+        std::vector<hd_core::Conserved>& rhs,
+        const Reconstructor& reconstructor = Reconstructor::PCM,
+        const Limiter& limiter = Limiter::none
     );
 }

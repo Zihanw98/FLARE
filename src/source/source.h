@@ -4,6 +4,8 @@
 #include "config.h"
 namespace hd_source
 {
+    // 将未乘 dt 的源项加到 rhs；dt_limit 只能收紧，不能增大。
+    // RK2 以 +infinity 初始化每个源项的独立限制；rhs 不应依赖 dt_limit。
     using SourceFunction = void (*)(
         const hd_core::MeshBlock& mesh,
         double time,

@@ -23,7 +23,9 @@ void compute_hydro_rhs(
     const hd_core::MeshBlock& mesh,
     SpatialScheme scheme,
     const RiemannSolver& solver,
-    std::vector<hd_core::Conserved>& rhs
+    std::vector<hd_core::Conserved>& rhs,
+    const Reconstructor& reconstructor = Reconstructor::PCM,
+    const Limiter& limiter = Limiter::none
 )
 {
     //Clear the results and re-calculate

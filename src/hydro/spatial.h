@@ -1,5 +1,7 @@
 #pragma once
 #include "core.h"
+#include "reconstruction.h"
+#include "limiter.h"
 #include <string>
 #include <vector>
 
@@ -22,7 +24,9 @@ void compute_hydro_rhs(
     const hd_core::MeshBlock& mesh,
     SpatialScheme scheme,
     const RiemannSolver& solver,
-    std::vector<hd_core::Conserved>& rhs
+    std::vector<hd_core::Conserved>& rhs,
+    const Reconstructor& reconstructor = Reconstructor::PCM,
+    const Limiter& limiter = Limiter::none
 );
 
 }

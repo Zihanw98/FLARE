@@ -12,7 +12,9 @@ namespace hydro
     void compute_godunov_rhs(
         const hd_core::MeshBlock& mesh,
         const RiemannSolver& solver,
-        std::vector<hd_core::Conserved>& rhs
+        std::vector<hd_core::Conserved>& rhs,
+        const Reconstructor& reconstructor = Reconstructor::PCM,
+        const Limiter& limiter = Limiter::none
     )
     {
         // 每次 RHS 都重新统计，避免沿用上一个时间步的限制。

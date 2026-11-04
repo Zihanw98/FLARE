@@ -16,7 +16,7 @@ Checks target transport phase, conservation, constant pressure/velocity, periodi
 ghosts, and agreement with first-order upwinding. Density L1 errors are normalized
 by the initial excess density above the background, so the background cannot hide
 shape errors. Diffusion relative to the exact solution is reported, not a failure
-by itself: this is a regression check of the current Godunov + Euler method.
+by itself: this checks Godunov with either Euler or SSP-RK2 time integration.
 """
 
 import argparse
@@ -121,7 +121,8 @@ def modes(image):
 def plot_results(frames, initial, cfg, output, animate, fps):
     bounds = tuple(float(cfg[key]) for key in ("x_lower", "x_upper", "y_lower", "y_upper"))
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.9), layout="constrained")
-    names = ("Numerical density", "Exact Euler translation", "First-order upwind reference")
+    names = (f"Numerical density ({cfg['time_integrator']})", "Exact Euler translation",
+             f"Upwind + {cfg['time_integrator']} reference")
     images = []
     for axis, name in zip(axes, names):
         image = axis.imshow(initial, origin="lower", extent=bounds, aspect="equal",
@@ -152,8 +153,8 @@ def plot_results(frames, initial, cfg, output, animate, fps):
 
 
 def analyze(cfg, problem_dir, log_path, animate, fps):
-    require(cfg["spatial_scheme"] == "godunov" and cfg["time_integrator"] == "euler",
-            "The upwind regression reference assumes Godunov + forward Euler")
+    require(cfg["spatial_scheme"] == "godunov" and cfg["time_integrator"] in ("euler", "rk2"),
+            "The upwind regression reference requires Godunov + Euler or RK2")
     for axis in ("x", "y"):
         require(all(cfg[f"boundary_{axis}_{side}"] == "periodic" for side in ("lower", "upper")),
                 "Translation check requires periodic boundaries on both axes")
@@ -195,7 +196,9 @@ def analyze(cfg, problem_dir, log_path, animate, fps):
     metrics, frames = [], []
     for step, time, dt, filename in records:
         if step:
-            scalar = upwind_step(scalar, dt, velocity, spacing)
+            stage = upwind_step(scalar, dt, velocity, spacing)
+            scalar = (stage if cfg["time_integrator"] == "euler" else
+                      0.5*scalar + 0.5*upwind_step(stage, dt, velocity, spacing))
         if filename is None:
             continue
         header, values = read_snapshot(problem_dir/filename, cfg)
@@ -257,6 +260,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--parameters", type=Path, default=root/"parameters.txt")
     parser.add_argument("--executable", type=Path, default=root/"flare")
+    parser.add_argument("--log", type=Path, help="Separate run log (default: parameters directory/run.log)")
     parser.add_argument("--run", action="store_true", help="Run FLARE first; overwrite this problem's run.log")
     parser.add_argument("--animate", action="store_true", help="Also save the density/reference animation")
     parser.add_argument("--fps", type=float, default=6.)
@@ -266,8 +270,9 @@ def main():
     try:
         path = args.parameters.resolve()
         cfg = parameters(path)
-        log = path.parent/"run.log"
+        log = args.log.resolve() if args.log else path.parent/"run.log"
         if args.run:
+            log.parent.mkdir(parents=True, exist_ok=True)
             print("Running FLARE; progress is recorded in " + str(log), flush=True)
             with log.open("w") as stream:
                 result = subprocess.run([str(args.executable.resolve()), "-par", str(path)],

@@ -180,7 +180,8 @@ def main():
         require(cfg["constant_gravity_enabled"].lower() in ("true", "1")
                 and float(cfg["gravity_x"]) == 0 and float(cfg["gravity_y"]) < 0,
                 "Require enabled, downward vertical gravity")
-        require(cfg["time_integrator"] == "euler", "These checks currently target Euler")
+        require(cfg["time_integrator"].lower() in ("euler", "rk2"),
+                "These checks support Euler and RK2")
         for axis, bc in (("x", "periodic"), ("y", "reflective")):
             require(all(cfg[f"boundary_{axis}_{side}"] == bc for side in ("lower", "upper")),
                     f"Require {bc} boundaries in {axis}")
