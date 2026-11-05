@@ -22,6 +22,7 @@ flare
 *.exe
 *.out
 *.app/
+/old_version/godunov
 
 # Build directories
 .build/
@@ -33,18 +34,35 @@ CMakeCache.txt
 cmake_install.cmake
 
 # Test outputs, visualizations and run logs
+/output/
+/output_*/
+/animations/
+/diagnostics/
+/figures/
+/run.log
 /tests/**/output/
+/tests/**/output_*/
 /tests/**/animations/
 /tests/**/diagnostics/
 /tests/**/figures/
 /tests/**/*.log
 /unit_test/**/output/
+/unit_test/**/output_*/
 /unit_test/**/*.log
+/old_version/output/
+/old_version/output_*/
 
 # Python caches
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local Python environments
+.venv/
+venv/
 
 # Local documentation (temporarily excluded)
 /ANIMATE_README.md
@@ -52,6 +70,13 @@ __pycache__/
 # Images
 *.png
 *.gif
+*.mp4
 
-#IDE
+# Editors, backups and OS metadata
 .vscode/
+.idea/
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
