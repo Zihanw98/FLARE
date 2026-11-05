@@ -1,3 +1,7 @@
+/**
+ * @file spatial.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "spatial.h"
 #include "godunov.h"
 #include "mesh.h"
@@ -24,8 +28,9 @@ void compute_hydro_rhs(
     SpatialScheme scheme,
     const RiemannSolver& solver,
     std::vector<hd_core::Conserved>& rhs,
-    const Reconstructor& reconstructor = Reconstructor::PCM,
-    const Limiter& limiter = Limiter::none
+    const Reconstructor& reconstructor,
+    const Limiter& limiter,
+    const double limiter_beta
 )
 {
     //Clear the results and re-calculate
@@ -37,7 +42,7 @@ void compute_hydro_rhs(
     switch (scheme)
     {
         case SpatialScheme::Godunov:
-            compute_godunov_rhs(mesh, solver, rhs);
+            compute_godunov_rhs(mesh, solver, rhs,reconstructor,limiter,limiter_beta);
             return;
     }
 

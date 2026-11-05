@@ -1,3 +1,7 @@
+/**
+ * @file boundary.cpp
+ * @brief Boundary-condition handling.
+ */
 #include "boundary.h"
 #include "core/mesh.h"
 #include "user/user_api.h"

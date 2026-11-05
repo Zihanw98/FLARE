@@ -1,3 +1,7 @@
+/**
+ * @file factory.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "factory.h"
 #include "exact.h"
 #include <memory>

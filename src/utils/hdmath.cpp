@@ -1,3 +1,7 @@
+/**
+ * @file hdmath.cpp
+ * @brief Mathematical and string utilities.
+ */
 #include "hdmath.h"
 
 #include <cmath>

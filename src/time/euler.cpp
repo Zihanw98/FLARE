@@ -1,3 +1,7 @@
+/**
+ * @file euler.cpp
+ * @brief Time integration.
+ */
 #include "integrator.h"
 #include "core/mesh.h"
 #include "hydro/timestep_CFL.h"
@@ -24,17 +28,21 @@ namespace hd_time
 
         if (!std::isfinite(cfl) || cfl <= 0.0 || cfl > 0.5)
             throw std::invalid_argument("Euler requires 0 < CFL <= 0.5");
+        double hydro_inverse_dt;
+        double source_dt_limit;
+        auto [dt_rhs, rhs] = evaluate_RHS(
+            mesh,
+            time,
+            spatial_scheme,
+            source_list,
+            solver,
+            cfg,
+            cfl,
+            hydro_inverse_dt,
+            source_dt_limit
+        );
 
-        std::vector<hd_core::Conserved> rhs;
-        hydro::compute_hydro_rhs(mesh, spatial_scheme, solver, rhs);
-        double dt_h = std::min(dt_limit, hydro::compute_cfl_dt(cfl));
-        double dt_s = dt_h;
-        for(int i=0;i < source_list.size(); i++)
-        {
-            auto source_function = source_list.at(i).func;
-            source_function(mesh,time,cfg,rhs,dt_s);
-        }
-        const double dt = std::min(dt_h,dt_s);
+        const double dt = std::min(dt_limit,dt_rhs);
         if (!std::isfinite(dt) || dt <= 0.0 ||
             !std::isfinite(time + dt) || time + dt <= time)
             throw std::runtime_error("Euler time step cannot advance time");

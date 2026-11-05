@@ -1,0 +1,30 @@
+/** @namespace hd_core
+ * @brief Physical state containers and structured mesh geometry.
+ */
+/** @namespace hydro
+ * @brief Reconstruction, numerical fluxes, spatial operators, and CFL estimates.
+ */
+/** @namespace hd_time
+ * @brief Time integration and source-aware timestep control.
+ */
+/** @namespace boundary
+ * @brief Built-in and user-defined ghost-cell boundary handling.
+ */
+/** @namespace config
+ * @brief Runtime parameter parsing, validation, and mesh setup.
+ */
+/** @namespace hd_source
+ * @brief Physical source callbacks and built-in source registration.
+ */
+/** @namespace io
+ * @brief Simulation diagnostics and CSV snapshots.
+ */
+/** @namespace hd_user
+ * @brief Problem-defined initialization, boundary, and output hooks.
+ */
+/** @namespace hdmath
+ * @brief Dynamic mathematical vectors and componentwise arithmetic.
+ */
+/** @namespace utils
+ * @brief Shared string utilities.
+ */

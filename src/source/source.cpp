@@ -1,3 +1,7 @@
+/**
+ * @file source.cpp
+ * @brief Physical source terms.
+ */
 #include "source.h"
 
 namespace hd_source

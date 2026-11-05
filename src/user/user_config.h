@@ -1,3 +1,7 @@
+/**
+ * @file user_config.h
+ * @brief Problem configuration and callback interfaces.
+ */
 #pragma once
 
 #ifndef HD_NDIM

@@ -1,7 +1,7 @@
-# Standard Sod tube: (rho, u, p)_L = (1, 0, 1), (rho, u, p)_R = (0.125, 0, 0.1).
-# The initial discontinuity is at x=0.5; initial states are set in user_problem.cpp.
-nxa = 400
-nya = 400
+# Periodic Kelvin-Helmholtz double shear layer at y=0.25 and y=0.75.
+# Four perturbation wavelengths in x; initial states are set in user_problem.cpp.
+nxa = 200
+nya = 200
 nxg = 2
 nyg = 2
 x_lower = 0.0
@@ -17,15 +17,17 @@ riemann_solver = exact
 riemann_tolerance = 1e-10
 riemann_max_iterations = 200
 spatial_scheme = godunov
-time_integrator = euler
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
 
-# userbc implements zero-gradient outflow on both sides.
+# Periodic boundaries in both directions.
 boundary_x_lower = periodic
 boundary_x_upper = periodic
 boundary_y_lower = periodic
 boundary_y_upper = periodic
 
 # Save enough snapshots to resolve the evolution in animations.
-step_every = 10
-output_directory = output
-output_suffix = sod
+step_every = 100
+output_directory = output/mode4_mc_rk2
+output_suffix = kh_mode4

@@ -1,3 +1,7 @@
+/**
+ * @file output.cpp
+ * @brief Simulation diagnostics and output.
+ */
 #include "output.h"
 #include "config/config.h"
 #include "core/mesh.h"

@@ -1,3 +1,7 @@
+/**
+ * @file reconstruction.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "reconstruction.h"
 #include "utils.h"
 #include <stdexcept>
@@ -14,11 +18,11 @@ namespace hydro
         switch(reconstructor)
         {
             case Reconstructor::PCM:
-                return Reconstruct_PCM(mesh,direction,right_index,limiter);
+                return Reconstruct_PCM(mesh,direction,right_index,limiter,limiter_beta);
             case Reconstructor::PLM:
-                return Reconstruct_PLM(mesh,direction,right_index,limiter);
+                return Reconstruct_PLM(mesh,direction,right_index,limiter,limiter_beta);
             default:
-                throw std::runtime_error("Invalid Reconstrcutor");
+                throw std::runtime_error("Invalid Reconstructor");
 
         }
     }
@@ -54,17 +58,17 @@ namespace hydro
         hd_core::Primitives slope_left;
         hd_core::Primitives slope_right;
         
-        const hd_core::Primitives& q_l = WL;
-        const hd_core::Primitives& q_r = WR;
-        const hd_core::Primitives& q_ll = mesh.at(left_left_index).U.to_Primtivies(gamma_LL);
-        const hd_core::Primitives& q_rr = mesh.at(right_right_index).U.to_Primtivies(gamma_RR);
+        const hd_core::Primitives q_l = WL;
+        const hd_core::Primitives q_r = WR;
+        const hd_core::Primitives q_ll = mesh.at(left_left_index).U.to_Primtivies(gamma_LL);
+        const hd_core::Primitives q_rr = mesh.at(right_right_index).U.to_Primtivies(gamma_RR);
         const double dx_l = mesh.cell_center(direction,left_index) - mesh.cell_center(direction,left_left_index);
         const double dx_m = mesh.cell_center(direction,right_index) - mesh.cell_center(direction,left_index);
         const double dx_r = mesh.cell_center(direction,right_right_index) - mesh.cell_center(direction,right_index);
         for(int i=0 ; i<hd_core::NHYDRO; i++)
         {
-            slope_left[i] = limited_slope((q_l[i]-q_ll[i])/dx_l,(q_r[i]-q_l[i])/dx_m,limiter);
-            slope_right[i] = limited_slope((q_r[i]-q_l[i])/dx_m,(q_rr[i]-q_r[i])/dx_r,limiter);
+            slope_left[i] = limited_slope((q_l[i]-q_ll[i])/dx_l,(q_r[i]-q_l[i])/dx_m,limiter,limiter_beta);
+            slope_right[i] = limited_slope((q_r[i]-q_l[i])/dx_m,(q_rr[i]-q_r[i])/dx_r,limiter,limiter_beta);
             WL[i] += slope_left[i] * mesh.cell_width(direction,left_index)/2;
             WR[i] -= slope_right[i] * mesh.cell_width(direction,right_index)/2;
         }

@@ -1,3 +1,7 @@
+/**
+ * @file stringex.cpp
+ * @brief Mathematical and string utilities.
+ */
 #include "utils.h"
 namespace utils
 {

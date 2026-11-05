@@ -1,0 +1,36 @@
+/**
+@mainpage FLARE Framework Reference
+
+English API documentation for the current C++ framework under `src/`.
+Function comments describe purpose, parameters, return values, required input
+conditions, exceptions, and relevant side effects. They document the current
+implementation rather than planned functionality.
+
+@section doc_navigation Reading the API
+
+- @ref hd_core "hd_core": primitive and conserved states, cells, and mesh geometry/indexing.
+- @ref hydro "hydro": reconstruction, slope limiters, Riemann solvers, spatial RHS, and CFL limits.
+- @ref hd_time "hd_time": forward Euler, SSP-RK2, source-aware RHS evaluation, and timestep dispatch.
+- @ref boundary "boundary": ghost-cell filling and user boundary callbacks.
+- @ref hd_source "hd_source": source registration and constant gravity.
+- @ref config "config": parameter parsing, validation, and mesh construction.
+- @ref io "io": terminal diagnostics and CSV snapshots.
+- @ref hd_user "hd_user": problem-specific initialization, boundary, and output callbacks.
+- @ref hdmath "hdmath" and @ref utils "utils": mathematical vectors and string comparison.
+
+Use the class, namespace, and file navigation or the search field to locate an
+interface. Header declarations carry the public documentation. Internal helper
+functions are documented in their implementation files; source links are included.
+
+@section doc_build Building the documentation
+
+Install Doxygen, then run from the repository root:
+@code{.sh}
+doxygen Doxyfile
+@endcode
+
+Open `build/docs/html/index.html`. Doxygen writes diagnostics to
+`build/docs/doxygen-warnings.log` and machine-readable documentation to
+`build/docs/xml/`. The generated files stay under the ignored `build/` directory.
+This build does not compile or run a simulation and does not publish a website.
+*/

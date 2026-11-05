@@ -1,3 +1,7 @@
+/**
+ * @file limiter.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "limiter.h"
 #include "utils.h"
 #include <algorithm>

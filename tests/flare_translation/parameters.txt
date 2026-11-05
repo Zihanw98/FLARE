@@ -19,7 +19,9 @@ riemann_solver = exact
 riemann_tolerance = 1e-10
 riemann_max_iterations = 200
 spatial_scheme = godunov
-time_integrator = euler
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
 
 boundary_x_lower = periodic
 boundary_x_upper = periodic
@@ -27,5 +29,5 @@ boundary_y_lower = periodic
 boundary_y_upper = periodic
 
 step_every = 100
-output_directory = output
+output_directory = output/mc_rk2
 output_suffix = translation

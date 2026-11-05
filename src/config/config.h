@@ -1,3 +1,7 @@
+/**
+ * @file config.h
+ * @brief Simulation configuration.
+ */
 #pragma once
 #include "core.h"
 #include "mesh.h"
@@ -8,6 +12,7 @@
 #include <unordered_set>
 namespace config
 {
+    /** @brief Runtime mesh, numerical-method, source, and output settings. */
     struct SimulationConfig
     {
         hd_core::Index nactive{};
@@ -57,11 +62,57 @@ namespace config
 
 
     };
+    /**
+     * @brief Read and validate a key=value simulation parameter file.
+     * @param[in] filename Path to the parameter file.
+     * @return Configuration populated from the file and built-in defaults.
+     * @throws std::runtime_error If opening, reading, parsing, or configuration validation fails.
+     * @note Strips # comments and ignores unknown keys. Repeated recognized keys overwrite earlier values; cfl and cfl_desired cannot both be specified.
+     */
     SimulationConfig ReadParameters(const std::string& filename);
+    /**
+     * @brief Remove leading and trailing spaces, tabs, and line endings.
+     * @param[in] text Input text; internal whitespace is preserved.
+     * @return The trimmed string, or an empty string for whitespace-only input.
+     */
     std::string trim(const std::string& text);
+    /**
+     * @brief Parse one stream-extractable value and reject trailing non-whitespace text.
+     * @param[in] text Text containing exactly one value of type T.
+     * @return The parsed value.
+     * @tparam T Type supporting stream extraction and default construction.
+     * @throws std::runtime_error If extraction fails or trailing text remains.
+     * @note The generic definition lives in config.cpp; arbitrary external instantiations are not exposed by this header.
+     */
     template<typename T>T parse_value(const std::string& text);
+    /**
+     * @brief Return a string parameter without interpreting quotes or escapes.
+     * @param[in] text String value; any internal or surrounding spaces are preserved here.
+     * @return A copy of text.
+     */
     template<> std::string parse_value<std::string>(const std::string& text);
+    /**
+     * @brief Parse a boolean parameter after trimming whitespace.
+     * @param[in] text Case-insensitive true/false or numeric 1/0.
+     * @return The corresponding boolean value.
+     * @throws std::runtime_error If the value is not recognized.
+     */
     template<> bool parse_value<bool>(const std::string& text);
+    /**
+     * @brief Check required mesh parameters and supported numerical value ranges.
+     * @param[in] cfg Configuration to inspect without modifying it.
+     * @param[in] seen Recognized parameter names present in the input file.
+     * @throws std::runtime_error If required keys or checked configuration constraints are violated.
+     * @throws std::invalid_argument If the limiter name is unknown.
+     * @note Requires 0 < cfl <= cfl_max <= 0.5. This is not a complete check of every method name; some names are validated later by their factories.
+     */
     void validate_cfg(const SimulationConfig& cfg,const std::unordered_set<std::string>& seen);
+    /**
+     * @brief Build and allocate a uniform mesh from the configuration.
+     * @param[in] cfg Mesh counts, axis bounds, and boundary-condition names.
+     * @return Mesh with initialized geometry and default-constructed cells.
+     * @pre Mesh dimensions and bounds are valid.
+     * @note Does not set the physical initial state or copy cfg.gamma into each cell; the problem initializer must do so. Geometry and boundary parsing errors propagate.
+     */
     hd_core::MeshBlock build_mesh(const SimulationConfig& cfg);
 }

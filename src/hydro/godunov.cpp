@@ -1,3 +1,7 @@
+/**
+ * @file godunov.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "godunov.h"
 #include "wave_timestep.h"
 #include "riemann/riemann.h"
@@ -13,8 +17,9 @@ namespace hydro
         const hd_core::MeshBlock& mesh,
         const RiemannSolver& solver,
         std::vector<hd_core::Conserved>& rhs,
-        const Reconstructor& reconstructor = Reconstructor::PCM,
-        const Limiter& limiter = Limiter::none
+        const Reconstructor& reconstructor,
+        const Limiter& limiter,
+        const double limiter_beta
     )
     {
         // 每次 RHS 都重新统计，避免沿用上一个时间步的限制。
@@ -58,10 +63,9 @@ namespace hydro
 
                 const auto gamma_L = cellLeft.gamma;
                 const auto gamma_R = cellRight.gamma;
-
-                const auto WL = cellLeft.U.to_Primtivies(gamma_L);
-                const auto WR = cellRight.U.to_Primtivies(gamma_R);
-
+;
+                
+                auto [WL,WR] = Reconstruct(reconstructor,mesh,n,right_index,limiter,limiter_beta);
                 // 哨兵值：求解器若忘记写入当前面波速，就报错而不沿用旧值。
                 wave_timestep.face_speed = -1.0;
                 field.faces[i] = solver.flux(WL, WR, n, gamma_L, gamma_R);

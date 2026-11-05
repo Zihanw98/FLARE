@@ -1,7 +1,12 @@
+/**
+ * @file wave_timestep.h
+ * @brief Hydrodynamic spatial operators.
+ */
 #pragma once
 
 namespace hydro
 {
+    /** @brief Shared wave-speed measurements for the most recent serial RHS evaluation. */
     struct WaveTimestep
     {
         // 最近一次 flux() 求解的 max(|S_left|, |S_right|)，每个面覆盖一次。

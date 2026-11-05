@@ -1,3 +1,7 @@
+/**
+ * @file gravity.cpp
+ * @brief Physical source terms.
+ */
 #pragma once
 #include "source.h"
 #include "core/core.h"

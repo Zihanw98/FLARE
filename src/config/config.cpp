@@ -1,3 +1,7 @@
+/**
+ * @file config.cpp
+ * @brief Simulation configuration.
+ */
 #include "config.h"
 #include "utils.h"
 #include "hydro/limiter/limiter.h"
@@ -35,11 +39,22 @@ namespace config
             throw std::runtime_error("Unexpected trailing text: " + text);
         return value;
     }
+    /**
+     * @brief Return a string parameter without interpreting quotes or escapes.
+     * @param[in] text String value; any internal or surrounding spaces are preserved here.
+     * @return A copy of text.
+     */
     template<>
     std::string parse_value<std::string>(const std::string& text)
     {
         return text; // Keep internal spaces; no quoting/escaping syntax.
     }
+    /**
+     * @brief Parse a boolean parameter after trimming whitespace.
+     * @param[in] text Case-insensitive true/false or numeric 1/0.
+     * @return The corresponding boolean value.
+     * @throws std::runtime_error If the value is not recognized.
+     */
     template<>
     bool parse_value<bool>(const std::string& text)
     {
@@ -110,6 +125,9 @@ namespace config
             }},
             {"time_integrator", [&cfg](const std::string& v) {
                 cfg.time_integrator = v;
+            }},
+            {"reconstructor",[&cfg](const std::string& v){
+                cfg.reconstructor = v;
             }},
             {"limiter", [&cfg](const std::string& v) {
                 cfg.limiter = v;

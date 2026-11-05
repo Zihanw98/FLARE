@@ -1,15 +1,9 @@
 /**
  * @file mesh.h
- * @brief 定义带 ghost 单元的结构化网格块及其坐标、索引访问接口。
- * @details
- * 网格维度由编译期常量 hd_core::NDIM 决定。每个方向分别保存一维面坐标，
- * 可以表示均匀或非均匀的张量积网格。
- *
- * 本文件使用三种索引：
- * - 存储坐标：包含 ghost 偏移，每个分量位于 [0, ntotal(d))。
- * - 活跃区局部坐标：活跃区从 0 开始，不包含 ghost 偏移。
- * - flat 下标：cells 中的一维存储位置，方向 0 变化最快，包含 ghost 单元。
- *
+ * @brief Structured mesh geometry and cell indexing, including ghost regions.
+ * @note Storage coordinates include ghost offsets; active coordinates start at zero.
+ *       Flat offsets address the complete cells array, with axis 0 varying fastest.
+ *       Independent face coordinates on each axis define a tensor-product grid.
  * @see hd_core::MeshBlock
  */
 #pragma once
@@ -20,227 +14,254 @@
 #include <cstddef>
 #include <initializer_list>
 #include <vector>
-/// @brief 核心物理状态量与网格数据类型。
+/// @brief Physical state and structured-mesh data types.
 namespace hd_core
 {
     /**
-     * @brief 保存网格几何、边界类型和全部单元状态。
-     * @details 先设置 nactive、nghost 和各方向 face，再调用 allocate()。
-     *          面坐标独立于单元状态；填充 ghost 状态不会自动改变面坐标。
-     * @note 修改已分配网格的尺寸或几何后，需要重新初始化或守恒重映射物理数据。
+     * @brief Store mesh geometry, boundary conditions, and all cell states.
+     * @pre Set nactive, nghost, and faces before calling allocate().
+     * @note Filling ghost states does not update face coordinates. Changing an existing
+     *       grid requires reinitialization or conservative remapping of physical data.
      */
     struct MeshBlock
     {
-        Index nactive{}; ///< 各方向的活跃单元数，必须大于 0。
-        Index nghost{};  ///< 各方向每一侧的 ghost 层数，必须非负。
+        Index nactive{}; ///< Positive active-cell counts on each axis.
+        Index nghost{};  ///< Nonnegative ghost-cell counts per side on each axis.
         
         /**
-         * @brief 返回某方向的总单元数，包括两侧 ghost。
-         * @param[in] d 方向编号，满足 0 <= d < NDIM。
-         * @return nactive[d] + 2 * nghost[d]。
-         * @throws std::out_of_range 方向编号越界。
-         * @throws std::invalid_argument 活跃单元数或 ghost 层数非法。
-         * @throws std::overflow_error 总单元数超出 int 范围。
+         * @brief Return the cell count on one axis, including both ghost regions.
+         * @param[in] d Axis index in [0, NDIM).
+         * @return nactive[d] + 2 * nghost[d].
+         * @throws std::out_of_range If the axis is invalid.
+         * @throws std::invalid_argument If nactive is nonpositive or nghost is negative.
+         * @throws std::overflow_error If the total exceeds the int range.
          */
         int ntotal(int d) const;
 
         /**
-         * @brief 返回各方向的总单元数，包括两侧 ghost。
-         * @return 各分量分别为 ntotal(d) 的 Index。
-         * @see ntotal(int) const
+         * @brief Return the cell counts on all axes, including ghost regions.
+         * @return An Index whose components are ntotal(d).
+         * @note Propagates the per-axis validation errors from ntotal(int).
          */
         Index ntotal() const;
         
         /**
-         * @brief 各方向的面坐标，包含 ghost 区域的面。
-         * @details face[d].size() 必须等于 ntotal(d) + 1。
-         *          活跃区域的面下标为 nghost[d] 到 nghost[d] + nactive[d]，含两端。
-         *          所有面坐标必须有限并严格递增。
+         * @brief Face coordinates on each axis, including both ghost regions.
+         * @note face[d] has ntotal(d) + 1 finite, strictly increasing entries.
+         *       Active faces run from nghost[d] through nghost[d] + nactive[d], inclusive.
          */
         std::array<std::vector<double>,NDIM> face;
-        std::array<boundary::BoundaryCondition,NDIM> bc_upper; ///< 各方向上边界的边界条件类型。
-        std::array<boundary::BoundaryCondition,NDIM> bc_lower; ///< 各方向下边界的边界条件类型。
+        std::array<boundary::BoundaryCondition,NDIM> bc_upper; ///< Upper boundary condition on each axis.
+        std::array<boundary::BoundaryCondition,NDIM> bc_lower; ///< Lower boundary condition on each axis.
 
         /**
-         * @brief 为一个方向生成均匀面坐标，并向两侧延伸 ghost 面。
-         * @param[in] d 方向编号，满足 0 <= d < NDIM。
-         * @param[in] lower 活跃区域的下边界坐标。
-         * @param[in] upper 活跃区域的上边界坐标，必须大于 lower。
-         * @pre 已设置该方向的 nactive 和 nghost。
-         * @note 单元宽度为 (upper - lower) / nactive[d]，ghost 使用相同宽度。
-         *       本函数不分配 cells，不填充物理状态；失败时保留原有面坐标。
-         * @throws std::invalid_argument 边界非有限或非递增，或生成的面间距不是有限正值。
-         * @see ntotal(int) const
+         * @brief Create uniformly spaced faces on one axis, including ghost faces.
+         * @param[in] d Axis index in [0, NDIM).
+         * @param[in] lower Finite lower boundary of the active domain.
+         * @param[in] upper Finite upper boundary, greater than lower.
+         * @pre nactive and nghost have been set for this axis.
+         * @post On success, face[d] contains ntotal(d) + 1 finite, increasing coordinates.
+         * @throws std::invalid_argument If bounds or generated spacings are invalid.
+         * @note Preserves previous faces on failure; does not allocate cells or initialize physical states. Axis/count errors from ntotal() propagate.
          */
         void set_uniform_faces(int d, double lower, double upper);
 
         /**
-         * @brief 返回单元沿指定方向的宽度。
-         * @param[in] direction 方向编号，满足 0 <= direction < NDIM。
-         * @param[in] axis_index 该方向的存储下标，包含 ghost 偏移。
-         * @return face[direction][axis_index + 1] - face[direction][axis_index]。
-         * @note axis_index 是单个方向的下标，不是 cells 的 flat 下标。
-         * @throws std::out_of_range 方向或该方向的单元下标越界。
-         * @throws std::invalid_argument 网格尺寸、面数量或面间距非法。
+         * @brief Return the cell width along a selected axis.
+         * @param[in] direction Axis index in [0, NDIM).
+         * @param[in] axis_index Cell storage index along this axis, including the ghost offset.
+         * @return The positive distance between adjacent faces.
+         * @throws std::out_of_range If the axis or selected cell index is invalid.
+         * @throws std::invalid_argument If mesh counts, face count, or selected face spacing are invalid.
+         * @note Uses storage coordinates, including ghost cells; the index is not a flattened cell offset.
          */
         double cell_width(int direction, int axis_index) const;
 
         /**
-         * @brief 返回单元沿指定方向的中心坐标。
-         * @param[in] direction 方向编号，满足 0 <= direction < NDIM。
-         * @param[in] axis_index 该方向的存储下标，包含 ghost 偏移。
-         * @return 两侧面坐标的中点。
-         * @note ghost 使用相同公式，其中心可以位于活跃区域以外。
-         *       这里计算坐标中点，不是一般曲线网格的体积质心。
-         * @see cell_width(int, int) const
+         * @brief Return the cell center along a selected axis.
+         * @param[in] direction Axis index in [0, NDIM).
+         * @param[in] axis_index Cell storage index along this axis, including the ghost offset.
+         * @return The coordinate midpoint of the two adjacent faces.
+         * @throws std::out_of_range If the axis or selected cell index is invalid.
+         * @throws std::invalid_argument If mesh counts, face count, or selected face spacing are invalid.
+         * @note Uses storage coordinates, including ghost cells; the index is not a flattened cell offset.
          */
         double cell_center(int direction, int axis_index) const;
 
         /**
-         * @brief 使用多维存储坐标取得单元宽度。
-         * @param[in] direction 要查询的方向。
-         * @param[in] storage_index 包含 ghost 偏移的多维坐标，仅使用所选方向的分量。
-         * @return cell_width(direction, storage_index[direction])。
-         * @see cell_width(int, int) const
+         * @brief Return the cell width along a selected axis.
+         * @param[in] direction Axis index in [0, NDIM).
+         * @param[in] storage_index Multidimensional storage coordinates; only the selected axis component is used.
+         * @return The positive distance between adjacent faces.
+         * @throws std::out_of_range If the axis or selected cell index is invalid.
+         * @throws std::invalid_argument If mesh counts, face count, or selected face spacing are invalid.
+         * @note Uses storage coordinates, including ghost cells; the index is not a flattened cell offset.
          */
         double cell_width(int direction, const Index& storage_index) const;
 
         /**
-         * @brief 使用多维存储坐标取得单元中心。
-         * @param[in] direction 要查询的方向。
-         * @param[in] storage_index 包含 ghost 偏移的多维坐标，仅使用所选方向的分量。
-         * @return cell_center(direction, storage_index[direction])。
-         * @see cell_center(int, int) const
+         * @brief Return the cell center along a selected axis.
+         * @param[in] direction Axis index in [0, NDIM).
+         * @param[in] storage_index Multidimensional storage coordinates; only the selected axis component is used.
+         * @return The coordinate midpoint of the two adjacent faces.
+         * @throws std::out_of_range If the axis or selected cell index is invalid.
+         * @throws std::invalid_argument If mesh counts, face count, or selected face spacing are invalid.
+         * @note Uses storage coordinates, including ghost cells; the index is not a flattened cell offset.
          */
         double cell_center(int direction, const Index& storage_index) const;
 
         /**
-         * @brief 返回指定方向活跃区域的长度。
-         * @param[in] d 方向编号，满足 0 <= d < NDIM。
-         * @return 活跃区域两端面的坐标差，不包含 ghost 宽度。
-         * @throws std::invalid_argument 该方向的面数量、面坐标或区域长度非法。
-         * @see ntotal(int) const
+         * @brief Measure the active domain length on one axis.
+         * @param[in] d Axis index in [0, NDIM).
+         * @return The upper active face coordinate minus the lower active face coordinate.
+         * @throws std::invalid_argument If faces or the active length are invalid.
+         * @note Validates every face on this axis, including ghost faces; ntotal() errors propagate.
          */
         double active_length(int d) const;
 
         /**
-         * @brief 检查所有方向的尺寸及面坐标，包括 ghost 区域。
-         * @throws std::invalid_argument 网格尺寸、面数量或面坐标不合法。
-         * @see active_length(int) const
+         * @brief Validate dimensions and all face coordinates on every axis.
+         * @throws std::invalid_argument If counts, face coordinates, or active lengths are invalid.
+         * @note Also propagates overflow errors from ntotal(); does not inspect cell states.
          */
         void validate_geometry() const;
 
         /**
-         * @brief 使用各单元的 gamma 校验所有活跃单元的守恒状态。
-         * @pre cells 已按当前网格尺寸分配。
-         * @note 跳过 ghost，不修改状态；几何检查仍由 validate_geometry() 完成。
-         * @throws std::invalid_argument 网格尺寸或活跃单元状态不合法。
-         * @throws std::logic_error cells 数量与网格尺寸不匹配。
-         * @see Conserved::validate(double) const
+         * @brief Validate every active conserved state using its cell adiabatic index.
+         * @pre Cell storage matches the current mesh dimensions.
+         * @throws std::invalid_argument If dimensions or an active physical state are invalid.
+         * @throws std::logic_error If storage does not match the mesh dimensions.
+         * @note Skips ghost states and leaves all data unchanged; geometry is checked separately by validate_geometry().
          */
         void validate_active() const;
 
         /**
-         * @brief 验证几何并将 cells 调整到包含 ghost 的总单元数。
-         * @pre 已设置各方向的 nactive、nghost 和 face。
-         * @note 本函数不填充用户物理初态；resize 保留已有元素，新元素使用 Cell 默认值。
-         * @throws std::length_error 总单元数超过 cells 的容量限制。
-         * @see validate_geometry()
+         * @brief Validate geometry and resize cell storage to include all ghost cells.
+         * @pre nactive, nghost, and faces are initialized on every axis.
+         * @throws std::length_error If the cell count exceeds the container capacity.
+         * @note Preserves existing elements when resizing and default-constructs new cells. Does not fill initial states; geometry validation errors propagate.
          */
         void allocate();
 
-        std::vector<Cell> cells; ///< 全部存储单元，包含 ghost；方向 0 的下标变化最快。
+        std::vector<Cell> cells; ///< All cells including ghosts, with axis 0 varying fastest.
 
         /**
-         * @brief 按存储坐标取得可修改的单元引用。
-         * @param[in] coordinates 恰好 NDIM 个坐标分量，包含 ghost 偏移。
-         * @return 对应单元的引用。
-         * @see flat_index(std::initializer_list<int>, bool) const
+         * @brief Access a cell using storage coordinates.
+         * @param[in] coordinates Exactly NDIM storage coordinates, including ghost offsets.
+         * @return A mutable reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note An initializer list must have exactly NDIM entries; otherwise std::invalid_argument is thrown.
          */
         Cell& at(std::initializer_list<int> coordinates);
 
         /**
-         * @brief 按存储坐标取得只读的单元引用。
-         * @param[in] coordinates 恰好 NDIM 个坐标分量，包含 ghost 偏移。
-         * @return 对应单元的只读引用。
-         * @see flat_index(std::initializer_list<int>, bool) const
+         * @brief Read a cell using storage coordinates.
+         * @param[in] coordinates Exactly NDIM storage coordinates, including ghost offsets.
+         * @return A read-only reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note An initializer list must have exactly NDIM entries; otherwise std::invalid_argument is thrown.
          */
         const Cell& at(std::initializer_list<int> coordinates) const;
 
         /**
-         * @brief 按活跃区局部坐标取得可修改的单元引用。
-         * @param[in] coordinates 恰好 NDIM 个分量，每个分量满足 0 <= coordinates[d] < nactive[d]。
-         * @return 对应活跃单元的引用，内部自动添加 ghost 偏移。
-         * @note 此接口不能选中 ghost 单元。
-         * @see flat_index(std::initializer_list<int>, bool) const
+         * @brief Access an active cell using local active coordinates.
+         * @param[in] coordinates Exactly NDIM coordinates in [0, nactive[d]); ghost offsets are added internally.
+         * @return A mutable reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note An initializer list must have exactly NDIM entries; otherwise std::invalid_argument is thrown.
          */
         Cell& at_active(std::initializer_list<int> coordinates);
 
         /**
-         * @brief 按活跃区局部坐标取得只读的单元引用。
-         * @param[in] coordinates 恰好 NDIM 个合法的活跃区坐标分量。
-         * @return 对应活跃单元的只读引用，内部自动添加 ghost 偏移。
-         * @see flat_index(std::initializer_list<int>, bool) const
+         * @brief Read an active cell using local active coordinates.
+         * @param[in] coordinates Exactly NDIM coordinates in [0, nactive[d]); ghost offsets are added internally.
+         * @return A read-only reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note An initializer list must have exactly NDIM entries; otherwise std::invalid_argument is thrown.
          */
         const Cell& at_active(std::initializer_list<int> coordinates) const;
 
         /**
-         * @brief 将 cells 的 flat 下标转换为包含 ghost 偏移的多维存储坐标。
-         * @param[in] flat cells 的存储下标，满足 flat < cells.size()。
-         * @return 对应的 Index，方向 0 变化最快。
-         * @throws std::out_of_range flat 超出存储范围。
-         * @throws std::logic_error cells 大小与当前网格尺寸不一致。
+         * @brief Convert a flattened cell offset to storage coordinates.
+         * @param[in] flat Offset in cells, including ghost cells.
+         * @return Storage coordinates with axis 0 varying fastest.
+         * @throws std::out_of_range If flat is outside cells.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @throws std::length_error If dimensions exceed the container capacity.
          */
         Index coordinates(std::size_t flat) const;
 
         /**
-         * @brief 将 cells 的 flat 下标转换为以活跃区为原点的多维坐标。
-         * @param[in] flat 包含 ghost 单元的存储下标，不是活跃区单独展平后的下标。
-         * @return coordinates(flat) 的每个分量减去对应的 nghost。
-         * @note 输入可以选中 ghost，此时返回值至少一个分量不在 [0, nactive[d]) 内。
-         * @see coordinates(std::size_t) const
+         * @brief Convert a flattened cell offset to coordinates relative to the active origin.
+         * @param[in] flat Offset in the full cells array, including ghost cells.
+         * @return coordinates(flat) with nghost subtracted on every axis.
+         * @note Ghost offsets are accepted and return coordinates outside the active range; errors from coordinates() propagate.
          */
         Index coordinates_active(std::size_t flat) const;
 
         /**
-         * @brief 按 Index 存储坐标取得可修改的单元引用。
-         * @param[in] coordinates 包含 ghost 偏移的多维存储坐标。
-         * @return 对应单元的引用。
-         * @see flat_index(const Index&, bool) const
+         * @brief Access a cell using storage coordinates.
+         * @param[in] coordinates Exactly NDIM storage coordinates, including ghost offsets.
+         * @return A mutable reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note The coordinate tuple is checked by flat_index().
          */
         Cell& at(const Index& coordinates);
 
         /**
-         * @brief 按 Index 存储坐标取得只读的单元引用。
-         * @param[in] coordinates 包含 ghost 偏移的多维存储坐标。
-         * @return 对应单元的只读引用。
-         * @see flat_index(const Index&, bool) const
+         * @brief Read a cell using storage coordinates.
+         * @param[in] coordinates Exactly NDIM storage coordinates, including ghost offsets.
+         * @return A read-only reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note The coordinate tuple is checked by flat_index().
          */
         const Cell& at(const Index& coordinates) const;
 
         /**
-         * @brief 按 Index 活跃区坐标取得可修改的单元引用。
-         * @param[in] coordinates 活跃区局部坐标，内部自动添加 ghost 偏移。
-         * @return 对应活跃单元的引用。
-         * @see flat_index(const Index&, bool) const
+         * @brief Access an active cell using local active coordinates.
+         * @param[in] coordinates Exactly NDIM coordinates in [0, nactive[d]); ghost offsets are added internally.
+         * @return A mutable reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note The coordinate tuple is checked by flat_index().
          */
         Cell& at_active(const Index& coordinates);
 
         /**
-         * @brief 按 Index 活跃区坐标取得只读的单元引用。
-         * @param[in] coordinates 活跃区局部坐标，内部自动添加 ghost 偏移。
-         * @return 对应活跃单元的只读引用。
-         * @see flat_index(const Index&, bool) const
+         * @brief Read an active cell using local active coordinates.
+         * @param[in] coordinates Exactly NDIM coordinates in [0, nactive[d]); ghost offsets are added internally.
+         * @return A read-only reference to the selected cell.
+         * @pre Cell storage matches the mesh dimensions.
+         * @throws std::out_of_range If any coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @note The coordinate tuple is checked by flat_index().
          */
         const Cell& at_active(const Index& coordinates) const;
 
         /**
-         * @brief 将坐标列表转换为 cells 的存储下标。
-         * @param[in] coordinates 恰好 NDIM 个坐标分量。
-         * @param[in] active 为 true 时输入是活跃区局部坐标；否则输入是存储坐标。
-         * @return 包含 ghost 的 cells 存储下标，active=true 时内部自动添加 ghost 偏移。
-         * @throws std::invalid_argument 坐标分量个数不等于 NDIM。
-         * @see flat_index(const Index&, bool) const
+         * @brief Flatten cell coordinates with axis 0 varying fastest.
+         * @param[in] coordinates Storage coordinates, or local active coordinates when active is true.
+         * @param[in] active Whether to check active bounds and add ghost offsets; false uses storage bounds.
+         * @return Offset in the full cells array, including ghost cells.
+         * @pre Cell storage matches the current dimensions.
+         * @throws std::out_of_range If a coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @throws std::length_error If dimensions exceed container capacity.
+         * @throws std::invalid_argument If the coordinate list does not contain exactly NDIM entries.
+         * @note Count validation errors from ntotal() also propagate.
          */
         std::size_t flat_index(
             std::initializer_list<int> coordinates,
@@ -248,15 +269,15 @@ namespace hd_core
         ) const;
 
         /**
-         * @brief 将 Index 转换为 cells 的存储下标，方向 0 变化最快。
-         * @param[in] coordinates 存储坐标或活跃区局部坐标，由 active 决定。
-         * @param[in] active 为 true 时检查活跃区范围并添加 ghost 偏移，默认 false。
-         * @return 始终返回完整 cells 数组中的下标。
-         * @pre cells 已按当前网格尺寸分配。
-         * @throws std::out_of_range 输入坐标超出所选区域的范围。
-         * @throws std::logic_error cells 大小与当前网格尺寸不一致。
-         * @throws std::length_error 网格大小超过 cells 的容量限制。
-         * @see ntotal(int) const
+         * @brief Flatten cell coordinates with axis 0 varying fastest.
+         * @param[in] coordinates Storage coordinates, or local active coordinates when active is true.
+         * @param[in] active Whether to check active bounds and add ghost offsets; false uses storage bounds.
+         * @return Offset in the full cells array, including ghost cells.
+         * @pre Cell storage matches the current dimensions.
+         * @throws std::out_of_range If a coordinate is outside the selected region.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @throws std::length_error If dimensions exceed container capacity.
+         * @note Count validation errors from ntotal() also propagate.
          */
         std::size_t flat_index(
             const Index& coordinates,

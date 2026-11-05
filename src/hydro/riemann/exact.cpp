@@ -1,3 +1,7 @@
+/**
+ * @file exact.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "exact.h"
 #include "hydro/wave_timestep.h"
 #include "core.h"
@@ -10,12 +14,23 @@ namespace hydro
 {
     namespace
     {
+        /** @brief Left or right side of a Riemann problem. */
         enum class Side
         {
-            Left,
-            Right
+            Left, ///< Left side of the interface.
+            Right ///< Right side of the interface.
         };
         // 非真空气体一侧的最外层波：激波速度或稀疏波头速度。
+        /**
+         * @brief Compute the outer shock or rarefaction-head speed on one gas side.
+         * @param[in] W Non-vacuum primitive state on this side.
+         * @param[in] gamma Adiabatic index greater than one.
+         * @param[in] p_star Nonnegative star-region pressure.
+         * @param[in] side Left or right side of the Riemann problem.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Signed speed of the outermost wave on this side.
+         * @pre W has positive density and pressure and all inputs are physically valid.
+         */
         double outer_wave_speed(const hd_core::Primitives& W, double gamma,
                                 double p_star, Side side, int direction)
         {
@@ -28,10 +43,67 @@ namespace hydro
             return W[hd_core::VEL(direction)]
                 + (side == Side::Left ? -1.0 : 1.0) * c * factor;
         }
+        /**
+         * @brief Evaluate one side of the exact Riemann pressure equation.
+         * @param[in] p_star Trial star pressure, nonnegative.
+         * @param[in] rho_K Positive density of the original gas state.
+         * @param[in] p_K Positive pressure of the original gas state.
+         * @param[in] gamma_K Adiabatic index greater than one.
+         * @return Velocity jump contribution from the shock or rarefaction branch.
+         * @pre Inputs describe a finite non-vacuum ideal-gas state.
+         */
         double wave_condition(double p_star, double rho_K, double p_K, double gamma_K);
+        /**
+         * @brief Solve for star pressure and contact velocity by bracketing and bisection.
+         * @param[in] W_L Original left non-vacuum primitive state.
+         * @param[in] W_R Original right non-vacuum primitive state.
+         * @param[in] gamma_L Left adiabatic index greater than one.
+         * @param[in] gamma_R Right adiabatic index greater than one.
+         * @param[in] tolerance Finite positive relative pressure-bracket tolerance.
+         * @param[in] max_iterations Positive maximum number of bisection iterations.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Optional pair {star pressure, normal contact velocity}; nullopt when the two gas states generate vacuum.
+         * @pre Both input states are valid gas states with positive density and pressure.
+         * @throws std::runtime_error If pressure bracketing overflows or bisection does not converge.
+         */
         std::optional<std::pair<double, double>> solve_star(const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,double gamma_L, double gamma_R,double tolerance,int max_iterations,int direction);
+        /**
+         * @brief Sample a rarefaction wave at the stationary interface.
+         * @param[in] K Original non-vacuum primitive state on the chosen side.
+         * @param[in] gamma_K Adiabatic index of K, greater than one.
+         * @param[in] v_nstar Normal velocity in the star region or at the vacuum edge.
+         * @param[in] pre_star Star pressure; zero is allowed for expansion into vacuum.
+         * @param[in] side Side of the Riemann problem being sampled.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Primitive state at similarity coordinate x/t = 0; tangential velocities are inherited from K.
+         * @pre Inputs satisfy the selected wave branch; K has positive density and pressure.
+         */
         hd_core::Primitives sample_rarefraction(const hd_core::Primitives& K, double gamma_K, double v_nstar, double pre_star,Side side, int direction);
+        /**
+         * @brief Sample a shock wave at the stationary interface.
+         * @param[in] K Original non-vacuum primitive state on the chosen side.
+         * @param[in] gamma_K Adiabatic index of K, greater than one.
+         * @param[in] v_nstar Normal velocity in the star region or at the vacuum edge.
+         * @param[in] pre_star Star pressure greater than the original gas pressure.
+         * @param[in] side Side of the Riemann problem being sampled.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Primitive state at similarity coordinate x/t = 0; tangential velocities are inherited from K.
+         * @pre Inputs satisfy the selected wave branch; K has positive density and pressure.
+         */
         hd_core::Primitives sample_shock(const hd_core::Primitives& K, double gamma_K, double v_nstar, double pre_star, Side side, int direction);
+        /**
+         * @brief Choose the contact side and sample the exact gas interface state.
+         * @param[in] L Original left non-vacuum primitive state.
+         * @param[in] R Original right non-vacuum primitive state.
+         * @param[in] gamma_L Left adiabatic index greater than one.
+         * @param[in] gamma_R Right adiabatic index greater than one.
+         * @param[in] v_nstar Normal contact velocity.
+         * @param[in] pre_star Positive converged star pressure.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Sampled primitive state and the adiabatic index of its originating side.
+         * @pre Both states and the solved star quantities are valid.
+         * @note A strictly positive contact velocity selects the left side; zero selects the right.
+         */
         InterfaceState sample_interface(const hd_core::Primitives& L, const hd_core::Primitives& R, double gamma_L, double gamma_R, double v_nstar, double pre_star, int direction);
         double wave_condition(double p_star, double rho_K, double p_K, double gamma_K)
         {
@@ -328,6 +400,16 @@ namespace hydro
             return std::pair<double, double>{pre_star, v_nstar};
 
         }
+        /**
+         * @brief Sample a vacuum-producing Riemann solution at the stationary interface.
+         * @param[in] W_L Original left gas state with positive density and pressure.
+         * @param[in] W_R Original right gas state with positive density and pressure.
+         * @param[in] gamma_L Left adiabatic index greater than one.
+         * @param[in] gamma_R Right adiabatic index greater than one.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Vacuum or a sampled rarefaction state, together with its adiabatic index.
+         * @pre The two valid gas states satisfy the vacuum-generation criterion.
+         */
         InterfaceState sample_vacuum(const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,double gamma_L, double gamma_R,int direction)
         {
             //deal with vacuum generated in Riemann Problem
@@ -354,6 +436,15 @@ namespace hydro
             //Though there is no star region. In this case, the interface between the tail of rarefraction and vacuum is equivalent to star region, because they are both the boundary of rarefraction(tail).
             //So S_V is v_nstar because it's the speed of boundary, and p_star =0.0, because it can make c_sK_star = 0, the v_rare_tail = S_V....everything fine!
         }
+        /**
+         * @brief Sample expansion of a gas state into an initially empty neighbor.
+         * @param[in] gas Non-vacuum primitive gas state.
+         * @param[in] gamma Gas adiabatic index greater than one.
+         * @param[in] gas_side Side initially occupied by gas.
+         * @param[in] direction Normal axis in [0, hd_core::NDIM).
+         * @return Vacuum or a rarefaction state at x/t = 0, with the gas adiabatic index.
+         * @pre gas has finite positive density and pressure.
+         */
         InterfaceState gas_to_vacuum(const hd_core::Primitives& gas,double gamma, Side gas_side, int direction)
         {
             //To deal with real vacuum cell

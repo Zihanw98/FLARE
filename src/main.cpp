@@ -12,7 +12,12 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
-
+/**
+ * @brief The main entry of this code
+ * @details What we do in this main code? This gives an outline of how the code works. 
+ * First of all, we read the parameter file by the -par argument in argv
+ * If no argv then 
+ */
 int main(int argc, char* argv[])
 {
     try
@@ -66,7 +71,7 @@ int main(int argc, char* argv[])
         
         double t_current = 0;
         std::size_t step_current = 0;
-        // 逐方向填充边界；横向 ghost 随后续方向的填充形成完整角区。
+
         boundary::FillBoundary(mesh,t_current,hooks);
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         auto source_list = hd_source::make_sources(cfg,hooks);

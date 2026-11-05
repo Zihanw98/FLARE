@@ -1,3 +1,7 @@
+/**
+ * @file timestep_CFL.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "timestep_CFL.h"
 #include "wave_timestep.h"
 #include "core.h"

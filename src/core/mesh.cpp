@@ -1,3 +1,7 @@
+/**
+ * @file mesh.cpp
+ * @brief Physical states and mesh storage.
+ */
 #include "mesh.h"
 #include <algorithm>
 #include <cmath>
@@ -8,6 +12,13 @@ namespace hd_core
 {
 namespace
 {
+    /**
+     * @brief Validate the face coordinates of one mesh axis.
+     * @param[in] faces All face coordinates, including ghost-region faces.
+     * @param[in] count Expected number of cells along the axis.
+     * @pre count is positive.
+     * @throws std::invalid_argument If the face count is not count + 1, a coordinate is non-finite, or spacing is not finite and positive.
+     */
     void validate_axis(const std::vector<double>& faces, int count)
     {
         if (faces.size() != static_cast<std::size_t>(count) + 1)

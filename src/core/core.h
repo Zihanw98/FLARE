@@ -1,3 +1,7 @@
+/**
+ * @file core.h
+ * @brief Physical states and mesh storage.
+ */
 #pragma once
 #include "user_config.h"
 #include "hdmath.h"
@@ -22,6 +26,12 @@ namespace hd_core
     //Primitives component index
     inline constexpr int RHO = 0;//both primitives and conservatives
     inline constexpr int PRE = NDIM + 1; 
+    /**
+     * @brief Return the storage index of a velocity component.
+     * @param[in] d Zero-based component index in [0, NDIM).
+     * @return The array offset 1 + d.
+     * @throws std::out_of_range If the component index is outside its valid range.
+     */
     constexpr int VEL(int d)
     {
         if(d<0 || d>=NDIM)
@@ -32,6 +42,12 @@ namespace hd_core
     }
     //Conservatives component index
     inline constexpr int ENERGY = PRE;
+    /**
+     * @brief Return the storage index of a momentum-density component.
+     * @param[in] d Zero-based component index in [0, NDIM).
+     * @return The array offset 1 + d.
+     * @throws std::out_of_range If the component index is outside its valid range.
+     */
     constexpr int MOMDEN(int d)
     {
         if(d<0 || d>=NDIM)
@@ -45,6 +61,12 @@ namespace hd_core
     inline constexpr int COMP_BEGIN = NHYDRO;
     inline constexpr int USER_BEGIN = COMP_BEGIN + NCOMP;
 
+    /**
+     * @brief Return the storage index of a composition component.
+     * @param[in] i Zero-based component index in [0, NCOMP).
+     * @return The array offset COMP_BEGIN + i.
+     * @throws std::out_of_range If the component index is outside its valid range.
+     */
     constexpr int COMP(int i)
     {
         if(i<0 || i>=NCOMP)
@@ -53,6 +75,12 @@ namespace hd_core
         }
         return COMP_BEGIN + i;
     }
+    /**
+     * @brief Return the storage index of a user-defined conserved component.
+     * @param[in] i Zero-based component index in [0, NUSER).
+     * @return The array offset USER_BEGIN + i.
+     * @throws std::out_of_range If the component index is outside its valid range.
+     */
     constexpr int CONUSR(int i)
     {
         if(i<0 || i>=NUSER)
@@ -65,31 +93,76 @@ namespace hd_core
     struct Conserved;
     
 
+    /** @brief Primitive ideal-gas variables with compile-time component storage. */
     struct Primitives
     {
         std::array<double,NVAR> data{};
+        /**
+         * @brief Access a state component without bounds checking.
+         * @param[in] i Component index in [0, NVAR).
+         * @return A mutable reference to the stored component.
+         * @pre The index is valid; an out-of-range access is undefined behavior.
+         */
         double& operator[](int i)
         {
             return data[i];
         }
+        /**
+         * @brief Access a state component without bounds checking.
+         * @param[in] i Component index in [0, NVAR).
+         * @return A read-only reference to the stored component.
+         * @pre The index is valid; an out-of-range access is undefined behavior.
+         */
         const double& operator[](int i) const
         {
             return data[i];
         }
+        /**
+         * @brief Convert primitive hydrodynamic components to conserved variables.
+         * @param[in] gamma Finite ideal-gas adiabatic index greater than one.
+         * @return Density, momentum densities, and total energy density; extra components remain zero.
+         * @pre The input is a valid primitive state for gamma.
+         * @note Zero density returns an all-zero state before validation. Only hydrodynamic components are converted.
+         * @throws std::invalid_argument If the resulting non-vacuum state fails validation.
+         */
         Conserved to_Conserved(double gamma) const;
+        /**
+         * @brief Copy the stored primitive velocity components into a vector.
+         * @return An NDIM-component velocity vector.
+         * @note Does not validate density, pressure, or velocity values.
+         */
         hdmath::Vector Velocity() const;
-        // Constant-gamma ideal gas; vacuum states are not supported.
+        // Ideal gas with a finite gamma > 1; zero-density vacuum is supported.
+        /**
+         * @brief Validate primitive variables for the ideal-gas equation of state.
+         * @param[in] gamma Finite adiabatic index greater than one.
+         * @throws std::invalid_argument If any component is non-finite, density is negative, gas pressure is not positive, or vacuum has nonzero pressure or velocity.
+         * @note Zero-density vacuum is allowed when pressure and all velocities are zero; finite extra components are not otherwise constrained.
+         */
         void validate(double gamma) const;
     };
 
 
+    /** @brief Conserved variables, fluxes, or RHS values with componentwise arithmetic. */
     struct Conserved
     {
         std::array<double,NVAR> data{};
+        /**
+         * @brief Access a state component without bounds checking.
+         * @param[in] i Component index in [0, NVAR).
+         * @return A mutable reference to the stored component.
+         * @pre The index is valid; an out-of-range access is undefined behavior.
+         */
         double& operator[](int i)
         {
             return data[i];
         }
+        /**
+         * @brief Access a state component without bounds checking.
+         * @param[in] i Component index in [0, NVAR).
+         * @return A read-only reference to the stored component.
+         * @pre The index is valid; an out-of-range access is undefined behavior.
+         */
         const double& operator[](int i) const
         {
             return data[i];
@@ -97,6 +170,12 @@ namespace hd_core
 
         // Component-wise arithmetic also applies to fluxes and RHS values,
         // which need not satisfy physical-state positivity constraints.
+        /**
+         * @brief Add another object componentwise in place.
+         * @param[in] other Right-hand Conserved operand.
+         * @return A reference to this object.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved& operator+=(const Conserved& other)
         {
             for (int k = 0; k < NVAR; ++k)
@@ -104,6 +183,12 @@ namespace hd_core
             return *this;
         }
 
+        /**
+         * @brief Subtract another object componentwise in place.
+         * @param[in] other Right-hand Conserved operand.
+         * @return A reference to this object.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved& operator-=(const Conserved& other)
         {
             for (int k = 0; k < NVAR; ++k)
@@ -111,6 +196,12 @@ namespace hd_core
             return *this;
         }
 
+        /**
+         * @brief Add two objects componentwise.
+         * @param[in] other Right-hand Conserved operand.
+         * @return A new Conserved containing the result.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved operator+(const Conserved& other) const
         {
             Conserved result = *this;
@@ -118,6 +209,12 @@ namespace hd_core
             return result;
         }
 
+        /**
+         * @brief Subtract another object componentwise.
+         * @param[in] other Right-hand Conserved operand.
+         * @return A new Conserved containing the result.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved operator-(const Conserved& other) const
         {
             Conserved result = *this;
@@ -125,6 +222,11 @@ namespace hd_core
             return result;
         }
 
+        /**
+         * @brief Negate every component.
+         * @return A new Conserved containing the result.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved operator-() const
         {
             Conserved result = *this;
@@ -133,6 +235,12 @@ namespace hd_core
             return result;
         }
 
+        /**
+         * @brief Scale every component in place.
+         * @param[in] scalar Scalar multiplier.
+         * @return A reference to this object.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved& operator*=(double scalar)
         {
             for (double& value : data)
@@ -140,6 +248,12 @@ namespace hd_core
             return *this;
         }
 
+        /**
+         * @brief Return a scaled copy.
+         * @param[in] scalar Scalar multiplier.
+         * @return A new Conserved containing the result.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved operator*(double scalar) const
         {
             Conserved result = *this;
@@ -147,6 +261,13 @@ namespace hd_core
             return result;
         }
 
+        /**
+         * @brief Divide every component in place.
+         * @param[in] scalar Scalar divisor; must not be zero.
+         * @return A reference to this object.
+         * @throws std::domain_error If scalar is zero.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved& operator/=(double scalar)
         {
             if (scalar == 0.0)
@@ -158,6 +279,13 @@ namespace hd_core
             return *this;
         }
 
+        /**
+         * @brief Return a copy divided by a scalar.
+         * @param[in] scalar Scalar divisor; must not be zero.
+         * @return A new Conserved containing the result.
+         * @throws std::domain_error If scalar is zero.
+         * @note Operates on all NVAR components without physical-state validation; also usable for fluxes and RHS values.
+         */
         Conserved operator/(double scalar) const
         {
             Conserved result = *this;
@@ -165,11 +293,37 @@ namespace hd_core
             return result;
         }
 
+        /**
+         * @brief Convert conserved hydrodynamic components to primitive variables.
+         * @param[in] gamma Finite ideal-gas adiabatic index greater than one.
+         * @return Density, velocities, and pressure; extra components remain zero.
+         * @pre The input is a valid conserved state for gamma.
+         * @note Zero density returns an all-zero primitive state before validating momentum or energy. The existing API spelling to_Primtivies is retained.
+         * @throws std::invalid_argument If velocity extraction or validation of the converted gas state fails.
+         */
         Primitives to_Primtivies(double gamma) const;
+        /**
+         * @brief Compute velocity from momentum density and mass density.
+         * @return An NDIM-component velocity vector, or a zero vector for a valid vacuum.
+         * @throws std::invalid_argument If density is non-finite or negative, or a zero-density state has nonzero momentum or energy.
+         * @note This accessor is not a substitute for full Conserved::validate() on non-vacuum input.
+         */
         hdmath::Vector Velocity() const;
+        /**
+         * @brief Validate conserved variables and the derived ideal-gas pressure.
+         * @param[in] gamma Finite adiabatic index greater than one.
+         * @throws std::invalid_argument If components are non-finite, density is negative, derived gas quantities are invalid, or vacuum has nonzero momentum or energy.
+         * @note Positive-density gas requires finite positive internal energy and pressure. Zero-density vacuum is permitted.
+         */
         void validate(double gamma) const;
     };
 
+    /**
+     * @brief Multiply a conserved state by a scalar on the left.
+     * @param[in] scalar Scalar multiplier.
+     * @param[in] state Operand to scale without modifying it.
+     * @return A new object containing the componentwise product.
+     */
     inline Conserved operator*(double scalar, const Conserved& state)
     {
         return state * scalar;

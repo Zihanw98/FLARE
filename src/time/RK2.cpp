@@ -1,3 +1,7 @@
+/**
+ * @file RK2.cpp
+ * @brief Time integration.
+ */
 #include "integrator.h"
 #include "core/mesh.h"
 #include <algorithm>
@@ -9,12 +13,31 @@ namespace hd_time
 {
     namespace
     {
+        /**
+         * @brief Convert a nonnegative inverse timescale to a CFL timestep.
+         * @param[in] cfl Finite positive CFL coefficient.
+         * @param[in] inverse_dt Finite nonnegative inverse timescale.
+         * @return cfl / inverse_dt, or positive infinity for a zero rate.
+         * @pre Inputs have already been validated by the caller.
+         */
         double cfl_step(double cfl, double inverse_dt)
         {
             return inverse_dt == 0.0
                 ? std::numeric_limits<double>::infinity() : cfl / inverse_dt;
         }
 
+        /**
+         * @brief Combine the original state and Euler stage into an SSP-RK2 candidate.
+         * @param[in] mesh Original mesh at the beginning of the timestep.
+         * @param[in] stage First-stage mesh with matching dimensions and storage layout.
+         * @param[in] rhs Second-stage RHS with one entry per stored cell.
+         * @param[in] dt Timestep shared by both stages.
+         * @return Validated mesh copy with active states equal to 0.5 * U0 + 0.5 * (U1 + dt * rhs).
+         * @pre dt is finite and both stages refer to the same physical grid.
+         * @throws std::logic_error If dimensions or storage layouts differ.
+         * @throws std::invalid_argument If a candidate active state fails validation.
+         * @note Retains the original mesh geometry, ghost states, and cell adiabatic indices; inputs are unchanged.
+         */
         hd_core::MeshBlock combine_rk2(
             const hd_core::MeshBlock& mesh,
             const hd_core::MeshBlock& stage,

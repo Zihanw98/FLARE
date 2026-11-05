@@ -1,7 +1,13 @@
+/**
+ * @file intergator.cpp
+ * @brief Time integration.
+ */
 #include "integrator.h"
 #include "core/mesh.h"
 #include "utils.h"
 #include "timestep_CFL.h"
+#include "limiter.h"
+#include "reconstruction.h"
 #include "wave_timestep.h"
 #include <algorithm>
 #include <cmath>
@@ -61,7 +67,9 @@ namespace hd_time
         if (!std::isfinite(cfl) || cfl <= 0.0)
             throw std::invalid_argument("RHS requires a finite positive CFL target");
         std::vector<hd_core::Conserved> rhs;
-        hydro::compute_hydro_rhs(mesh, scheme, solver, rhs);
+        hydro::Limiter limiter = hydro::parse_limiter(cfg.limiter);
+        hydro::Reconstructor reconstructor = hydro::parse_reconstructor(cfg.reconstructor);
+        hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta);
         const double inverse_dt = hydro::wave_timestep.max_inverse_dt;
         if (!std::isfinite(inverse_dt) || inverse_dt < 0.0)
             throw std::invalid_argument("RHS requires a finite nonnegative CFL rate");

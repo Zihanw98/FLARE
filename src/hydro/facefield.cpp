@@ -1,3 +1,7 @@
+/**
+ * @file facefield.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "facefield.h"
 
 #include <algorithm>

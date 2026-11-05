@@ -1,3 +1,7 @@
+/**
+ * @file flux.cpp
+ * @brief Hydrodynamic spatial operators.
+ */
 #include "flux.h"
 
 

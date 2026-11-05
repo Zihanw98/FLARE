@@ -8,12 +8,13 @@
 Dependencies: numpy, matplotlib, Pillow (requirements.txt).
 
 Two references are used: rigid periodic translation of the initial cell-average
-image, and an independently computed first-order upwind solution using the logged
-time steps. Rigid translation is the exact Euler solution when pressure, velocity
+image, and an independently computed scalar advection solution using the logged
+time steps and matching PCM or PLM (minmod/MC) reconstruction.
+Rigid translation is the exact Euler solution when pressure, velocity
 and gamma are uniform. The initialized cell averages define a piecewise-constant
 density image; the reference integrates its exact translated overlaps with cells.
 Checks target transport phase, conservation, constant pressure/velocity, periodic
-ghosts, and agreement with first-order upwinding. Density L1 errors are normalized
+ghosts, and agreement with scalar advection. Density L1 errors are normalized
 by the initial excess density above the background, so the background cannot hide
 shape errors. Diffusion relative to the exact solution is reported, not a failure
 by itself: this checks Godunov with either Euler or SSP-RK2 time integration.
@@ -111,6 +112,26 @@ def upwind_step(image, dt, velocity, spacing):
             + cy*np.roll(image, 1 if velocity[1] >= 0 else -1, axis=0))
 
 
+def scalar_step(image, dt, velocity, spacing, cfg):
+    """One scalar forward-Euler stage; reconstruct each periodic face directly."""
+    if cfg.get("reconstructor", "PCM").upper() != "PLM":
+        return upwind_step(image, dt, velocity, spacing)
+    limiter = cfg.get("limiter", "minmod").lower()
+    require(limiter in ("minmod", "mc"), "PLM reference supports minmod and MC")
+    result = image.copy()
+    for axis, speed, width in zip((1, 0), velocity, spacing):
+        left = image - np.roll(image, 1, axis=axis)
+        right = np.roll(image, -1, axis=axis) - image
+        magnitude = np.minimum(abs(left), abs(right))
+        if limiter == "mc":
+            magnitude = np.minimum(2*magnitude, .5*abs(left+right))
+        slope = np.where(left*right > 0, np.sign(left)*magnitude, 0.)
+        face = (image+.5*slope if speed >= 0 else
+                np.roll(image-.5*slope, -1, axis=axis))
+        result -= dt*speed/width*(face-np.roll(face, 1, axis=axis))
+    return result
+
+
 def modes(image):
     """First Fourier coefficient along each axis; its phase measures translation."""
     ny, nx = image.shape
@@ -122,7 +143,7 @@ def plot_results(frames, initial, cfg, output, animate, fps):
     bounds = tuple(float(cfg[key]) for key in ("x_lower", "x_upper", "y_lower", "y_upper"))
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.9), layout="constrained")
     names = (f"Numerical density ({cfg['time_integrator']})", "Exact Euler translation",
-             f"Upwind + {cfg['time_integrator']} reference")
+             f"Scalar {cfg.get('reconstructor', 'PCM')} + {cfg['time_integrator']} reference")
     images = []
     for axis, name in zip(axes, names):
         image = axis.imshow(initial, origin="lower", extent=bounds, aspect="equal",
@@ -133,7 +154,7 @@ def plot_results(frames, initial, cfg, output, animate, fps):
     title = fig.suptitle("", fontsize=13)
 
     def update(frame):
-        for image, data in zip(images, (frame["rho"], frame["rigid"], frame["upwind"])):
+        for image, data in zip(images, (frame["rho"], frame["rigid"], frame["scalar"])):
             image.set_data(data)
         title.set_text(f"FLARE in pressure equilibrium | step {frame['step']} | t = {frame['time']:.6f}")
 
@@ -154,7 +175,7 @@ def plot_results(frames, initial, cfg, output, animate, fps):
 
 def analyze(cfg, problem_dir, log_path, animate, fps):
     require(cfg["spatial_scheme"] == "godunov" and cfg["time_integrator"] in ("euler", "rk2"),
-            "The upwind regression reference requires Godunov + Euler or RK2")
+            "The scalar regression reference requires Godunov + Euler or RK2")
     for axis in ("x", "y"):
         require(all(cfg[f"boundary_{axis}_{side}"] == "periodic" for side in ("lower", "upper")),
                 "Translation check requires periodic boundaries on both axes")
@@ -196,9 +217,9 @@ def analyze(cfg, problem_dir, log_path, animate, fps):
     metrics, frames = [], []
     for step, time, dt, filename in records:
         if step:
-            stage = upwind_step(scalar, dt, velocity, spacing)
+            stage = scalar_step(scalar, dt, velocity, spacing, cfg)
             scalar = (stage if cfg["time_integrator"] == "euler" else
-                      0.5*scalar + 0.5*upwind_step(stage, dt, velocity, spacing))
+                      0.5*scalar + 0.5*scalar_step(stage, dt, velocity, spacing, cfg))
         if filename is None:
             continue
         header, values = read_snapshot(problem_dir/filename, cfg)
@@ -224,8 +245,8 @@ def analyze(cfg, problem_dir, log_path, animate, fps):
         require(np.max(abs(phase_error)/spacing) < 1., f"Translation position error exceeds one cell at step {step}")
         rigid = translate(rho0, *(velocity*time/spacing))
         exact_l1 = np.sum(abs(rho-rigid))/normalization
-        upwind_l1 = np.sum(abs(rho-scalar))/normalization
-        require(upwind_l1 < 1e-6, f"Density disagrees with independent upwinding at step {step}: {upwind_l1}")
+        scalar_l1 = np.sum(abs(rho-scalar))/normalization
+        require(scalar_l1 < 1e-6, f"Density disagrees with scalar reference at step {step}: {scalar_l1}")
         metrics.append({"step": step, "time": time, "shift_x": float((velocity[0]*time) % length[0]),
                         "shift_y": float((velocity[1]*time) % length[1]),
                         "position_error_x_cells": float(phase_error[0]/spacing[0]),
@@ -233,9 +254,10 @@ def analyze(cfg, problem_dir, log_path, animate, fps):
                         "mass": float(conserved[0]), "momentum_x": float(conserved[1]),
                         "momentum_y": float(conserved[2]), "energy": float(conserved[3]),
                         "pressure_linf": pressure_error, "velocity_linf": velocity_error,
-                        "exact_relative_l1": float(exact_l1), "upwind_relative_l1": float(upwind_l1)})
+                        "rho_min": float(rho.min()), "rho_max": float(rho.max()),
+                        "exact_relative_l1": float(exact_l1), "scalar_relative_l1": float(scalar_l1)})
         frames.append({"step": step, "time": time, "rho": rho.copy(),
-                       "rigid": rigid, "upwind": scalar.copy()})
+                       "rigid": rigid, "scalar": scalar.copy()})
     output = problem_dir/cfg["output_directory"]/"diagnostics"
     output.mkdir(parents=True, exist_ok=True)
     with (output/"metrics.csv").open("w", newline="") as stream:
@@ -249,7 +271,7 @@ def analyze(cfg, problem_dir, log_path, animate, fps):
     print(f"Final wrapped displacement: ({final['shift_x']:.6g},{final['shift_y']:.6g})")
     print(f"Position errors in cells: x={final['position_error_x_cells']:.6g}, y={final['position_error_y_cells']:.6g}")
     print(f"Relative excess-density L1: exact={final['exact_relative_l1']:.6g} (shape diffusion), "
-          f"independent upwind={final['upwind_relative_l1']:.6g}")
+          f"independent scalar={final['scalar_relative_l1']:.6g}")
     print(f"Maximum deviations across saved snapshots: p={max(m['pressure_linf'] for m in metrics):.6g}, "
           f"velocity={max(m['velocity_linf'] for m in metrics):.6g}")
     print(f"Saved {output/'comparison.png'} and {output/'metrics.csv'}")
@@ -260,8 +282,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--parameters", type=Path, default=root/"parameters.txt")
     parser.add_argument("--executable", type=Path, default=root/"flare")
-    parser.add_argument("--log", type=Path, help="Separate run log (default: parameters directory/run.log)")
-    parser.add_argument("--run", action="store_true", help="Run FLARE first; overwrite this problem's run.log")
+    parser.add_argument("--log", type=Path, help="Separate run log (default: output directory/run.log)")
+    parser.add_argument("--run", action="store_true", help="Run FLARE first; overwrite the selected run log")
     parser.add_argument("--animate", action="store_true", help="Also save the density/reference animation")
     parser.add_argument("--fps", type=float, default=6.)
     args = parser.parse_args()
@@ -270,7 +292,9 @@ def main():
     try:
         path = args.parameters.resolve()
         cfg = parameters(path)
-        log = args.log.resolve() if args.log else path.parent/"run.log"
+        log = args.log.resolve() if args.log else path.parent/cfg["output_directory"]/"run.log"
+        if not args.run and not args.log and not log.exists():
+            log = path.parent/"run.log"  # Read runs produced by the older checker.
         if args.run:
             log.parent.mkdir(parents=True, exist_ok=True)
             print("Running FLARE; progress is recorded in " + str(log), flush=True)
