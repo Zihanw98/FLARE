@@ -4,6 +4,7 @@
 #include "boundary/boundary.h"
 #include "io/output.h"
 #include "user/user_api.h"
+#include "physcon/unit.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -61,6 +62,7 @@ namespace
                 mesh.face[d].push_back(mesh.face[d].back() + 0.1 * (d + 1) * (1 + 0.05 * i));
         }
         mesh.allocate();
+        mesh.build_geometry();
         for (std::size_t f = 0; f < mesh.cells.size(); ++f)
         {
             if (!active(mesh, mesh.coordinates(f))) continue;
@@ -197,7 +199,7 @@ namespace
     std::filesystem::path snapshot(const config::SimulationConfig& cfg, std::size_t step)
     {
         std::ostringstream name;
-        name << "mesh_" << cfg.output_suffix << '_' << std::setw(8) << std::setfill('0') << step << ".csv";
+        name << cfg.output_suffix << '_' << std::setw(8) << std::setfill('0') << step << ".csv";
         return std::filesystem::path(cfg.output_directory) / name.str();
     }
 
@@ -214,6 +216,17 @@ namespace
         assert(std::getline(file, line));
         assert(line.rfind("# dt=", 0) == 0);
         assert(std::stod(line.substr(5)) == dt);
+        for (const auto& entry : std::vector<std::pair<std::string, double>>{
+            {"unit_mass", physcon::units.unit_mass},
+            {"unit_length", physcon::units.unit_length},
+            {"unit_time", physcon::units.unit_time},
+            {"unit_temperature", physcon::units.unit_temperature}})
+        {
+            assert(std::getline(file, line));
+            const auto prefix = "# " + entry.first + "=";
+            assert(line.rfind(prefix, 0) == 0);
+            assert(std::stod(line.substr(prefix.size())) == entry.second);
+        }
         assert(std::getline(file, line));
         assert(line == "x,y,z,gamma,rho,vx,vy,vz,p,is_ghost");
         std::size_t f = 0;
@@ -247,6 +260,7 @@ namespace
         config::SimulationConfig cfg;
         cfg.output_directory = (directory / "snapshots").string();
         cfg.output_suffix = "check";
+        physcon::units.init_unitsystem_MLT(2.5e33, 7.25e10, 1600.5, 2.0e4);
         cfg.output_step_every = 3;
         cfg.t_end = 0.8;
         hd_user::UserHooks hooks;
@@ -335,6 +349,17 @@ namespace
         assert(cfg.riemann_tolerance == 1e-12);
         assert(cfg.riemann_max_iterations == 240);
         assert(cfg.maxsteps == 500000);
+        assert(!cfg.constant_heating_enabled && cfg.heating_rate == 0.0);
+        write("constant_heating_enabled=true\nheating_rate=0.5\n");
+        const auto heating = config::ReadParameters(path.string());
+        assert(heating.constant_heating_enabled && heating.heating_rate == 0.5);
+        write("constant_heating_enabled=true\nheating_rate=0\n");
+        assert(config::ReadParameters(path.string()).heating_rate == 0.0);
+        for (const auto& value : {"-1", "nan", "inf", "1e999"})
+        {
+            write(std::string("heating_rate=") + value + '\n');
+            expect_failure([&] { config::ReadParameters(path.string()); });
+        }
         const auto largest = std::numeric_limits<std::size_t>::max();
         write("maxsteps=" + std::to_string(largest) + '\n');
         assert(config::ReadParameters(path.string()).maxsteps == largest);

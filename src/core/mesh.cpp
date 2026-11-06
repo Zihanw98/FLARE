@@ -3,6 +3,8 @@
  * @brief Physical states and mesh storage.
  */
 #include "mesh.h"
+#include "utils.h"
+#include "config.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -61,7 +63,117 @@ namespace
 
         return result;  
     }
-    
+    void MeshBlock::build_mesh(const config::SimulationConfig& cfg)
+    {
+        nactive = cfg.nactive;
+        nghost = cfg.nghost;
+        geometry = parse_geometry(cfg.geometry);
+        for(int d=0;d<hd_core::NDIM;d++)
+        {
+            bc_upper[d] = boundary::parse_bc(cfg.boundary_upper[d]);
+            bc_lower[d] = boundary::parse_bc(cfg.boundary_lower[d]);
+        }
+        for (int d = 0; d < NDIM; ++d)
+        {
+            set_uniform_faces(d, cfg.lower[d], cfg.upper[d]);
+        }
+        allocate(); // Validates coordinates and geometry before allocating cells.
+        build_geometry();
+    }
+    void MeshBlock::build_geometry()
+    {
+        validate_geometry();
+
+        // Volumes use the full cell layout, including ghosts.
+        std::array<std::size_t, NDIM> cell_shape{};
+        for (int d = 0; d < NDIM; ++d)
+            cell_shape[d] = static_cast<std::size_t>(ntotal(d));
+        //number of cells
+        const auto storage_size = [](const auto& shape, std::size_t max_size) {
+            std::size_t count = 1;
+            for (const auto n : shape)
+            {
+                if (count > max_size / n)
+                    throw std::length_error("Too many geometry entries");
+                count *= n;
+            }
+            return count;
+        };
+
+        // Build temporary arrays so a failed calculation cannot partially replace
+        // the old caches. No dependence on cells or on configuration bounds.
+        std::vector<double> new_volumes;
+        std::array<FaceField<double>, NDIM> new_areas;
+        new_volumes.resize(storage_size(cell_shape, new_volumes.max_size()));
+        const long double four_pi = 4.0L * std::acos(-1.0L);
+
+        for (std::size_t flat = 0; flat < new_volumes.size(); ++flat)
+        {
+            long double volume = 1.0L;
+            if (geometry == Geometry::Cartesian)
+            {
+                auto remainder = flat;
+                for (int d = 0; d < NDIM; ++d)
+                {
+                    const auto i = remainder % cell_shape[d];
+                    remainder /= cell_shape[d];
+                    volume *= static_cast<long double>(face[d][i + 1]) - face[d][i];
+                }
+                //Use the similar method to get the position index, flat % x_length = index along i, then flat/= x_length, then flat % y_length to get y index, then ...
+            }
+            else // validate_geometry() restricts this to spherical 1D.
+            {
+                const long double lower = face[0][flat];
+                const long double upper = face[0][flat + 1];
+                // Factor the difference of cubes to avoid cancellation in thin
+                // shells. Integrating r^2 also gives positive mirrored ghosts.
+                volume = (four_pi / 3.0L) * (upper - lower)
+                    * (lower * lower + lower * upper + upper * upper);
+            }
+            const double value = static_cast<double>(volume);
+            if (!std::isfinite(value) || value <= 0.0)
+                throw std::invalid_argument("Cell volume must be finite and positive");
+            new_volumes[flat] = value;
+        }
+
+        for (int direction = 0; direction < NDIM; ++direction)
+        {
+            auto shape = ntotal();
+            if (shape[direction] == std::numeric_limits<int>::max())
+                throw std::overflow_error("Face shape exceeds the Index range");
+            ++shape[direction];             //Shape of faces in current normal direction --> along normal direction there will be one more layer of faces
+            auto& areas = new_areas[direction];     
+            areas.allocate(shape); // Full face field, including ghost-region faces.
+            for (std::size_t flat = 0; flat < areas.faces.size(); ++flat)
+            {
+                const auto index = areas.coordinates(flat);
+                long double area = 1.0L;
+                bool origin = false;
+                if (geometry == Geometry::Cartesian)
+                {
+                    for (int d = 0; d < NDIM; ++d)
+                    {
+                        const auto i = index[d];
+                        if (d != direction)             //Cartesian case, 1D area = 1.0, which is applicable when do A_LF_L-A_RF_R/V, which is equivalent to dF/dx. More than 1D, A_X = dydz, A_Y = ...(exlucd the direction) 
+                            area *= static_cast<long double>(face[d][i + 1]) - face[d][i];
+                    }
+                }
+                else
+                {
+                    const long double radius = face[0][index[0]];
+                    area = four_pi * radius * radius;
+                    origin = radius == 0.0L;
+                }
+                const double value = static_cast<double>(area);
+                if (!std::isfinite(value) || value < 0.0 || (value == 0.0 && !origin))
+                    throw std::invalid_argument("Face area must be finite and positive except at the origin");
+                areas.faces[flat] = value;
+            }
+        }
+
+        volume_cell.swap(new_volumes);
+        face_area.swap(new_areas);
+    }
     void MeshBlock::set_uniform_faces(int d, double lower, double upper)
     {
         const int count = ntotal(d); // Checks direction, sizes, and integer overflow.
@@ -120,7 +232,35 @@ namespace
         // 返回所选方向上的坐标中点。
         return lower_face_position + 0.5 * width;
     }
+    double MeshBlock::cell_volume_center(int direction, int axis_index) const
+    {
+        if(geometry==Geometry::Cartesian)
+        {
+            return cell_center(direction,axis_index);
+        }
+    if (geometry != Geometry::Spherical || NDIM != 1)
+        throw std::invalid_argument(
+            "cell_volume_center supports Cartesian and spherical 1D"
+        );
 
+        // validate
+        (void)cell_width(direction, axis_index);
+        const long double rL = face[direction][axis_index];
+        const long double rR = face[direction][axis_index+1];   //though double, the intermediate result, e.g. r_L*r_L might be exceed the maximum of double,
+                                                                // and after division the results might go back to double so here we use long double
+        return static_cast<double> (0.75 * (rL+rR) * (rL*rL+rR*rR)/(rL*rL+rL*rR+rR*rR));
+    }
+    std::pair<double,double> MeshBlock::cell_face_pos(int direction, int axis_index) const
+    {
+        (void)cell_width(direction, axis_index);
+        
+        const double L = face[direction][axis_index];
+        const double R = face[direction][axis_index+1];
+        
+        return {L,R};
+
+
+    }
     double MeshBlock::cell_width(int direction, const Index& storage_index) const
     {
         if (direction < 0 || direction >= NDIM)
@@ -136,6 +276,19 @@ namespace
         return cell_center(direction, storage_index[direction]);
     }
 
+    double MeshBlock::cell_volume_center(int direction, const Index& storage_index) const
+    {
+        if (direction < 0 || direction >= NDIM)
+            throw std::out_of_range("Invalid mesh direction");
+        return cell_volume_center(direction, storage_index[direction]);
+    }
+    std::pair<double,double> MeshBlock::cell_face_pos(int direction, const Index& storage_index) const
+    {
+        if (direction < 0 || direction >= NDIM)
+            throw std::out_of_range("Invalid mesh direction");
+        return cell_face_pos(direction, storage_index[direction]);
+    }
+    
     double MeshBlock::active_length(int d) const
     {
         const int count = ntotal(d);
@@ -152,6 +305,22 @@ namespace
     {
         for (int d = 0; d < NDIM; ++d)
             (void)active_length(d); // Validates all faces, including ghost faces.
+
+        // This is a pre-build coordinate check; caches may not exist yet.
+        switch (geometry)
+        {
+            case Geometry::Cartesian:
+                return;
+            case Geometry::Spherical:
+                if (NDIM != 1)
+                    throw std::invalid_argument("Currently we only support 1D sphere");
+                if (face[0][nghost[0]] < 0.0)
+                    throw std::invalid_argument("Lower radial boundary can't be negative");
+                return; // Negative ghost radii are allowed for mirrored states.
+            case Geometry::Cylindrical:
+                throw std::invalid_argument("Cylindrical geometry is not implemented");
+        }
+        throw std::invalid_argument("Invalid geometry");
     }
 
     void MeshBlock::validate_active() const
@@ -193,6 +362,7 @@ namespace
 
         cells.resize(count);
     }
+
     Index MeshBlock::coordinates(std::size_t flat) const
     {
         if (flat >= cells.size())
@@ -336,5 +506,33 @@ namespace
     const Cell& MeshBlock::at_active(const Index& coordinates) const
     {
         return cells.at(flat_index(coordinates, true));
+    }
+
+    Geometry parse_geometry(const std::string& name)
+    {
+        if(utils::iequals(name,"cartesian"))
+        {
+            return Geometry::Cartesian;
+        }
+        if(utils::iequals(name,"spherical"))
+        {
+            return Geometry::Spherical;
+        }
+        throw std::runtime_error("Invalid geometry");
+    }
+    bool MeshBlock::is_active(size_t flat) const
+    {
+        const auto index = coordinates_active(flat);
+        bool active = true;
+
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            if (index[d] < 0 || index[d] >= nactive[d])
+            {
+                active = false;
+                break;
+            }
+        }
+        return active;
     }
 }

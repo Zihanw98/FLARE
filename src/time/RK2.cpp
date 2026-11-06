@@ -81,7 +81,7 @@ namespace hd_time
         double dt_limit,
         hydro::SpatialScheme spatial_scheme,
         const hydro::RiemannSolver& solver,
-        hd_source::SourceList source_list,
+        const hd_source::SourceList& source_list,
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
         double cfl,

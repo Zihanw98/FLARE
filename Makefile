@@ -21,9 +21,10 @@ CONFIG ?= $(PROBLEM_DIR)/parameters.txt
 override CONFIG := $(abspath $(CONFIG))
 
 CXX ?= g++
-CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -pedantic
+# Optimized defaults; CXXFLAGS and LDFLAGS remain overridable for debug/toolchain builds.
+CXXFLAGS ?= -O3 -flto -std=c++17 -Wall -Wextra -pedantic
 CPPFLAGS ?=
-LDFLAGS ?=
+LDFLAGS ?= -flto
 LDLIBS ?=
 
 # Collect every framework .cpp recursively, including main.cpp, but not old_version/tests.

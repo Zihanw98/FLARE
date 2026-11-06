@@ -1,0 +1,32 @@
+# M=10 M_sun, R=1000 R_sun n=3 polytrope.
+# Units remain M_sun, R_sun, sqrt(R_sun^3/GM_sun).
+geometry = spherical
+nxa = 512
+nxg = 2
+# Placeholder: initialize() replaces the inner mesh radius by M(<r)=central_mass.
+x_lower = 0.0
+x_upper = 1100.0
+gamma = 1.6666666666666667
+spherical_gravity_enabled = true
+spherical_self_gravity_enabled = true
+# Excise this mass and retain its gravity as a fixed point mass (solar units).
+spherical_gravity_central_mass = 4.0
+constant_gravity_enabled = false
+constant_heating_enabled = false
+
+# About 1.84 days, for the thermal-bomb explosion rather than equilibrium testing.
+t_end = 100.0
+cfl = 0.2
+maxsteps = 50000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
+boundary_x_lower = reflective
+boundary_x_upper = user
+step_every = 10
+output_directory = output
+output_suffix = ccsn_refined

@@ -38,7 +38,7 @@ def snapshot(path, cfg, record):
         for key, value in zip(("time", "dt"), record[1:3]):
             require(math.isclose(float(metadata[key]), value, rel_tol=1e-9, abs_tol=1e-14),
                     "Snapshot time/log mismatch")
-        data = np.genfromtxt(stream, delimiter=",", names=True)
+        data = np.genfromtxt((line for line in stream if not line.lstrip().startswith("#")), delimiter=",", names=True)
     nx, ny, gx, gy = (int(cfg[k]) for k in ("nxa", "nya", "nxg", "nyg"))
     require(data.size == (nx+2*gx)*(ny+2*gy), f"Incomplete snapshot: {path}")
     require(all(np.isfinite(data[k]).all() for k in data.dtype.names), "Nonfinite snapshot")

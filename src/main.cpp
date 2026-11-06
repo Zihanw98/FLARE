@@ -15,8 +15,10 @@
 /**
  * @brief The main entry of this code
  * @details What we do in this main code? This gives an outline of how the code works. 
- * First of all, we read the parameter file by the -par argument in argv
- * If no argv then 
+ * 1.First of all, we read the parameter file by the -par argument in argv  
+ * If no argv then the code will read a default parameters.txt
+ * 2.Build the mesh we use in the simulation, and the riemann solver(if applicable---Right now we use exact riemann solver and godunov scheme, so it's required.)  
+ * 
  */
 int main(int argc, char* argv[])
 {
@@ -52,7 +54,8 @@ int main(int argc, char* argv[])
         const auto cfg = config::ReadParameters(parameter_file);
         std::cout << "Loaded parameters from: "
                   << parameter_file << '\n';
-        auto mesh = config::build_mesh(cfg);
+        hd_core::MeshBlock mesh;
+        mesh.build_mesh(cfg);
         
         auto solver = hydro::make_riemann_solver(cfg.riemann_solver,cfg.riemann_tolerance,cfg.riemann_max_iterations);
 
@@ -74,7 +77,7 @@ int main(int argc, char* argv[])
 
         boundary::FillBoundary(mesh,t_current,hooks);
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
-        auto source_list = hd_source::make_sources(cfg,hooks);
+        auto source_list = hd_source::make_sources(cfg,mesh,hooks);
         double dt_next = std::numeric_limits<double>::infinity();
         while(t_current < cfg.t_end)
         {
@@ -82,7 +85,7 @@ int main(int argc, char* argv[])
             throw std::runtime_error(
                 "Maximum number of steps reached before t_end"
             );
-            // 初始状态和上一步末尾已经填好当前时刻的边界。
+
             const double remaining = cfg.t_end - t_current;
             //Avoid too small remaining time
             const double dt = hd_time::advance_one_step(

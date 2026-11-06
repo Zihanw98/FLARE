@@ -1,0 +1,7 @@
+# User-owned parameters, read by user_problem.cpp relative to the working directory.
+# Energy added per unit mass per unit time; zero disables heating.
+specific_heating_rate = 0.5
+
+# Cap dt so the initial instantaneous heating rate adds at most this fraction
+# of the current internal energy in one step. The hydro CFL limit also applies.
+max_fractional_energy_change = 0.1

@@ -1,0 +1,25 @@
+# Extended-domain long run: same initial jump at r=0.5, outer boundary r=2.
+# 1024 cells on [0,2] give the same dr as 512 cells on [0,1].
+geometry = spherical
+nxa = 1024
+nxg = 2
+x_lower = 0.0
+x_upper = 2.0
+gamma = 1.4
+
+t_end = 0.6
+cfl = 0.2
+maxsteps = 50000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
+
+boundary_x_lower = reflective
+boundary_x_upper = user
+step_every = 20
+output_directory = output_long
+output_suffix = spherical_sod

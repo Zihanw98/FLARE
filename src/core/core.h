@@ -17,6 +17,15 @@ namespace hd_core
     inline constexpr int NUSER = HD_NUSER;
     using VECDIM = std::array<double, NDIM>;
     using Index = std::array<int, NDIM>;
+    inline Index Index_add_offset(const Index& index,const Index& offset)
+    {
+        Index ret = index;
+        for(int i=0;i<NDIM;i++)
+        {
+            ret[i] += offset[i];
+        }
+        return ret;
+    }
     //Total Number of Variables: for conservatives and primitives...
     inline constexpr int NVAR = 2 + NDIM + NCOMP + NUSER;
 

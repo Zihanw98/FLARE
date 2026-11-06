@@ -16,5 +16,5 @@ namespace hydro
      * @return Exclusive ownership of the newly created solver.
      * @throws std::invalid_argument If the name or solver settings are invalid.
      */
-    std::unique_ptr<hydro::RiemannSolver> make_riemann_solver(    const std::string& name,double tolerance,int max_iterations);
+    std::unique_ptr<hydro::RiemannSolver> make_riemann_solver(const std::string& name,double tolerance,int max_iterations);
 }

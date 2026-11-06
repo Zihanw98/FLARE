@@ -6,6 +6,7 @@
 #include "config/config.h"
 #include "core/mesh.h"
 #include "user/user_api.h"
+#include "physcon/unit.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -47,7 +48,7 @@ namespace io
                 throw std::invalid_argument("Output directory must not be empty");
             std::filesystem::create_directories(cfg.output_directory);
             std::ostringstream name;
-            name << "mesh_" << cfg.output_suffix << '_'
+            name << cfg.output_suffix << '_'
                  << std::setfill('0') << std::setw(8) << step << ".csv";
             filename = std::filesystem::path(cfg.output_directory) / name.str();
             csv.open(filename);
@@ -56,10 +57,15 @@ namespace io
             csv.imbue(std::locale::classic());
             csv << std::setprecision(std::numeric_limits<double>::max_digits10);
             // Snapshot metadata belongs to the whole file. Python readers can
-            // skip these three comment lines, e.g. pandas.read_csv(comment="#").
+            // skip comment lines, e.g. pandas.read_csv(comment="#").
+            // Base units are physical values in g, cm, s and K; table stays in code units.
             csv << "# step=" << step << '\n'
                 << "# time=" << time << '\n'
-                << "# dt=" << dt << '\n';
+                << "# dt=" << dt << '\n'
+                << "# unit_mass=" << physcon::units.unit_mass << '\n'
+                << "# unit_length=" << physcon::units.unit_length << '\n'
+                << "# unit_time=" << physcon::units.unit_time << '\n'
+                << "# unit_temperature=" << physcon::units.unit_temperature << '\n';
             csv << "x,y,z,gamma,rho,vx,vy,vz,p";
             for (int k = 0; k < hd_core::NCOMP; ++k)
                 csv << ",comp_" << k;
@@ -87,6 +93,7 @@ namespace io
             if (is_ghost && !write_snapshot)
                 continue;
             const auto& cell = mesh.cells[flat];
+            const auto volume = mesh.volume_cell[flat];
             cell.U.validate(cell.gamma);
             const auto W = cell.U.to_Primtivies(cell.gamma);
             if (!is_ghost)
@@ -96,9 +103,6 @@ namespace io
                 rho_max = std::max(rho_max, W[hd_core::RHO]);
                 p_min = std::min(p_min, W[hd_core::PRE]);
                 p_max = std::max(p_max, W[hd_core::PRE]);
-                long double volume = 1.0L;
-                for (int d = 0; d < hd_core::NDIM; ++d)
-                    volume *= mesh.cell_width(d, index);
                 mass += cell.U[hd_core::RHO] * volume;
                 energy += cell.U[hd_core::ENERGY] * volume;
             }

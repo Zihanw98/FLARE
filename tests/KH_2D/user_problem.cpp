@@ -3,7 +3,7 @@
 #include "core/mesh.h"
 #include "config/config.h"
 #include <cmath>
-#include "constants/constants.h"
+#include "physcon/constants.h"
 static_assert(hd_core::NDIM == 2, "KH requires a 2D setting");
 
 namespace
@@ -30,7 +30,7 @@ namespace
                 hd_core::Primitives W{};
                 W[hd_core::RHO] = middle? 2 : 1;
                 W[hd_core::VEL(0)] = middle? 0.5 : -0.5;
-                W[hd_core::VEL(1)] = A * std::sin(2*hd_const::pi * perturbation_modes * x_fraction)
+                W[hd_core::VEL(1)] = A * std::sin(2*physcon::pi * perturbation_modes * x_fraction)
                     * (std::exp(-(d_1*d_1)/(2*sigma*sigma))
                        + std::exp(-(d_2*d_2)/(2*sigma*sigma)));
                 W[hd_core::PRE] = 2.5;

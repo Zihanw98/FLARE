@@ -9,14 +9,25 @@
 #pragma once
 #include "core.h"
 #include "cell.h"
+#include "facefield.h"
 #include "boundary.h"
 #include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <string>
 #include <vector>
+
+namespace config { struct SimulationConfig; }
 /// @brief Physical state and structured-mesh data types.
 namespace hd_core
 {
+    enum struct Geometry
+    {
+        Cartesian,
+        Cylindrical,
+        Spherical
+    };
+
     /**
      * @brief Store mesh geometry, boundary conditions, and all cell states.
      * @pre Set nactive, nghost, and faces before calling allocate().
@@ -25,9 +36,11 @@ namespace hd_core
      */
     struct MeshBlock
     {
+
+        Geometry geometry = Geometry::Cartesian;
         Index nactive{}; ///< Positive active-cell counts on each axis.
         Index nghost{};  ///< Nonnegative ghost-cell counts per side on each axis.
-        
+
         /**
          * @brief Return the cell count on one axis, including both ghost regions.
          * @param[in] d Axis index in [0, NDIM).
@@ -51,6 +64,17 @@ namespace hd_core
          *       Active faces run from nghost[d] through nghost[d] + nactive[d], inclusive.
          */
         std::array<std::vector<double>,NDIM> face;
+
+        // Full storage including ghosts, axis 0 fastest. Direction d has shape
+        // ntotal(), with one extra entry on axis d; not the hydro active-face layout.
+        // at(I) selects the lower d-face of storage cell I; at(I + e_d)
+        // selects its upper face. Unlike hydro fluxes, I includes ghost offsets.
+        std::array<FaceField<double>,NDIM> face_area;
+
+        // Same layout as cells. Cartesian: unit omitted dimensions; spherical:
+        // full 4*pi shells, with signed-radius ghosts extended using r^2 dr.
+        std::vector<double> volume_cell;
+
         std::array<boundary::BoundaryCondition,NDIM> bc_upper; ///< Upper boundary condition on each axis.
         std::array<boundary::BoundaryCondition,NDIM> bc_lower; ///< Lower boundary condition on each axis.
 
@@ -88,6 +112,9 @@ namespace hd_core
          */
         double cell_center(int direction, int axis_index) const;
 
+        double cell_volume_center(int direction, int axis_index) const;
+        
+        std::pair<double,double> cell_face_pos(int direction, int axis_index) const;        
         /**
          * @brief Return the cell width along a selected axis.
          * @param[in] direction Axis index in [0, NDIM).
@@ -110,6 +137,9 @@ namespace hd_core
          */
         double cell_center(int direction, const Index& storage_index) const;
 
+        double cell_volume_center(int direction, const Index& storage_index) const;
+
+        std::pair<double,double> cell_face_pos(int direction, const Index& storage_index) const;        
         /**
          * @brief Measure the active domain length on one axis.
          * @param[in] d Axis index in [0, NDIM).
@@ -120,9 +150,11 @@ namespace hd_core
         double active_length(int d) const;
 
         /**
-         * @brief Validate dimensions and all face coordinates on every axis.
-         * @throws std::invalid_argument If counts, face coordinates, or active lengths are invalid.
-         * @note Also propagates overflow errors from ntotal(); does not inspect cell states.
+         * @brief Validate dimensions, coordinates and supported coordinate-system ranges.
+         * @throws std::invalid_argument If coordinates are invalid or geometry is unsupported.
+         * @note Checks all ghost coordinates for monotonicity, but radial nonnegativity
+         *       only in the active domain. Does not require caches or allocated cells;
+         *       build_geometry() validates computed areas and volumes before storing them.
          */
         void validate_geometry() const;
 
@@ -283,6 +315,20 @@ namespace hd_core
             const Index& coordinates,
             bool active = false
         ) const;
- 
+
+        void build_mesh(const config::SimulationConfig& cfg);
+
+        /**
+         * @brief Allocate and recompute volume_cell and face_area from current faces.
+         * @note Supports Cartesian 1D/2D/3D and spherical 1D. Does not modify cells
+         *       or require them to be allocated. Call again after changing geometry,
+         *       dimensions or faces. Failure preserves the previous caches.
+         */
+        void build_geometry();
+
+        bool is_active(size_t flat) const;
+
+
     };
+    Geometry parse_geometry(const std::string& name);
 }

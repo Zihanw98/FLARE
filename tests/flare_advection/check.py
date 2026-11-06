@@ -60,7 +60,7 @@ def read_snapshot(path, cfg):
         required = ("x", "y", "z", "gamma", "rho", "vx", "vy", "vz", "p", "is_ghost")
         data = np.loadtxt(stream, delimiter=",", ndmin=2,
                           usecols=[columns.index(key) for key in required])
-    require(set(metadata) == {"step", "time", "dt"}, f"Missing snapshot metadata: {path}")
+    require({"step", "time", "dt"}.issubset(metadata), f"Missing snapshot metadata: {path}")
     require(all(math.isfinite(v) and v >= 0 for v in metadata.values()), "Invalid metadata")
     nx, ny, gx, gy = (int(cfg[key]) for key in ("nxa", "nya", "nxg", "nyg"))
     require(data.shape == ((nx+2*gx)*(ny+2*gy), len(required)), f"Incomplete CSV: {path}")

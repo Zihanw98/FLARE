@@ -12,7 +12,7 @@ implementation rather than planned functionality.
 - @ref hydro "hydro": reconstruction, slope limiters, Riemann solvers, spatial RHS, and CFL limits.
 - @ref hd_time "hd_time": forward Euler, SSP-RK2, source-aware RHS evaluation, and timestep dispatch.
 - @ref boundary "boundary": ghost-cell filling and user boundary callbacks.
-- @ref hd_source "hd_source": source registration and constant gravity.
+- @ref hd_source "hd_source": source registration, constant gravity, constant heating, and geometric sources.
 - @ref config "config": parameter parsing, validation, and mesh construction.
 - @ref io "io": terminal diagnostics and CSV snapshots.
 - @ref hd_user "hd_user": problem-specific initialization, boundary, and output callbacks.
@@ -21,6 +21,51 @@ implementation rather than planned functionality.
 Use the class, namespace, and file navigation or the search field to locate an
 interface. Header declarations carry the public documentation. Internal helper
 functions are documented in their implementation files; source links are included.
+
+@section source_parameters Source-specific parameters
+
+`SourceFunction` accepts ordinary functions and lambdas with owned captures.
+Keep parameters in a source-specific struct and capture them by value in a
+factory returning `SourceTerm`. The implementation can take extra typed parameters;
+the factory adapts it to the common `(mesh, time, cfg, rhs, dt_limit)` interface.
+See `make_constant_gravity` and `constant_gravity` for a complete example.
+
+@code{.cpp}
+hd_source::ConstantGravityParams params;
+params.acceleration[0] = -1.0;
+hd_source::SourceList sources;
+sources.push_back(hd_source::make_constant_gravity(params));
+// A scalar parameter, captured by value:
+sources.push_back(hd_source::make_constant_heating(0.5));
+// For a supported non-Cartesian mesh:
+sources.push_back(hd_source::make_geometric_source());
+@endcode
+
+Normal simulations use `make_sources(cfg, mesh, hooks)`, which still reads the
+existing gravity/heating settings and automatically registers the geometric source.
+It then calls the optional `hooks.register_sources(cfg, mesh, sources)` callback.
+Define that callback in the problem code and append any number of custom sources.
+Include `source/source.h` in the implementation that constructs or appends sources;
+`user/user_api.h` only forward-declares `SourceTerm` and uses a reference to
+`std::vector<SourceTerm>`, which is the same type as `SourceList`.
+Gravity/heating parameters are copied when the source is created; rebuild it to change
+the acceleration or heating rate. The geometric source uses the current stage mesh and currently
+implements spherical 1D. Custom parameter-file parsing is still the responsibility
+of the new source's configuration code.
+
+Enable built-in heating with `constant_heating_enabled = true` and `heating_rate = 0.5`
+in the simulation parameter file. The rate is energy per unit mass per unit time:
+`dE/dt = rho * heating_rate`. The source limits dt to 0.1 times the shortest active-cell
+heating timescale `internal_energy / (rho * heating_rate)`, using internal rather than
+total energy. The safety factor is fixed; the source accepts only one double parameter.
+Zero rate and vacuum add no heating and impose no timestep limit. Existing simulations
+default to heating disabled. A user heating source registered at the same time adds
+its own contribution; avoid enabling both when comparing the two implementations.
+
+Callbacks add rates without multiplying by dt and may only tighten dt_limit.
+RK2 can retry stages: use the supplied mesh and stage time, and avoid committing
+physical state in captured variables during evaluation. The integrators pass the
+source list by const reference, without copying captured data each step.
 
 @section doc_build Building the documentation
 

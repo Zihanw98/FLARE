@@ -58,8 +58,15 @@ namespace config
 
         std::array<double,hd_core::NDIM> gravity{};
 
+        bool constant_heating_enabled = false;
+        double heating_rate = 0.0; ///< Energy added per unit mass per unit time.
+
         int integrator_retry_max = 20;
 
+        std::string geometry = "Cartesian";
+        bool spherical_gravity_enabled = false;
+        bool spherical_self_gravity_enabled = false;
+        double spherical_central_mass = 0.0;
 
     };
     /**
@@ -107,12 +114,4 @@ namespace config
      * @note Requires 0 < cfl <= cfl_max <= 0.5. This is not a complete check of every method name; some names are validated later by their factories.
      */
     void validate_cfg(const SimulationConfig& cfg,const std::unordered_set<std::string>& seen);
-    /**
-     * @brief Build and allocate a uniform mesh from the configuration.
-     * @param[in] cfg Mesh counts, axis bounds, and boundary-condition names.
-     * @return Mesh with initialized geometry and default-constructed cells.
-     * @pre Mesh dimensions and bounds are valid.
-     * @note Does not set the physical initial state or copy cfg.gamma into each cell; the problem initializer must do so. Geometry and boundary parsing errors propagate.
-     */
-    hd_core::MeshBlock build_mesh(const SimulationConfig& cfg);
 }

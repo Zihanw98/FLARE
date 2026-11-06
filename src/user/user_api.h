@@ -4,6 +4,13 @@
  */
 #pragma once
 #include "boundary.h"
+#include "physcon/unit.h"
+#include <vector>
+
+namespace hd_source
+{
+    struct SourceTerm;
+}
 namespace hd_core
 {
     struct MeshBlock;
@@ -16,7 +23,6 @@ namespace config
 
 namespace hd_user
 {
-
     /** @brief Problem callback that initializes cell states and their adiabatic indices. */
     using Initializer = void (*)(
         hd_core::MeshBlock&,
@@ -34,18 +40,29 @@ namespace hd_user
         hd_core::MeshBlock&,
         const config::SimulationConfig&
     );
+    /** @brief Append problem-specific sources after built-in source registration. */
+    using RegisterSources = void (*)(
+        const config::SimulationConfig& cfg,
+        const hd_core::MeshBlock& mesh,
+        std::vector<hd_source::SourceTerm>& sources
+    );
     /** @brief Problem callbacks; initialization is required and other hooks are optional. */
     struct UserHooks
     {
         Initializer initialize = nullptr;
         UserBoundaryCondition userbc = nullptr;
         UserOutput useroutput = nullptr;
-        // 将来可以增加可选源项等接口。
+        RegisterSources register_sources = nullptr;
     };
-
+    // void register_sources(/* 配置、网格、sources */)
+    // {
+    //     sources.push_back(make_heating(...));
+    //     sources.push_back(make_cooling(...));
+    //     sources.push_back(make_external_force(...));
+    // }
     /**
      * @brief Provide the problem-specific callbacks linked into a simulation.
-     * @return UserHooks containing the required initialize callback and any optional boundary/output callbacks.
+     * @return UserHooks containing the required initializer and optional boundary/output/source callbacks.
      * @note Implemented by the selected problem in user_problem.cpp, not by the framework. A user boundary requires userbc to be non-null.
      */
     UserHooks make_user_hooks();

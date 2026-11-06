@@ -63,6 +63,7 @@ hd_core::MeshBlock make_mesh(bool nonuniform = false)
                 + 0.1 * (d + 1) * (nonuniform ? 1.0 + 0.2 * j : 1.0));
     }
     mesh.allocate();
+    mesh.build_geometry();
     for (auto& cell : mesh.cells)
         cell = hd_core::Cell(state(1.0, 1.0), gamma_gas);
     return mesh;

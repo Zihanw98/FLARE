@@ -69,6 +69,7 @@ hd_core::MeshBlock make_mesh()
         mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::Periodic;
     }
     mesh.allocate();
+    mesh.build_geometry();
     for (auto& cell : mesh.cells)
     {
         cell.U[hd_core::RHO] = 1.0;

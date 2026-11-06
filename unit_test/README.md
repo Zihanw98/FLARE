@@ -25,6 +25,8 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `godunov` | 每个面的左右单元和 gamma、ghost 偏移、散度负号、非均匀网格宽度、面波速归约 |
 | `limiter` | 五种斜率限制器、none 中心斜率、线性保持与极值归零、极端数值、MC-beta 端点、配置选择及非法参数 |
 | `wave_timestep` | 已有波速回归测试：强激波、真空、CFL、Euler、失败时状态保持不变 |
+| `source` | 捕获参数的生命周期与实例独立性、重力/加热 RHS 和 Euler/RK2 更新、加热内能时间尺度、零加热和真空、自定义源项步长限制、球坐标几何源项 |
+| `units` | 非平凡质量、长度、时间、温度单位下的常量换算、跨编译单元共享常量、恢复 cgs |
 | `output_boundary` | 已有边界/输出测试：多层周期 ghost、角点、用户 hook、参数读取、CSV 和输出频率 |
 
 后两组复用 `tests/test_wave_timestep.cpp` 和 `tests/test_output_boundary.cpp`，

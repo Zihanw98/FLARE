@@ -73,7 +73,7 @@ namespace config
     SimulationConfig ReadParameters(const std::string& filename)
     {
         using Setter = std::function<void(const std::string&)>;
-        // Only these keys are accepted. The key determines the value's type.
+
         SimulationConfig cfg{};
 
         using Setter = std::function<void(const std::string&)>;
@@ -147,8 +147,26 @@ namespace config
             {"constant_gravity_enabled",[&cfg](const std::string& v){
                 cfg.constant_gravity_enabled = parse_value<bool>(v);
             }},
+            {"spherical_gravity_enabled",[&cfg](const std::string& v){
+                cfg.spherical_gravity_enabled = parse_value<bool>(v);
+            }},
+            {"spherical_self_gravity_enabled",[&cfg](const std::string& v){
+                cfg.spherical_self_gravity_enabled = parse_value<bool>(v);
+            }},
+            {"spherical_gravity_central_mass",[&cfg](const std::string& v){
+                cfg.spherical_central_mass = parse_value<double>(v);
+            }},
+            {"constant_heating_enabled", [&cfg](const std::string& v) {
+                cfg.constant_heating_enabled = parse_value<bool>(v);
+            }},
+            {"heating_rate", [&cfg](const std::string& v) {
+                cfg.heating_rate = parse_value<double>(v);
+            }},
             {"integrator_retry_max",[&cfg](const std::string& v){
                 cfg.integrator_retry_max = parse_value<int>(v);
+            }},
+            {"geometry",[&cfg](const std::string& v){
+                cfg.geometry = v;
             }}
         };
 
@@ -298,6 +316,9 @@ namespace config
         if (cfg.integrator_retry_max < 0)
             throw std::runtime_error("integrator_retry_max must be nonnegative");
 
+        if (!std::isfinite(cfg.heating_rate) || cfg.heating_rate < 0.0)
+            throw std::runtime_error("heating_rate must be finite and nonnegative");
+
         if (!std::isfinite(cfg.gamma) || cfg.gamma <= 1.0)
             throw std::runtime_error("gamma must be finite and > 1");
 
@@ -308,19 +329,5 @@ namespace config
 
         if (cfg.maxsteps <= 0)
             throw std::runtime_error("maxsteps must be > 0");
-    }
-    hd_core::MeshBlock build_mesh(const SimulationConfig& cfg)
-    {
-        hd_core::MeshBlock mesh{};
-        mesh.nactive = cfg.nactive;
-        mesh.nghost = cfg.nghost;
-        for(int d=0;d<hd_core::NDIM;d++)
-        {
-            mesh.set_uniform_faces(d,cfg.lower[d],cfg.upper[d]);
-            mesh.bc_upper[d] = boundary::parse_bc(cfg.boundary_upper[d]);
-            mesh.bc_lower[d] = boundary::parse_bc(cfg.boundary_lower[d]);
-        }
-        mesh.allocate();
-        return mesh;
     }
 }

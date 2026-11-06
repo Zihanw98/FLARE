@@ -29,7 +29,7 @@ namespace hydro
         mesh.validate_geometry();
         auto nactive = mesh.nactive;
         auto nghost = mesh.nghost;
-        std::array<FaceField, hd_core::NDIM> flux;
+        std::array<FaceFlux, hd_core::NDIM> flux;
         // 与面通量使用相同的 flat 下标，避免重新求解 Riemann 问题。
         std::array<std::vector<double>, hd_core::NDIM> face_speed;
         for(int n=0;n<hd_core::NDIM;n++)
@@ -95,14 +95,19 @@ namespace hydro
             rhs[flat] = {{}};
             double inverse_dt = 0.0;
             auto face_left_index = index;
+            auto area_left_index = hd_core::Index_add_offset(face_left_index,mesh.nghost);
+            auto V = mesh.volume_cell[flat];
             for(int n=0;n<hd_core::NDIM;n++)
             {
                 auto ds_n = mesh.cell_width(n,index[n]+nghost[n]);
                 auto face_right_index = index;
                 face_right_index[n]++;
+                auto area_right_index = hd_core::Index_add_offset(face_right_index,mesh.nghost);
                 const auto& F_nL = flux[n].at(face_left_index);
                 const auto& F_nR = flux[n].at(face_right_index);
-                rhs[flat] += -(F_nR-F_nL) / ds_n;
+                const auto& A_L = mesh.face_area[n].at(area_left_index);
+                const auto& A_R = mesh.face_area[n].at(area_right_index);
+                rhs[flat] += -(F_nR*A_R-F_nL*A_L) / V;
                 const auto left_flat = flux[n].flat_index(face_left_index);
                 const auto right_flat = flux[n].flat_index(face_right_index);
                 inverse_dt += std::max(face_speed[n][left_flat],
