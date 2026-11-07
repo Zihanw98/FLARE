@@ -13,7 +13,7 @@ int main()
         {
             mesh.nactive[d] = 3 + d;
             mesh.nghost[d] = 1 + d;
-            mesh.set_uniform_faces(d, -1.0, 2.0 + d);
+            mesh.set_linear_uniform_faces(d, -1.0, 2.0 + d);
             count *= mesh.nactive[d] + 2 * mesh.nghost[d];
             CHECK(near(mesh.cell_center(d, mesh.nghost[d]), -0.5));
             CHECK(near(mesh.cell_width(d, 0), 1.0));
@@ -270,7 +270,7 @@ int main()
                        four_pi * (radius * radius + radius + 1.0 / 3.0)));
             const auto shell_volumes = sphere.volume_cell;
             const auto shell_areas = sphere.face_area;
-            sphere.set_uniform_faces(0, 0.0, 1e200);
+            sphere.set_linear_uniform_faces(0, 0.0, 1e200);
             expect_throw<std::invalid_argument>([&] { sphere.build_geometry(); });
             CHECK(sphere.volume_cell == shell_volumes);
             CHECK(sphere.face_area[0].shape == shell_areas[0].shape);
@@ -284,7 +284,7 @@ int main()
             expect_throw<std::invalid_argument>([&] { sphere.build_mesh(cfg); });
         }
         built.geometry = hd_core::Geometry::Cylindrical;
-        built.set_uniform_faces(0, cfg.lower[0], cfg.upper[0]);
+        built.set_linear_uniform_faces(0, cfg.lower[0], cfg.upper[0]);
         expect_throw<std::invalid_argument>([&] { built.build_geometry(); });
     });
 }

@@ -65,7 +65,7 @@ hd_core::MeshBlock make_mesh()
     {
         mesh.nactive[d] = 2;
         mesh.nghost[d] = 1;
-        mesh.set_uniform_faces(d, 0.0, 1.0);
+        mesh.set_linear_uniform_faces(d, 0.0, 1.0);
         mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::Periodic;
     }
     mesh.allocate();

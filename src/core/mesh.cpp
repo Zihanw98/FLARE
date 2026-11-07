@@ -73,9 +73,32 @@ namespace
             bc_upper[d] = boundary::parse_bc(cfg.boundary_upper[d]);
             bc_lower[d] = boundary::parse_bc(cfg.boundary_lower[d]);
         }
-        for (int d = 0; d < NDIM; ++d)
+        if(cfg.init_mesh_from_file)
         {
-            set_uniform_faces(d, cfg.lower[d], cfg.upper[d]);
+
+        }
+        else
+        {
+            if(utils::iequals(cfg.init_mesh_uniform_type,"linear"))
+            {
+                for (int d = 0; d < NDIM; ++d)
+                {
+                    set_linear_uniform_faces(d, cfg.lower[d], cfg.upper[d]);
+                }
+            }
+            else if(utils::iequals(cfg.init_mesh_uniform_type,"log"))
+            {
+                if(geometry != Geometry::Spherical && geometry != Geometry::Cylindrical)
+                {
+                    throw std::runtime_error("Log uniform can only work for radial axis of spherical or cylindrical coordinates");
+                }
+                set_log_uniform_faces(0,cfg.lower[0],cfg.upper[0]);
+
+            }
+            else
+            {
+                throw std::runtime_error("Wrong init_mesh_uniform_type, should be linear or log");
+            }
         }
         allocate(); // Validates coordinates and geometry before allocating cells.
         build_geometry();
@@ -174,7 +197,7 @@ namespace
         volume_cell.swap(new_volumes);
         face_area.swap(new_areas);
     }
-    void MeshBlock::set_uniform_faces(int d, double lower, double upper)
+    void MeshBlock::set_linear_uniform_faces(int d, double lower, double upper)
     {
         const int count = ntotal(d); // Checks direction, sizes, and integer overflow.
         if (!std::isfinite(lower) || !std::isfinite(upper) || upper <= lower)
@@ -196,6 +219,42 @@ namespace
                 coordinates[j] = upper;
             else
                 coordinates[j] = std::fma(static_cast<double>(j) - nghost[d], width, lower);
+        }
+        // Detect overflow in ghost coordinates or collapsed faces due to rounding.
+        validate_axis(coordinates, count);
+        face[d].swap(coordinates); // Leave previous geometry unchanged on failure.
+    }
+
+    void MeshBlock::set_log_uniform_faces(int d, double lower, double upper)
+    {
+        const int count = ntotal(d); // Checks direction, sizes, and integer overflow.
+        if (!std::isfinite(lower) || !std::isfinite(upper) || upper <= lower)
+            throw std::invalid_argument("Uniform grid bounds must be finite and increasing");
+
+        const double length = upper - lower;
+        const double width = length / nactive[d];
+        if (!std::isfinite(length) || !std::isfinite(width) || width <= 0.0)
+            throw std::invalid_argument("Invalid uniform grid spacing");
+
+        if(d!=0 || geometry == Geometry::Cartesian || lower<=0.0)
+        {
+            throw std::invalid_argument("Only radial faces in Spherical or Cylindrical Coordinates support log uniform");
+        }
+        std::vector<double> coordinates(static_cast<std::size_t>(count) + 1);
+        const auto first = static_cast<std::size_t>(nghost[d]);
+        const auto last = first + static_cast<std::size_t>(nactive[d]);
+        for (std::size_t j = 0; j < coordinates.size(); ++j)
+        {
+            if (j == first)
+                coordinates[j] = lower;
+            else if (j == last)
+                coordinates[j] = upper;
+            else
+            {
+                const double t = (static_cast<double>(j) - nghost[d]) / nactive[d];
+                coordinates[j] = lower * std::pow(upper/lower,t);
+            }
+            
         }
         // Detect overflow in ghost coordinates or collapsed faces due to rounding.
         validate_axis(coordinates, count);

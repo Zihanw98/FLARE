@@ -145,7 +145,7 @@ def main():
     require([record[0] for record in records] == list(range(len(records))), "Missing step diagnostics")
     require(all(record[2] > 0 for record in records[1:]), "Nonpositive time step")
     last_step = records[-1][0]
-    interval = int(cfg["step_every"])
+    interval = int(cfg["output_step_every"])
     expected_steps = {0, 1, last_step} | set(range(interval, last_step + 1, interval))
     require(set(snapshots) == expected_steps, "Snapshot cadence is incorrect")
     states = {step: read_snapshot(path, count, ghosts, *records[step])

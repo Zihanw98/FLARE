@@ -26,6 +26,6 @@ boundary_x_upper = periodic
 boundary_y_lower = periodic
 boundary_y_upper = periodic
 
-step_every = 20
+output_step_every = 20
 output_directory = output
 output_suffix = flare

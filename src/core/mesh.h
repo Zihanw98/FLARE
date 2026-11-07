@@ -88,8 +88,8 @@ namespace hd_core
          * @throws std::invalid_argument If bounds or generated spacings are invalid.
          * @note Preserves previous faces on failure; does not allocate cells or initialize physical states. Axis/count errors from ntotal() propagate.
          */
-        void set_uniform_faces(int d, double lower, double upper);
-
+        void set_linear_uniform_faces(int d, double lower, double upper);
+        void set_log_uniform_faces(int d,double lower, double upper);
         /**
          * @brief Return the cell width along a selected axis.
          * @param[in] direction Axis index in [0, NDIM).

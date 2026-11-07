@@ -68,6 +68,13 @@ namespace config
         bool spherical_self_gravity_enabled = false;
         double spherical_central_mass = 0.0;
 
+        bool init_mesh_from_file  = false;
+        std::string init_mesh_uniform_type = "linear"; //linear or log uniform, only useful when init_mesh_from_file is false
+        std::string init_mesh_file_name = "";
+
+        bool init_profile_from_file = false;
+        std::string init_profile_file_name = "";
+
     };
     /**
      * @brief Read and validate a key=value simulation parameter file.

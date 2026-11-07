@@ -10,7 +10,7 @@ int main()
         {
             mesh.nactive[d] = 3 + d;
             mesh.nghost[d] = 1 + d;
-            mesh.set_uniform_faces(d, 0.0, 1.0);
+            mesh.set_linear_uniform_faces(d, 0.0, 1.0);
             mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::Periodic;
         }
         mesh.allocate();

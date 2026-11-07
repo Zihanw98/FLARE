@@ -167,6 +167,21 @@ namespace config
             }},
             {"geometry",[&cfg](const std::string& v){
                 cfg.geometry = v;
+            }},
+            {"init_mesh_from_file",[&cfg](const std::string& v){
+                cfg.init_mesh_from_file = parse_value<bool>(v);
+            }},
+            {"init_mesh_uniform_type",[&cfg](const std::string& v){
+                cfg.init_mesh_uniform_type = v;
+            }},
+            {"init_mesh_file_name",[&cfg](const std::string& v){
+                cfg.init_mesh_file_name = v;
+            }},
+            {"init_profile_from_file",[&cfg](const std::string& v){
+                cfg.init_profile_from_file = parse_value<bool>(v);
+            }},
+            {"init_profile_file_name",[&cfg](const std::string& v){
+                cfg.init_profile_file_name = v;
             }}
         };
 
