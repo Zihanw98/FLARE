@@ -6,6 +6,7 @@
 #include "godunov.h"
 #include "mesh.h"
 #include "utils.h"
+#include "utils/performance.h"
 #include <stdexcept>
 
 namespace hydro
@@ -33,6 +34,7 @@ void compute_hydro_rhs(
     const double limiter_beta
 )
 {
+    performance::Scope timer(performance::Section::Hydro);
     //Clear the results and re-calculate
     rhs.assign(
         mesh.cells.size(),

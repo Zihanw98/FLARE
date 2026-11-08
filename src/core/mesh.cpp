@@ -3,6 +3,7 @@
  * @brief Physical states and mesh storage.
  */
 #include "mesh.h"
+#include "utils/performance.h"
 #include "table.h"
 #include "utils.h"
 #include "config.h"
@@ -428,6 +429,7 @@ namespace
 
     void MeshBlock::validate_geometry() const
     {
+        performance::Scope timer(performance::Section::Validation);
         for (int d = 0; d < NDIM; ++d)
             (void)active_length(d); // Validates all faces, including ghost faces.
 
@@ -450,6 +452,7 @@ namespace
 
     void MeshBlock::validate_active() const
     {
+        performance::Scope timer(performance::Section::Validation);
         // Check dimensions and storage even when cells is empty.
         (void)flat_index(Index{}, true);
 

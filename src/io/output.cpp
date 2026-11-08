@@ -7,6 +7,7 @@
 #include "core/mesh.h"
 #include "user/user_api.h"
 #include "physcon/unit.h"
+#include "utils/performance.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -30,6 +31,7 @@ namespace io
         double dt
     )
     {
+        performance::Scope timer(performance::Section::Output);
         if (cfg.output_step_every == 0)
             throw std::invalid_argument("output_step_every must be positive");
         if (!std::isfinite(time) || !std::isfinite(dt) || time < 0.0 || dt < 0.0)
@@ -40,6 +42,8 @@ namespace io
 
         const bool write_snapshot = step <= 1 || step % cfg.output_step_every == 0
                                  || time >= cfg.t_end || step >= cfg.maxsteps;
+        performance::Scope output_kind_timer(write_snapshot ? performance::Section::SnapshotOutput
+                                                            : performance::Section::DiagnosticOutput);
         std::filesystem::path filename;
         std::ofstream csv;
         if (write_snapshot)
@@ -148,5 +152,6 @@ namespace io
 
         if (write_snapshot && hooks.useroutput)
             hooks.useroutput(mesh, cfg);
+        if (write_snapshot) performance::count(performance::Counter::Snapshots);
     }
 }

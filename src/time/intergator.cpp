@@ -9,6 +9,7 @@
 #include "limiter.h"
 #include "reconstruction.h"
 #include "wave_timestep.h"
+#include "utils/performance.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -22,6 +23,7 @@ namespace hd_time
         double dt
     )
     {
+        performance::Scope timer(performance::Section::StateUpdate);
         if (!std::isfinite(dt))
             throw std::invalid_argument("RHS scale must be finite");
         if (rhs.size() != mesh.cells.size())
@@ -30,7 +32,7 @@ namespace hd_time
         if (dt == 0.0)
             return;
 
-        auto next_cells = mesh.cells;
+        auto next_cells = performance::measure(performance::Section::MeshCopy, [&] { return mesh.cells; });
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {
             const auto index = mesh.coordinates_active(flat);
@@ -64,6 +66,7 @@ namespace hd_time
         double& source_dt_limit
     )
     {
+        performance::Scope timer(performance::Section::RHS);
         if (!std::isfinite(cfl) || cfl <= 0.0)
             throw std::invalid_argument("RHS requires a finite positive CFL target");
         std::vector<hd_core::Conserved> rhs;
@@ -76,6 +79,7 @@ namespace hd_time
         const double hydro_limit = inverse_dt == 0.0
             ? std::numeric_limits<double>::infinity() : cfl / inverse_dt;
         double source_limit_all = std::numeric_limits<double>::infinity();
+        performance::Scope source_timer(performance::Section::Sources);
         for (const auto& source : source_list)
         {
             if (!source.func)
@@ -86,6 +90,7 @@ namespace hd_time
                 throw std::invalid_argument("Source timestep must be positive (infinity allowed)");
             source_limit_all = std::min(source_limit_all, source_limit);
         }
+        source_timer.stop();
         if (rhs.size() != mesh.cells.size())
             throw std::logic_error("Source changed RHS storage size");
         hydro_inverse_dt = inverse_dt;
@@ -115,6 +120,7 @@ namespace hd_time
         double& dt_next
     )
     {
+        performance::Scope timer(performance::Section::Advance);
         double dt;
         switch (integrator)
         {

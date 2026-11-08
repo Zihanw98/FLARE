@@ -8,6 +8,7 @@
 #include "facefield.h"
 #include "core.h"
 #include "core/mesh.h"
+#include "utils/performance.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -39,6 +40,7 @@ namespace hydro
             flux[n].allocate(shape);
             face_speed[n].resize(flux[n].faces.size());
         }
+        performance::Scope face_timer(performance::Section::Faces);
         for (int n = 0; n < hd_core::NDIM; ++n)
         {
             if (nghost[n] < 1)
@@ -65,15 +67,21 @@ namespace hydro
                 const auto gamma_R = cellRight.gamma;
 ;
                 
-                auto [WL,WR] = Reconstruct(reconstructor,mesh,n,right_index,limiter,limiter_beta);
+                auto [WL,WR] = performance::measure(performance::Section::Reconstruction, [&] {
+                    return Reconstruct(reconstructor,mesh,n,right_index,limiter,limiter_beta);
+                }, true);
                 // 哨兵值：求解器若忘记写入当前面波速，就报错而不沿用旧值。
                 wave_timestep.face_speed = -1.0;
-                field.faces[i] = solver.flux(WL, WR, n, gamma_L, gamma_R);
+                field.faces[i] = performance::measure(performance::Section::Riemann, [&] {
+                    return solver.flux(WL, WR, n, gamma_L, gamma_R);
+                }, true);
                 if (!std::isfinite(wave_timestep.face_speed) || wave_timestep.face_speed < 0.0)
                     throw std::runtime_error("Invalid Riemann wave speed");
                 face_speed[n][i] = wave_timestep.face_speed;
             }
         }
+        face_timer.stop();
+        performance::Scope divergence_timer(performance::Section::Divergence);
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {
 

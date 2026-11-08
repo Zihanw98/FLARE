@@ -3,6 +3,7 @@
  * @brief Physical source terms.
  */
 #include "source.h"
+#include "utils/performance.h"
 #include "core/core.h"
 #include "core/mesh.h"
 #include "physcon/unit.h"
@@ -29,6 +30,7 @@ namespace hd_source
         double& /*dt_limit*/
     )
     {
+        performance::Scope timer(performance::Section::Gravity);
         //Don't change dt_limit
         for(int d=0; d < hd_core::NDIM; d++)
         {
@@ -57,6 +59,7 @@ namespace hd_source
         double& dt_limit
     )
     {
+        performance::Scope timer(performance::Section::Gravity);
         //Central Gravity + Self Gravity
 
         const std::size_t r_total = mesh.nactive[0];

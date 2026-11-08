@@ -3,6 +3,7 @@
  * @brief Boundary-condition handling.
  */
 #include "boundary.h"
+#include "utils/performance.h"
 #include "core/mesh.h"
 #include "user/user_api.h"
 #include "utils.h"
@@ -132,6 +133,7 @@ namespace boundary
         const hd_user::UserHooks& hooks
     )
     {
+            performance::Scope timer(performance::Section::Boundary);
             for (int direction = 0; direction < hd_core::NDIM; ++direction)
             {
                 for (const auto side : {BoundarySide::Lower,

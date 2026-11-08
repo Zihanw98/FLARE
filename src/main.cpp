@@ -7,8 +7,10 @@
 #include "source/source.h"
 #include "io/output.h"
 #include "config/read_mesa_profile.h"
+#include "utils/performance.h"
 #include <cstddef>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -23,9 +25,12 @@
  */
 int main(int argc, char* argv[])
 {
+    int exit_code = 0;
+    std::string performance_file;
     try
     {
         std::string parameter_file;
+        auto performance_mode = performance::Mode::Off;
 
         for (int i = 1; i < argc; ++i)
         {
@@ -41,12 +46,45 @@ int main(int argc, char* argv[])
 
                 parameter_file = argv[++i];
             }
+            else if (arg == "--performance")
+            {
+                if (performance_mode == performance::Mode::Off)
+                    performance_mode = performance::Mode::Summary;
+            }
+            else if (arg == "--performance-detail")
+            {
+                performance_mode = performance::Mode::Detail;
+            }
+            else if (arg == "--performance-file")
+            {
+                if (i + 1 >= argc)
+                    throw std::runtime_error("--performance-file requires a JSON file path");
+                if (!performance_file.empty())
+                    throw std::runtime_error("Repeated --performance-file option");
+                performance_file = argv[++i];
+                if (performance_file.empty())
+                    throw std::runtime_error("--performance-file requires a nonempty path");
+                if (performance_mode == performance::Mode::Off)
+                    performance_mode = performance::Mode::Summary;
+            }
+            else if (arg == "--help" || arg == "-h")
+            {
+                std::cout << "Usage: flare [-par parameters.txt] [--performance] "
+                             "[--performance-detail] [--performance-file report.json]\n"
+                             "  --performance         Report serial wall-clock timings to stderr.\n"
+                             "  --performance-detail  Also time each face reconstruction/Riemann call (higher overhead).\n"
+                             "  --performance-file    Also write JSON; implies --performance.\n";
+                return 0;
+            }
             else
             {
                 throw std::runtime_error("Unknown argument: " + arg);
             }
         }
 
+        performance::configure(performance_mode);
+        performance::Scope run_timer(performance::Section::Run);
+        performance::Scope initialization_timer(performance::Section::Initialization);
         if (parameter_file.empty())
         {
             std::cout<<"Parameter File -par <parameterfile> not given, using default parameters.txt instead\n";
@@ -91,6 +129,11 @@ int main(int argc, char* argv[])
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         auto source_list = hd_source::make_sources(cfg,mesh,hooks);
         double dt_next = std::numeric_limits<double>::infinity();
+        std::uint64_t active_cells = 1;
+        for (int d = 0; d < hd_core::NDIM; ++d)
+            active_cells *= mesh.nactive[d];
+        initialization_timer.stop();
+        performance::Scope evolution_timer(performance::Section::Evolution);
         while(t_current < cfg.t_end)
         {
             if (step_current >= cfg.maxsteps)
@@ -123,14 +166,38 @@ int main(int argc, char* argv[])
                 : t_current + dt;
 
             step_current++;
+            performance::count(performance::Counter::Steps);
+            performance::count(performance::Counter::CellUpdates, active_cells);
 
             io::Output(mesh, cfg, hooks, step_current, t_current, dt);
         }
 
+        evolution_timer.stop();
+        if (performance::enabled()) std::cout.flush();
     }
     catch (const std::exception& error)
     {
         std::cerr << "Error: " << error.what() << '\n';
-        return 1;
+        exit_code = 1;
     }
+    try
+    {
+        performance::report(std::cerr, exit_code == 0);
+        if (performance::enabled() && !performance_file.empty())
+        {
+            std::ofstream report_file(performance_file);
+            if (!report_file)
+                throw std::runtime_error("Cannot open performance report: " + performance_file);
+            performance::write_json(report_file, exit_code == 0);
+            report_file.close();
+            if (!report_file)
+                throw std::runtime_error("Cannot write performance report: " + performance_file);
+        }
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "Error: " << error.what() << '\n';
+        exit_code = 1;
+    }
+    return exit_code;
 }

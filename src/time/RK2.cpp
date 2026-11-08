@@ -4,6 +4,7 @@
  */
 #include "integrator.h"
 #include "core/mesh.h"
+#include "utils/performance.h"
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -45,12 +46,13 @@ namespace hd_time
             double dt
         )
         {
+            performance::Scope timer(performance::Section::StateUpdate);
             if (stage.cells.size() != mesh.cells.size()
                 || stage.nactive != mesh.nactive || stage.nghost != mesh.nghost
                 || rhs.size() != mesh.cells.size())
                 throw std::logic_error("RK2 combination requires matching mesh and RHS layouts");
 
-            auto candidate = mesh;
+            auto candidate = performance::measure(performance::Section::MeshCopy, [&] { return mesh; });
             for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
             {
                 const auto index = mesh.coordinates_active(flat);
@@ -107,14 +109,16 @@ namespace hd_time
 
         for(long long attempt = 0; attempt <= cfg.integrator_retry_max; attempt++)
         {
+            performance::count(performance::Counter::RK2Attempts);
             if (!std::isfinite(dt) || dt <= 0.0
                 || !std::isfinite(time + dt) || time + dt <= time)
                 throw std::runtime_error("RK2 timestep cannot advance time");
-            hd_core::MeshBlock mesh_trial = mesh;
+            auto mesh_trial = performance::measure(performance::Section::MeshCopy, [&] { return mesh; });
             try {
                 add_scaled_rhs(mesh_trial, rhs_0, dt);
             }
             catch (const std::invalid_argument&) {
+                performance::count(performance::Counter::RK2Rejected);
                 dt *= 0.5;
                 continue;
             }
@@ -131,6 +135,7 @@ namespace hd_time
 
             if (cfl_exceeded || source_exceeded)
             {
+                performance::count(performance::Counter::RK2Rejected);
                 // CFL 部分等价于 dt * cfl_desired / actual_cfl，直接除速率避免溢出。
                 // 源项是独立硬限制；只有源项超限时为重试预留余量。
                 const double source_retry_limit = source_exceeded ? 0.9 * source_limit : source_limit;
@@ -148,6 +153,7 @@ namespace hd_time
                 return dt;
             }
             catch (const std::invalid_argument&) {
+                performance::count(performance::Counter::RK2Rejected);
                 dt *= 0.5;
                 continue;
             }

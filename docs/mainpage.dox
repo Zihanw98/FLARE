@@ -67,6 +67,74 @@ RK2 can retry stages: use the supplied mesh and stage time, and avoid committing
 physical state in captured variables during evaluation. The integrators pass the
 source list by const reference, without copying captured data each step.
 
+@section performance_profiling Runtime performance measurements
+
+Rebuild the problem, then enable optional serial wall-clock profiling:
+@code{.sh}
+./flare -par parameters.txt --performance
+./flare -par parameters.txt --performance-detail --performance-file performance.json
+@endcode
+
+With neither option, profiling is disabled: scopes do not read the clock or allocate,
+and no report is printed. The numerical algorithms and output cadence are unchanged.
+`--performance-file PATH` implies summary profiling unless detail mode is selected.
+Paths are relative to the working directory; the parent directory must exist.
+The text report goes to stderr, separately from the existing stdout diagnostics:
+@code{.sh}
+./flare -par parameters.txt --performance > run.log 2> performance.log
+@endcode
+
+Summary mode measures initialization, evolution, time advancement, RHS, hydro,
+face fluxes, flux divergence, sources, boundaries, state updates, mesh copies,
+whole-mesh validation, and output. Detail mode additionally times every face
+reconstruction and Riemann call. Use summary mode for overall throughput;
+the two clock reads and bookkeeping for each detailed scope can noticeably
+perturb a hot loop. Neither mode subtracts estimated instrumentation overhead.
+Measurements are elapsed wall time, including I/O and scheduling delays, not CPU time.
+
+`Inclusive(s)` includes nested instrumented operations. `Self(s)` subtracts those
+child scopes; `Self %` divides self time by the whole run's elapsed time. Sum self
+times, not inclusive times. A section may be called from several parents, and its
+row aggregates those calls. The whole run starts before parameter loading and
+ends after simulation cleanup/stdout flush; CLI parsing and report generation are
+outside it. Evolution includes per-step diagnostics and snapshots. Initialization
+includes mesh/model loading, user initialization, the first boundary fill and
+initial output. The validation row covers instrumented whole-mesh validation;
+per-cell validation inside other operations remains charged to those operations.
+
+Output is split into calls that write snapshots (including their diagnostics and
+user output hook) and calls that only produce diagnostics. It is not a measurement
+of pure disk-writing time, and lowering snapshot frequency does not remove the
+code's per-step diagnostics. A source callback without its own timer is included
+in the self time of `sources`.
+
+Counters record accepted steps, accepted active-cell updates (not RK stages),
+RK2 attempts/rejections, and successful snapshot output calls. Failed/rejected
+work is included in timings; failed scopes still count as calls. A caught simulation
+exception emits a partial report with status `failed` and preserves the failure
+exit code. SIGKILL/abrupt termination cannot produce a final report. JSON contains
+schema_version, status, mode, clock, wall_seconds, counters, and section timings.
+
+`utils/performance.h` provides RAII `performance::Scope` and `measure()` wrappers.
+Use existing section IDs, or add a named enum entry and its label for a new category.
+Scopes must close in reverse construction order, including explicit `stop()` calls.
+The current profiler is serial and not thread-safe; thread-parallel hydro would
+require per-thread accounting, just as its current global wave-speed record does.
+
+Regression checks:
+@code{.sh}
+make -C unit_test -j4 test
+make -C tests/sod_tube -j4
+make -C tests/File_Profile_2D -j4
+make -C tests/CCSN_MESA_day13 -j4
+python3 tests/performance_checks.py
+@endcode
+
+The integration checks use temporary outputs, compare off/summary/detail physics
+files and stdout byte for byte, validate accounting and CLI error handling, and
+write reports under tests/initialization_validation/output/performance. Optional
+`--baseline-dir DIR` also compares binaries named CASE.baseline from before the change.
+
 @section doc_build Building the documentation
 
 Install Doxygen, then run from the repository root:

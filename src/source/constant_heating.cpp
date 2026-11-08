@@ -3,6 +3,7 @@
  * @brief Constant specific heating with an internal-energy timescale limit.
  */
 #include "source.h"
+#include "utils/performance.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -47,6 +48,7 @@ namespace hd_source
         double& dt_limit
     )
     {
+        performance::Scope timer(performance::Section::Heating);
         if (!std::isfinite(heating_rate) || heating_rate < 0.0)
             throw std::invalid_argument("heating_rate must be finite and nonnegative");
         if (heating_rate == 0.0) return;

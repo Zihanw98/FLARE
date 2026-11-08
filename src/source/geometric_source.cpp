@@ -1,4 +1,5 @@
 #include "source.h"
+#include "utils/performance.h"
 namespace hd_source
 {
     SourceTerm make_geometric_source()
@@ -14,6 +15,7 @@ namespace hd_source
         double& dt_limit
     )
     {
+        performance::Scope timer(performance::Section::Geometry);
         if(mesh.geometry==hd_core::Geometry::Spherical)
         {
             
