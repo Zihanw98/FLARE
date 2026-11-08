@@ -6,6 +6,8 @@
 #include "core.h"
 #include "mesh.h"
 #include "limiter.h"
+#include <array>
+#include <vector>
 
 namespace hydro
 {
@@ -14,6 +16,32 @@ namespace hydro
     {
         PCM, ///< Use cell-centered primitive states.
         PLM, ///< Linearly reconstruct primitive states with optional slope limiting.
+    };
+    /** Per-RHS lazy primitive/slope cache. The mesh must remain unchanged during
+     * its lifetime; construct a fresh cache after every boundary fill/stage/retry.
+     * Only stencil cells are converted (unused multidimensional ghost corners
+     * need not contain valid states). Direct reconstruction APIs remain available.
+     */
+    class ReconstructionCache
+    {
+    public:
+        ReconstructionCache(const hd_core::MeshBlock& mesh, Reconstructor method,
+                            Limiter limiter, double beta);
+        std::pair<hd_core::Primitives, hd_core::Primitives> face(
+            int direction, const hd_core::Index& right_index);
+    private:
+        const hd_core::Primitives& primitive(std::size_t flat);
+        const hd_core::Primitives& slope(int direction, std::size_t flat, int coordinate);
+        const hd_core::MeshBlock& mesh_;
+        Reconstructor method_;
+        Limiter limiter_;
+        double beta_;
+        std::vector<hd_core::Primitives> primitives_;
+        std::vector<unsigned char> primitive_ready_;
+        std::array<std::vector<hd_core::Primitives>, hd_core::NDIM> slopes_;
+        std::array<std::vector<unsigned char>, hd_core::NDIM> slope_ready_;
+        std::array<std::vector<double>, hd_core::NDIM> centers_, widths_;
+        std::array<std::size_t, hd_core::NDIM> strides_{};
     };
     /**
      * @brief Select PLM by name, otherwise fall back to PCM.

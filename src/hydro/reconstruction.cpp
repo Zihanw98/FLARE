@@ -7,6 +7,90 @@
 #include <stdexcept>
 namespace hydro
 {
+    ReconstructionCache::ReconstructionCache(const hd_core::MeshBlock& mesh,
+        Reconstructor method, Limiter limiter, double beta)
+        : mesh_(mesh), method_(method), limiter_(limiter), beta_(beta),
+          primitives_(mesh.cells.size()), primitive_ready_(mesh.cells.size(), 0)
+    {
+        if (method != Reconstructor::PCM && method != Reconstructor::PLM)
+            throw std::runtime_error("Invalid Reconstructor");
+        std::size_t stride = 1;
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            strides_[d] = stride;
+            stride *= mesh.ntotal(d);
+        }
+        if (method == Reconstructor::PCM) return;
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            if (mesh.nghost[d] < 2)
+                throw std::runtime_error("PLM Reconstructor requires at least 2 ghost zone for each side");
+            slopes_[d].resize(mesh.cells.size());
+            slope_ready_[d].assign(mesh.cells.size(), 0);
+            centers_[d].resize(mesh.ntotal(d));
+            widths_[d].resize(mesh.ntotal(d));
+            for (int i = 0; i < mesh.ntotal(d); ++i)
+            {
+                centers_[d][i] = mesh.cell_center(d, i);
+                widths_[d][i] = mesh.cell_width(d, i);
+            }
+        }
+    }
+
+    const hd_core::Primitives& ReconstructionCache::primitive(std::size_t flat)
+    {
+        if (!primitive_ready_[flat])
+        {
+            const auto& cell = mesh_.cells[flat];
+            primitives_[flat] = cell.U.to_Primtivies(cell.gamma);
+            primitive_ready_[flat] = 1;
+        }
+        return primitives_[flat];
+    }
+
+    const hd_core::Primitives& ReconstructionCache::slope(int d, std::size_t flat, int coordinate)
+    {
+        if (!slope_ready_[d][flat])
+        {
+            const auto& q = primitive(flat);
+            const auto& ql = primitive(flat - strides_[d]);
+            const auto& qr = primitive(flat + strides_[d]);
+            const double dxl = centers_[d][coordinate] - centers_[d][coordinate - 1];
+            const double dxr = centers_[d][coordinate + 1] - centers_[d][coordinate];
+            for (int k = 0; k < hd_core::NHYDRO; ++k)
+                slopes_[d][flat][k] = limited_slope((q[k]-ql[k])/dxl,
+                    (qr[k]-q[k])/dxr, limiter_, beta_);
+            slope_ready_[d][flat] = 1;
+        }
+        return slopes_[d][flat];
+    }
+
+    std::pair<hd_core::Primitives, hd_core::Primitives> ReconstructionCache::face(
+        int d, const hd_core::Index& right)
+    {
+        if (d < 0 || d >= hd_core::NDIM) throw std::out_of_range("Invalid reconstruction direction");
+        const auto rf = mesh_.flat_index(right);
+        if (right[d] < 1) throw std::out_of_range("Invalid reconstruction left cell");
+        const auto lf = rf - strides_[d];
+        auto wl = primitive(lf), wr = primitive(rf);
+        if (method_ == Reconstructor::PCM) return {wl, wr};
+        if (right[d] < 2 || right[d] + 1 >= mesh_.ntotal(d))
+            throw std::out_of_range("Invalid PLM stencil");
+        const auto& sl = slope(d, lf, right[d] - 1);
+        const auto& sr = slope(d, rf, right[d]);
+        for (int k = 0; k < hd_core::NHYDRO; ++k)
+        {
+            // Preserve the original multiply/divide order for byte compatibility.
+            wl[k] += sl[k] * widths_[d][right[d] - 1] / 2;
+            wr[k] -= sr[k] * widths_[d][right[d]] / 2;
+        }
+        try { wl.validate(mesh_.cells[lf].gamma); }
+        catch (const std::invalid_argument&) { wl = primitive(lf); }
+        try { wr.validate(mesh_.cells[rf].gamma); }
+        catch (const std::invalid_argument&) { wr = primitive(rf); }
+        return {wl, wr};
+    }
+
     Reconstructor parse_reconstructor(const std::string& name)
     {
         if (utils::iequals(name, "PLM"))

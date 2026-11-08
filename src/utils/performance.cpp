@@ -10,6 +10,7 @@
 namespace performance
 {
 Mode mode = Mode::Off;
+RootStatistics exact_roots{};
 std::array<std::uint64_t, counter_count> counters{};
 namespace
 {
@@ -38,6 +39,7 @@ void configure(Mode requested)
     require_closed();
     totals = {};
     counters = {};
+    exact_roots = {};
     mode = requested;
 }
 const std::array<Measurement, section_count>& measurements() noexcept { return totals; }
@@ -81,6 +83,14 @@ void report(std::ostream& out, bool success)
     if (steps && evolution > 0)
         text << "Evolution throughput: " << std::setprecision(2) << steps / evolution
              << " steps/s; " << 1000 * evolution / steps << " ms/step (including output)\n";
+    const auto& roots = exact_roots;
+    if (roots.solves)
+        text << "Exact pressure roots: solves=" << roots.solves
+             << "; mean iterations=" << static_cast<double>(roots.iterations) / roots.solves
+             << "; max=" << roots.max_iterations << "; evaluations=" << roots.evaluations
+             << "; initial guesses=" << roots.initial_guesses << "; Newton=" << roots.newton_steps << "; bisection=" << roots.bisection_steps
+             << "; expansions=" << roots.bracket_expansions << "; vacuum=" << roots.vacuum
+             << "; failures=" << roots.failures << '\n';
     text << "Inclusive includes nested scopes; self excludes them. Self % uses total wall time.\n"
          << "Do not sum inclusive times. Snapshot timing includes its diagnostics and user output.\n";
     if (detailed())
@@ -113,7 +123,22 @@ void write_json(std::ostream& out, bool success)
          << ",\n  \"counters\": {";
     for (std::size_t i = 0; i < counter_count; ++i)
         text << (i ? "," : "") << "\n    \"" << counter_names[i] << "\": " << counters[i];
-    text << "\n  },\n  \"sections\": [";
+    text << "\n  },\n  \"exact_roots\": {";
+    const auto& r = exact_roots;
+    text << "\n    \"solves\": " << r.solves << ",";
+    text << "\n    \"iterations\": " << r.iterations << ",";
+    text << "\n    \"evaluations\": " << r.evaluations << ",";
+    text << "\n    \"initial_guesses\": " << r.initial_guesses << ",";
+    text << "\n    \"newton_steps\": " << r.newton_steps << ",";
+    text << "\n    \"bisection_steps\": " << r.bisection_steps << ",";
+    text << "\n    \"bracket_expansions\": " << r.bracket_expansions << ",";
+    text << "\n    \"vacuum\": " << r.vacuum << ",";
+    text << "\n    \"failures\": " << r.failures << ",";
+    text << "\n    \"max_iterations\": " << r.max_iterations << ",";
+    text << "\n    \"iteration_histogram\": [";
+    for (std::size_t i = 0; i < r.histogram.size(); ++i)
+        text << (i ? ", " : "") << r.histogram[i];
+    text << "]\n  },\n  \"sections\": [";
     bool first = true;
     for (std::size_t i = 0; i < section_count; ++i)
     {

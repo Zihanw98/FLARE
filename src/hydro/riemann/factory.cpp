@@ -21,6 +21,10 @@ namespace hydro
             );
         }
 
+        if (name == "exact_bisection")
+            return std::make_unique<hydro::ExactSolver>(
+                tolerance, max_iterations, hydro::ExactPressureMethod::Bisection);
+
         // 将来实现 HLLSolver、HLLCSolver 后，在这里增加分支。
 
         throw std::invalid_argument(

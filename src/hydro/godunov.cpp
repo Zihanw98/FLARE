@@ -41,6 +41,7 @@ namespace hydro
             face_speed[n].resize(flux[n].faces.size());
         }
         performance::Scope face_timer(performance::Section::Faces);
+        ReconstructionCache reconstruction(mesh, reconstructor, limiter, limiter_beta);
         for (int n = 0; n < hd_core::NDIM; ++n)
         {
             if (nghost[n] < 1)
@@ -68,7 +69,7 @@ namespace hydro
 ;
                 
                 auto [WL,WR] = performance::measure(performance::Section::Reconstruction, [&] {
-                    return Reconstruct(reconstructor,mesh,n,right_index,limiter,limiter_beta);
+                    return reconstruction.face(n, right_index);
                 }, true);
                 // 哨兵值：求解器若忘记写入当前面波速，就报错而不沿用旧值。
                 wave_timestep.face_speed = -1.0;

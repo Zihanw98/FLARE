@@ -135,6 +135,55 @@ files and stdout byte for byte, validate accounting and CLI error handling, and
 write reports under tests/initialization_validation/output/performance. Optional
 `--baseline-dir DIR` also compares binaries named CASE.baseline from before the change.
 
+@subsection optimized_hydro Optimized conversions, reconstruction and exact pressure solves
+
+State conversions compute velocity norms directly from fixed-size state arrays;
+valid conversions no longer allocate temporary vectors. Each hydro RHS owns a fresh
+lazy primitive/slope cache, so neighboring faces reuse cell conversions and PLM
+slopes. Only stencil cells are read; unused multidimensional ghost corners are not
+converted. RK stages/retries get new caches. Nonuniform spacing, per-cell gamma,
+limiters and independent positivity fallbacks retain their previous arithmetic.
+PLM cache storage is approximately `(NDIM+1)*(sizeof(Primitives)+1)` bytes per
+stored cell plus small per-axis geometry arrays; it is released with that RHS.
+
+`riemann_solver = exact` now uses analytic-derivative Newton iteration with a
+positive pressure bracket. Side coefficients are cached per face. A bounded acoustic
+initial guess speeds smooth flow; out-of-bracket/nonfinite proposals and every eighth
+iteration use bisection. Convergence still requires a sign-changing pressure interval
+whose width is at most `riemann_tolerance * upper_pressure`. When a Newton step is
+small, the solver explicitly tests a narrow interval around the trial pressure;
+it does not accept a small residual alone. The original iteration cap, failure
+exceptions, vacuum handling and exact interface sampling remain in force.
+Roundoff-level output changes are expected because the root algorithm changed.
+Use `riemann_solver = exact_bisection` to select the retained original pressure
+algorithm for reproducibility/comparison; no other parameter changes are needed.
+
+Both profiling modes include `exact_roots` statistics (without per-iteration clocks):
+number of gas/gas pressure solves, total/maximum iterations, residual evaluations,
+initial guesses, accepted Newton steps, bisection steps, bracket expansions,
+generated-vacuum solves and failures. Initial guesses plus Newton and bisection
+steps sum to iterations. Residual evaluations include bracketing and convergence
+checks, but exclude the final two wave evaluations used for contact velocity.
+The displayed mean includes all pressure solves, including generated vacuum at
+zero iterations; initially empty sides bypass pressure solving. JSON also includes
+iteration histogram buckets `0, 1-4, 5-8, 9-16, 17-32, 33-64, 65+`.
+
+@code{.sh}
+make -C unit_test -j4 TESTS=optimization
+python3 tests/optimization_checks.py --repeats 3
+# Optional original binaries named CASE.baseline:
+python3 tests/optimization_checks.py --baseline-dir /path/to/baselines
+@endcode
+
+These checks compare bisection output byte for byte when original binaries are
+provided, compare final states at identical physical times for Newton, verify
+finite/nonnegative states and root accounting, and record repeated wall times.
+Velocity errors are scaled by at least the reference maximum sound speed; density
+and pressure errors use the respective reference maximum. Reports are written to
+`tests/initialization_validation/output/optimization`. Timing runs should be serial
+with no concurrent builds or simulations. MESA uses 0.01 physical seconds here;
+this is a short regression/throughput test, not validation of a full explosion.
+
 @section doc_build Building the documentation
 
 Install Doxygen, then run from the repository root:

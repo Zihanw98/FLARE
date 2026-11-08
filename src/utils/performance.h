@@ -22,6 +22,17 @@ enum class Section
 };
 enum class Counter { Steps, CellUpdates, RK2Attempts, RK2Rejected, Snapshots, Count };
 
+// Counts pressure solves (gas/gas faces only), with no per-iteration clocks.
+struct RootStatistics
+{
+    std::uint64_t solves = 0, iterations = 0, evaluations = 0;
+    std::uint64_t initial_guesses = 0, newton_steps = 0, bisection_steps = 0, bracket_expansions = 0;
+    std::uint64_t vacuum = 0, failures = 0, max_iterations = 0;
+    // Iteration buckets: 0, 1-4, 5-8, 9-16, 17-32, 33-64, 65+.
+    std::array<std::uint64_t, 7> histogram{};
+};
+extern RootStatistics exact_roots;
+
 struct Measurement
 {
     std::uint64_t calls = 0;

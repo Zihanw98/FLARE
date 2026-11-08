@@ -13,6 +13,8 @@ namespace hydro
         hd_core::Primitives W;
         double gamma;
     };
+    // Bisection is retained as a numerical/performance reference for tests.
+    enum class ExactPressureMethod { SafeguardedNewton, Bisection };
     /** @brief Exact ideal-gas Riemann solver with gas/vacuum interface handling. */
     class ExactSolver final: public RiemannSolver
     {
@@ -20,12 +22,14 @@ namespace hydro
             /**
              * @brief Construct an exact ideal-gas Riemann solver.
              * @param[in] tolerance Finite positive relative pressure-bracket tolerance.
-             * @param[in] max_iterations Positive maximum number of pressure bisection iterations.
-             * @throws std::invalid_argument If tolerance or iteration count is invalid.
+             * @param[in] max_iterations Positive maximum number of pressure iterations.
+             * @param[in] method Safeguarded Newton (default) or reference bisection.
+             * @throws std::invalid_argument If tolerance, iteration count or method is invalid.
              */
             explicit ExactSolver(
                 double tolerance = 1e-8,
-                int max_iterations = 100
+                int max_iterations = 100,
+                ExactPressureMethod method = ExactPressureMethod::SafeguardedNewton
             );
             /**
              * @brief Solve the ideal-gas Riemann problem and return the stationary-face flux.
@@ -53,5 +57,6 @@ namespace hydro
         private:
         double tolerance_;
         int max_iterations_;
+        ExactPressureMethod method_;
     };
 }

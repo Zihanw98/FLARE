@@ -473,12 +473,13 @@ namespace hd_core
         }
         Conserved W;
         W[RHO] = data[RHO];
-        auto vel = Velocity();
+        double speed_squared = 0.0;
         for(int i=0;i<NDIM;i++)
         {
+            speed_squared += data[VEL(i)] * data[VEL(i)];
             W[MOMDEN(i)] = W[RHO] * data[VEL(i)];
         }
-        W[ENERGY] = data[PRE] / (gamma - 1) + 0.5 * W[RHO] * vel.squared_norm();
+        W[ENERGY] = data[PRE] / (gamma - 1) + 0.5 * W[RHO] * speed_squared;
         W.validate(gamma);
         return W;
     }
@@ -490,12 +491,15 @@ namespace hd_core
         }
         Primitives W;
         W[RHO] = data[RHO];
-        auto vel = Velocity();
+        if (!std::isfinite(data[RHO]) || data[RHO] < 0.0)
+            throw std::invalid_argument("Invalid density");
+        double speed_squared = 0.0;
         for(int i=0;i<NDIM;i++)
         {
             W[VEL(i)] = data[MOMDEN(i)] / W[RHO];
+            speed_squared += W[VEL(i)] * W[VEL(i)];
         }
-        W[PRE] = (gamma - 1) * (data[ENERGY] - 0.5 * W[RHO] * vel.squared_norm());
+        W[PRE] = (gamma - 1) * (data[ENERGY] - 0.5 * W[RHO] * speed_squared);
         W.validate(gamma);
         return W;
     }

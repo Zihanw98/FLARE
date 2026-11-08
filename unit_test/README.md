@@ -19,6 +19,7 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 
 | TESTS 名称 | 检查内容 |
 | --- | --- |
+| `optimization` | 转换无堆分配及原公式逐位一致；非均匀网格所有 limiter 的缓存/直接重构一致；随机 exact 通量和波速对比、近真空、失败统计 |
 | `state` | 原始量/守恒量转换、动能与压力、算术运算、真空、非法状态、各方向物理通量 |
 | `mesh` | flat/Index、active/ghost 偏移、const 访问、非均匀间距、越界与损坏的几何 |
 | `facefield` | 各方向面数量、flat/Index、const 访问、清零、错误分配和越界 |
