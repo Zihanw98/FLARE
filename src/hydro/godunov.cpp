@@ -41,6 +41,7 @@ namespace hydro
             face_speed[n].resize(flux[n].faces.size());
         }
         performance::Scope face_timer(performance::Section::Faces);
+        // A fresh cache per RHS keeps RK stages and retries independent.
         ReconstructionCache reconstruction(mesh, reconstructor, limiter, limiter_beta);
         for (int n = 0; n < hd_core::NDIM; ++n)
         {
@@ -66,8 +67,7 @@ namespace hydro
 
                 const auto gamma_L = cellLeft.gamma;
                 const auto gamma_R = cellRight.gamma;
-;
-                
+
                 auto [WL,WR] = performance::measure(performance::Section::Reconstruction, [&] {
                     return reconstruction.face(n, right_index);
                 }, true);

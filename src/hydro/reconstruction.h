@@ -30,8 +30,9 @@ namespace hydro
         std::pair<hd_core::Primitives, hd_core::Primitives> face(
             int direction, const hd_core::Index& right_index);
     private:
-        const hd_core::Primitives& primitive(std::size_t flat);
-        const hd_core::Primitives& slope(int direction, std::size_t flat, int coordinate);
+        // cell_flat indexes mesh.cells; axis_index is the storage coordinate along direction.
+        const hd_core::Primitives& primitive(std::size_t cell_flat);
+        const hd_core::Primitives& slope(int direction, std::size_t cell_flat, int axis_index);
         const hd_core::MeshBlock& mesh_;
         Reconstructor method_;
         Limiter limiter_;
@@ -41,6 +42,7 @@ namespace hydro
         std::array<std::vector<hd_core::Primitives>, hd_core::NDIM> slopes_;
         std::array<std::vector<unsigned char>, hd_core::NDIM> slope_ready_;
         std::array<std::vector<double>, hd_core::NDIM> centers_, widths_;
+        // Change in the flattened storage offset when moving one cell along each axis.
         std::array<std::size_t, hd_core::NDIM> strides_{};
     };
     /**

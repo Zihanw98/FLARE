@@ -37,58 +37,63 @@ namespace hydro
         }
     }
 
-    const hd_core::Primitives& ReconstructionCache::primitive(std::size_t flat)
+    const hd_core::Primitives& ReconstructionCache::primitive(std::size_t cell_flat)
     {
-        if (!primitive_ready_[flat])
+        if (!primitive_ready_[cell_flat])
         {
-            const auto& cell = mesh_.cells[flat];
-            primitives_[flat] = cell.U.to_Primtivies(cell.gamma);
-            primitive_ready_[flat] = 1;
+            const auto& cell = mesh_.cells[cell_flat];
+            primitives_[cell_flat] = cell.U.to_Primtivies(cell.gamma);
+            primitive_ready_[cell_flat] = 1;
         }
-        return primitives_[flat];
+        return primitives_[cell_flat];
     }
 
-    const hd_core::Primitives& ReconstructionCache::slope(int d, std::size_t flat, int coordinate)
+    const hd_core::Primitives& ReconstructionCache::slope(
+        int direction, std::size_t cell_flat, int axis_index)
     {
-        if (!slope_ready_[d][flat])
+        if (!slope_ready_[direction][cell_flat])
         {
-            const auto& q = primitive(flat);
-            const auto& ql = primitive(flat - strides_[d]);
-            const auto& qr = primitive(flat + strides_[d]);
-            const double dxl = centers_[d][coordinate] - centers_[d][coordinate - 1];
-            const double dxr = centers_[d][coordinate + 1] - centers_[d][coordinate];
+            const auto& center_state = primitive(cell_flat);
+            const auto& left_state = primitive(cell_flat - strides_[direction]);
+            const auto& right_state = primitive(cell_flat + strides_[direction]);
+            const double left_spacing = centers_[direction][axis_index] - centers_[direction][axis_index - 1];
+            const double right_spacing = centers_[direction][axis_index + 1] - centers_[direction][axis_index];
             for (int k = 0; k < hd_core::NHYDRO; ++k)
-                slopes_[d][flat][k] = limited_slope((q[k]-ql[k])/dxl,
-                    (qr[k]-q[k])/dxr, limiter_, beta_);
-            slope_ready_[d][flat] = 1;
+                slopes_[direction][cell_flat][k] = limited_slope((center_state[k]-left_state[k])/left_spacing,
+                    (right_state[k]-center_state[k])/right_spacing, limiter_, beta_);
+            slope_ready_[direction][cell_flat] = 1;
         }
-        return slopes_[d][flat];
+        return slopes_[direction][cell_flat];
     }
 
     std::pair<hd_core::Primitives, hd_core::Primitives> ReconstructionCache::face(
-        int d, const hd_core::Index& right)
+        int direction, const hd_core::Index& right_index)
     {
-        if (d < 0 || d >= hd_core::NDIM) throw std::out_of_range("Invalid reconstruction direction");
-        const auto rf = mesh_.flat_index(right);
-        if (right[d] < 1) throw std::out_of_range("Invalid reconstruction left cell");
-        const auto lf = rf - strides_[d];
-        auto wl = primitive(lf), wr = primitive(rf);
-        if (method_ == Reconstructor::PCM) return {wl, wr};
-        if (right[d] < 2 || right[d] + 1 >= mesh_.ntotal(d))
+        if (direction < 0 || direction >= hd_core::NDIM)
+            throw std::out_of_range("Invalid reconstruction direction");
+        const auto right_flat = mesh_.flat_index(right_index);
+        if (right_index[direction] < 1)
+            throw std::out_of_range("Invalid reconstruction left cell");
+        const auto left_flat = right_flat - strides_[direction];
+        // Face states are copies: extrapolation must not change cached cell centers.
+        auto left_state = primitive(left_flat);
+        auto right_state = primitive(right_flat);
+        if (method_ == Reconstructor::PCM) return {left_state, right_state};
+        if (right_index[direction] < 2 || right_index[direction] + 1 >= mesh_.ntotal(direction))
             throw std::out_of_range("Invalid PLM stencil");
-        const auto& sl = slope(d, lf, right[d] - 1);
-        const auto& sr = slope(d, rf, right[d]);
+        const auto& left_slope = slope(direction, left_flat, right_index[direction] - 1);
+        const auto& right_slope = slope(direction, right_flat, right_index[direction]);
         for (int k = 0; k < hd_core::NHYDRO; ++k)
         {
             // Preserve the original multiply/divide order for byte compatibility.
-            wl[k] += sl[k] * widths_[d][right[d] - 1] / 2;
-            wr[k] -= sr[k] * widths_[d][right[d]] / 2;
+            left_state[k] += left_slope[k] * widths_[direction][right_index[direction] - 1] / 2;
+            right_state[k] -= right_slope[k] * widths_[direction][right_index[direction]] / 2;
         }
-        try { wl.validate(mesh_.cells[lf].gamma); }
-        catch (const std::invalid_argument&) { wl = primitive(lf); }
-        try { wr.validate(mesh_.cells[rf].gamma); }
-        catch (const std::invalid_argument&) { wr = primitive(rf); }
-        return {wl, wr};
+        try { left_state.validate(mesh_.cells[left_flat].gamma); }
+        catch (const std::invalid_argument&) { left_state = primitive(left_flat); }
+        try { right_state.validate(mesh_.cells[right_flat].gamma); }
+        catch (const std::invalid_argument&) { right_state = primitive(right_flat); }
+        return {left_state, right_state};
     }
 
     Reconstructor parse_reconstructor(const std::string& name)

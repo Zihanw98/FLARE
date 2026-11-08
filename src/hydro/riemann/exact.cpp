@@ -21,6 +21,68 @@ namespace hydro
             Left, ///< Left side of the interface.
             Right ///< Right side of the interface.
         };
+        // Aggregate one solve on exit, including failures. No clock reads or allocation.
+        struct RootSolveRecord
+        {
+            std::uint64_t iterations = 0, evaluations = 0;
+            std::uint64_t initial_guesses = 0, newton_steps = 0;
+            std::uint64_t bisection_steps = 0, bracket_expansions = 0;
+            bool failed = true, vacuum = false;
+            ~RootSolveRecord()
+            {
+                if (!performance::enabled()) return;
+                auto& r = performance::exact_roots;
+                ++r.solves;
+                r.iterations += iterations;
+                r.evaluations += evaluations;
+                r.initial_guesses += initial_guesses;
+                r.newton_steps += newton_steps;
+                r.bisection_steps += bisection_steps;
+                r.bracket_expansions += bracket_expansions;
+                r.failures += failed;
+                r.vacuum += vacuum;
+                r.max_iterations = std::max(r.max_iterations, iterations);
+                const auto bin = iterations == 0 ? 0 : iterations <= 4 ? 1 : iterations <= 8 ? 2 :
+                    iterations <= 16 ? 3 : iterations <= 32 ? 4 : iterations <= 64 ? 5 : 6;
+                ++r.histogram[bin];
+            }
+        };
+        // Coefficients are fixed for one gas side throughout a pressure solve.
+        struct PressureWave
+        {
+            double pressure, sound_speed;
+            double shock_a, shock_b;
+            double rarefaction_exponent, rarefaction_coefficient;
+
+            PressureWave(double rho, double reference_pressure, double gamma)
+                : pressure(reference_pressure),
+                  sound_speed(std::sqrt(gamma * pressure / rho)),
+                  shock_a(2 / ((gamma + 1) * rho)),
+                  shock_b((gamma - 1) / (gamma + 1) * pressure),
+                  rarefaction_exponent((gamma - 1) / (2 * gamma)),
+                  rarefaction_coefficient(2 * sound_speed / (gamma - 1)) {}
+
+            // Return {wave value, pressure derivative}, sharing sqrt/pow work.
+            std::pair<double, double> evaluate(double trial_pressure) const
+            {
+                if (trial_pressure > pressure)
+                {
+                    const double root = std::sqrt(shock_a / (trial_pressure + shock_b));
+                    return {
+                        (trial_pressure - pressure) * root,
+                        root * (1 - (trial_pressure - pressure) / (2 * (trial_pressure + shock_b)))
+                    };
+                }
+                const double power = std::pow(trial_pressure / pressure, rarefaction_exponent);
+                return {
+                    rarefaction_coefficient * (power - 1),
+                    trial_pressure > 0
+                        ? rarefaction_coefficient * rarefaction_exponent * power / trial_pressure
+                        : 0
+                };
+            }
+        };
+
         // 非真空气体一侧的最外层波：激波速度或稀疏波头速度。
         /**
          * @brief Compute the outer shock or rarefaction-head speed on one gas side.
@@ -68,7 +130,10 @@ namespace hydro
          * @pre Both input states are valid gas states with positive density and pressure.
          * @throws std::runtime_error If pressure bracketing overflows or bisection does not converge.
          */
-        std::optional<std::pair<double, double>> solve_star(const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,double gamma_L, double gamma_R,double tolerance,int max_iterations,int direction, ExactPressureMethod method);
+        std::optional<std::pair<double, double>> solve_star(
+            const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
+            double gamma_L, double gamma_R, double tolerance,
+            int max_iterations, int direction, ExactPressureMethod method);
         /**
          * @brief Sample a rarefaction wave at the stationary interface.
          * @param[in] K Original non-vacuum primitive state on the chosen side.
@@ -356,77 +421,42 @@ namespace hydro
 
         // }
         
-        std::optional<std::pair<double, double>> solve_star(const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,double gamma_L, double gamma_R,double tolerance,int max_iterations,int direction, ExactPressureMethod method)
+        // The optimized path uses cached wave coefficients and analytic derivatives.
+        std::optional<std::pair<double, double>> solve_star_newton(
+            const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
+            double gamma_L, double gamma_R, double tolerance,
+            int max_iterations, int direction)
         {
-            // Aggregate once per solve, including exception paths. No clock or allocation.
-            struct Record
-            {
-                std::uint64_t iterations = 0, evaluations = 0, initial = 0, newton = 0, bisect = 0, expansions = 0;
-                bool failed = true, vacuum = false;
-                ~Record()
-                {
-                    if (!performance::enabled()) return;
-                    auto& r = performance::exact_roots;
-                    ++r.solves; r.iterations += iterations; r.evaluations += evaluations;
-                    r.initial_guesses += initial; r.newton_steps += newton; r.bisection_steps += bisect;
-                    r.bracket_expansions += expansions; r.failures += failed; r.vacuum += vacuum;
-                    r.max_iterations = std::max(r.max_iterations, iterations);
-                    const auto bin = iterations == 0 ? 0 : iterations <= 4 ? 1 : iterations <= 8 ? 2 :
-                        iterations <= 16 ? 3 : iterations <= 32 ? 4 : iterations <= 64 ? 5 : 6;
-                    ++r.histogram[bin];
-                }
-            } record;
-            struct Wave
-            {
-                double p, c, a, b, exponent, coefficient;
-                Wave(double rho, double pressure, double gamma)
-                    : p(pressure), c(std::sqrt(gamma * p / rho)),
-                      a(2 / ((gamma + 1) * rho)), b((gamma - 1) / (gamma + 1) * p),
-                      exponent((gamma - 1) / (2 * gamma)), coefficient(2 * c / (gamma - 1)) {}
-                // Value and analytic derivative share sqrt/pow work.
-                std::pair<double, double> evaluate(double x) const
-                {
-                    if (x > p)
-                    {
-                        const double root = std::sqrt(a / (x + b));
-                        return {(x - p) * root, root * (1 - (x - p) / (2 * (x + b)))};
-                    }
-                    const double power = std::pow(x / p, exponent);
-                    return {coefficient * (power - 1), x > 0 ? coefficient * exponent * power / x : 0};
-                }
-            };
+            RootSolveRecord record;
             const double rho_L = W_L[hd_core::RHO], rho_R = W_R[hd_core::RHO];
             const double pre_L = W_L[hd_core::PRE], pre_R = W_R[hd_core::PRE];
             const double v_nL = W_L[hd_core::VEL(direction)], v_nR = W_R[hd_core::VEL(direction)];
-            const Wave left(rho_L, pre_L, gamma_L), right(rho_R, pre_R, gamma_R);
-            const bool legacy = method == ExactPressureMethod::Bisection;
+            const PressureWave left(rho_L, pre_L, gamma_L), right(rho_R, pre_R, gamma_R);
             auto residual = [&](double p) {
                 ++record.evaluations;
-                if (legacy) return std::pair<double, double>{
-                    wave_condition(p, rho_L, pre_L, gamma_L) +
-                    wave_condition(p, rho_R, pre_R, gamma_R) + v_nR - v_nL, 0};
                 const auto l = left.evaluate(p), r = right.evaluate(p);
                 return std::pair<double, double>{l.first + r.first + v_nR - v_nL, l.second + r.second};
             };
             if (residual(0).first >= 0)
             {
-                record.failed = false; record.vacuum = true;
+                record.failed = false;
+                record.vacuum = true;
                 return std::nullopt;
             }
             double low = 0, high = std::max(pre_L, pre_R);
             while (residual(high).first < 0)
             {
                 high *= 2;
-                ++record.expansions;
-                if (!std::isfinite(high)) throw std::runtime_error("ExactSolver: pressure bracket overflow");
+                ++record.bracket_expansions;
+                if (!std::isfinite(high))
+                    throw std::runtime_error("ExactSolver: pressure bracket overflow");
             }
             double p = (low + high) / 2;
-            if (!legacy)
             {
                 // Acoustic (PVRS) estimate is inexpensive and accurate for smooth flow.
                 // It is only a starting guess; all iterates still use the exact equation.
                 const double guess = 0.5 * (pre_L + pre_R) - 0.125 * (v_nR - v_nL) *
-                    (rho_L + rho_R) * (left.c + right.c);
+                    (rho_L + rho_R) * (left.sound_speed + right.sound_speed);
                 if (std::isfinite(guess) && guess > low && guess <= high) p = guess;
             }
             bool current_is_newton = false;
@@ -434,19 +464,21 @@ namespace hydro
             for (int iteration = 0; iteration < max_iterations; ++iteration)
             {
                 ++record.iterations;
-                if (iteration == 0) ++record.initial;
-                else if (current_is_newton) ++record.newton;
-                else ++record.bisect;
+                if (iteration == 0) ++record.initial_guesses;
+                else if (current_is_newton) ++record.newton_steps;
+                else ++record.bisection_steps;
                 const auto [f, derivative] = residual(p);
-                if (!std::isfinite(f)) throw std::runtime_error("ExactSolver: nonfinite pressure residual");
-                if (f > 0) high = p; else low = p;
+                if (!std::isfinite(f))
+                    throw std::runtime_error("ExactSolver: nonfinite pressure residual");
+                if (f > 0) high = p;
+                else low = p;
                 if (high - low <= high * tolerance)
                 {
                     converged = true;
                     break;
                 }
-                const double correction = legacy ? 0 : f / derivative;
-                if (!legacy && std::isfinite(correction) && std::abs(correction) <= p * tolerance)
+                const double correction = f / derivative;
+                if (std::isfinite(correction) && std::abs(correction) <= p * tolerance)
                 {
                     // Certify a narrow sign-changing bracket: a small Newton step alone
                     // is insufficient near vacuum or when cancellation masks the residual.
@@ -455,15 +487,19 @@ namespace hydro
                     if (lo > 0 && residual(lo).first <= 0 && residual(hi).first >= 0 &&
                         hi - lo <= hi * tolerance)
                     {
-                        low = lo; high = hi; converged = true; break;
+                        low = lo;
+                        high = hi;
+                        converged = true;
+                        break;
                     }
                 }
                 const double candidate = p - correction;
                 // Force a bisection periodically to bound stagnation for difficult states.
-                if (!legacy && iteration % 8 != 7 && std::isfinite(candidate) &&
+                if (iteration % 8 != 7 && std::isfinite(candidate) &&
                     candidate > low && candidate < high)
                 {
-                    p = candidate; current_is_newton = true;
+                    p = candidate;
+                    current_is_newton = true;
                 }
                 else
                 {
@@ -471,13 +507,85 @@ namespace hydro
                     current_is_newton = false;
                 }
             }
-            if (!converged) throw std::runtime_error("ExactSolver: star pressure did not converge");
+            if (!converged)
+                throw std::runtime_error("ExactSolver: star pressure did not converge");
             const double pre_star = (high + low) / 2;
-            const double f_left = legacy ? wave_condition(pre_star, rho_L, pre_L, gamma_L) : left.evaluate(pre_star).first;
-            const double f_right = legacy ? wave_condition(pre_star, rho_R, pre_R, gamma_R) : right.evaluate(pre_star).first;
+            const double f_left = left.evaluate(pre_star).first;
+            const double f_right = right.evaluate(pre_star).first;
             const double v_nstar = (v_nL - f_left + v_nR + f_right) / 2;
             record.failed = false;
             return std::pair<double, double>{pre_star, v_nstar};
+        }
+
+        // Keep the reference arithmetic and evaluation order for byte reproducibility.
+        // This separate loop needs neither derivative evaluation nor Newton safeguards.
+        std::optional<std::pair<double, double>> solve_star_bisection(
+            const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
+            double gamma_L, double gamma_R, double tolerance,
+            int max_iterations, int direction)
+        {
+            RootSolveRecord record;
+            const double rho_L = W_L[hd_core::RHO], rho_R = W_R[hd_core::RHO];
+            const double pre_L = W_L[hd_core::PRE], pre_R = W_R[hd_core::PRE];
+            const double v_nL = W_L[hd_core::VEL(direction)], v_nR = W_R[hd_core::VEL(direction)];
+            auto residual = [&](double p) {
+                ++record.evaluations;
+                return wave_condition(p, rho_L, pre_L, gamma_L) +
+                    wave_condition(p, rho_R, pre_R, gamma_R) + v_nR - v_nL;
+            };
+            if (residual(0) >= 0)
+            {
+                record.failed = false;
+                record.vacuum = true;
+                return std::nullopt;
+            }
+            double low = 0, high = std::max(pre_L, pre_R);
+            while (residual(high) < 0)
+            {
+                high *= 2;
+                ++record.bracket_expansions;
+                if (!std::isfinite(high))
+                    throw std::runtime_error("ExactSolver: pressure bracket overflow");
+            }
+            double p = (low + high) / 2;
+            bool converged = false;
+            for (int iteration = 0; iteration < max_iterations; ++iteration)
+            {
+                ++record.iterations;
+                if (iteration == 0) ++record.initial_guesses;
+                else ++record.bisection_steps;
+                const double f = residual(p);
+                if (!std::isfinite(f))
+                    throw std::runtime_error("ExactSolver: nonfinite pressure residual");
+                if (f > 0) high = p;
+                else low = p;
+                if (high - low <= high * tolerance)
+                {
+                    converged = true;
+                    break;
+                }
+                p = (low + high) / 2;
+            }
+            if (!converged)
+                throw std::runtime_error("ExactSolver: star pressure did not converge");
+            const double pre_star = (high + low) / 2;
+            const double f_left = wave_condition(pre_star, rho_L, pre_L, gamma_L);
+            const double f_right = wave_condition(pre_star, rho_R, pre_R, gamma_R);
+            const double v_nstar = (v_nL - f_left + v_nR + f_right) / 2;
+            record.failed = false;
+            return std::pair<double, double>{pre_star, v_nstar};
+        }
+
+        std::optional<std::pair<double, double>> solve_star(
+            const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
+            double gamma_L, double gamma_R, double tolerance,
+            int max_iterations, int direction, ExactPressureMethod method)
+        {
+            if (method == ExactPressureMethod::Bisection)
+                return solve_star_bisection(W_L, W_R, gamma_L, gamma_R,
+                                            tolerance, max_iterations, direction);
+            return solve_star_newton(W_L, W_R, gamma_L, gamma_R,
+                                     tolerance, max_iterations, direction);
         }
 
         /**
