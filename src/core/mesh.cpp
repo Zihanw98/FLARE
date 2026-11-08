@@ -3,8 +3,10 @@
  * @brief Physical states and mesh storage.
  */
 #include "mesh.h"
+#include "table.h"
 #include "utils.h"
 #include "config.h"
+#include "read_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -63,7 +65,7 @@ namespace
 
         return result;  
     }
-    void MeshBlock::build_mesh(const config::SimulationConfig& cfg)
+    void MeshBlock::build_mesh(config::SimulationConfig& cfg)
     {
         nactive = cfg.nactive;
         nghost = cfg.nghost;
@@ -75,7 +77,53 @@ namespace
         }
         if(cfg.init_mesh_from_file)
         {
+            config::Table table = config::read_table(cfg.init_mesh_file_name);
+            std::array<std::string,3> axis; 
+            switch (geometry)
+            {
+                case Geometry::Cartesian:
+                    axis = {"x","y","z"};
+                    break;
+                case Geometry::Spherical:
+                    axis = {"r","theta","phi"};
+                    break;
+                case Geometry::Cylindrical:
+                    axis = {"r","theta","z"};
+                    break;
+                default:
+                    break;
+            }
+            for(int d=0;d<NDIM;d++)
+            {
+                auto axis_name = axis[d];
+                auto active_faces = table.column(axis_name);
+                if(active_faces.size() - 1 != nactive[d])
+                {
+                    throw std::runtime_error("Mesh Initializing File Error: Axis" + std::to_string(d) + ", Number of faces incosistent with nactive in config file");
+                }
+                const int count = ntotal(d);
+                validate_axis(active_faces, nactive[d]);  // monotonic increasing is checked.
 
+                const int first = nghost[d];            // In cell it's the index of first active cell, and hence the lower face of first active cell.
+                const int last = first + nactive[d];    // In cell it's the index of first right ghost cell, and for faces it's the lower face of that cell, hence the upper face of last active cell. 
+                std::vector<double> coordinates(static_cast<std::size_t>(count) + 1);
+                std::copy(active_faces.begin(), active_faces.end(), coordinates.begin() + first);
+                //last - first + 1 faces are filled, i.e. nactive = 1
+
+                const double dx_left  = coordinates[first + 1] - coordinates[first];
+                const double dx_right = coordinates[last] - coordinates[last - 1];
+
+                for (int g = 1; g <= nghost[d]; g++)
+                {
+                    coordinates[first - g] = std::fma(-static_cast<double>(g), dx_left,  coordinates[first]);
+                    coordinates[last + g]  = std::fma( static_cast<double>(g), dx_right, coordinates[last]);
+                }
+                //finally we got 2nghost + nactive + 1, which is ntotal +1
+                validate_axis(coordinates, count);
+                face[d].swap(coordinates);
+                cfg.lower[d] = face[d][first];
+                cfg.upper[d] = face[d][last];
+            }
         }
         else
         {
@@ -102,6 +150,10 @@ namespace
         }
         allocate(); // Validates coordinates and geometry before allocating cells.
         build_geometry();
+        if (cfg.init_mesh_from_file && cfg.init_profile_from_file)
+        {
+            config::read_profile(cfg.init_profile_file_name, *this);
+        }
     }
     void MeshBlock::build_geometry()
     {
@@ -209,8 +261,8 @@ namespace
             throw std::invalid_argument("Invalid uniform grid spacing");
 
         std::vector<double> coordinates(static_cast<std::size_t>(count) + 1);
-        const auto first = static_cast<std::size_t>(nghost[d]);
-        const auto last = first + static_cast<std::size_t>(nactive[d]);
+        const auto first = static_cast<std::size_t>(nghost[d]);     // In cell it's the index of first active cell, and hence the lower face of first active cell.
+        const auto last = first + static_cast<std::size_t>(nactive[d]);     // In cell it's the index of first right ghost cell, and for faces it's the lower face of that cell, hence the upper face of last active cell. 
         for (std::size_t j = 0; j < coordinates.size(); ++j)
         {
             if (j == first)
@@ -220,6 +272,7 @@ namespace
             else
                 coordinates[j] = std::fma(static_cast<double>(j) - nghost[d], width, lower);
         }
+        //nactive +1 +2nghost faces are set.
         // Detect overflow in ghost coordinates or collapsed faces due to rounding.
         validate_axis(coordinates, count);
         face[d].swap(coordinates); // Leave previous geometry unchanged on failure.

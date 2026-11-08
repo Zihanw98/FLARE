@@ -316,7 +316,7 @@ namespace hd_core
             bool active = false
         ) const;
 
-        void build_mesh(const config::SimulationConfig& cfg);
+        void build_mesh(config::SimulationConfig& cfg);
 
         /**
          * @brief Allocate and recompute volume_cell and face_area from current faces.

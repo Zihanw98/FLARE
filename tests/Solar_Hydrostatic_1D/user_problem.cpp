@@ -153,6 +153,12 @@ struct Model
     }
 } model;
 
+void initialize_units(physcon::Unit& units, const config::SimulationConfig&)
+{
+    units.init_unitsystem_MLT(solar_gm/physcon::G_, solar_radius,
+        std::sqrt(std::pow(solar_radius,3)/solar_gm),1.0);
+}
+
 void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
 {
     if (mesh.geometry!=hd_core::Geometry::Spherical || cfg.lower[0]!=0.0 ||
@@ -164,8 +170,6 @@ void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
         std::abs(cfg.gamma-5.0/3.0)>1e-12)
         throw std::invalid_argument("Solar model requires a full spherical star, self gravity, gamma=5/3, and no external force/heating");
 
-    physcon::units.init_unitsystem_MLT(solar_gm/physcon::G_, solar_radius,
-        std::sqrt(std::pow(solar_radius,3)/solar_gm),1.0);
     model.build(mesh.face[0].back());
     for (int i=mesh.nghost[0]; i<mesh.ntotal(0); ++i)
     {
@@ -210,6 +214,7 @@ void outer_boundary(hd_core::MeshBlock& mesh, double, int direction,
 hd_user::UserHooks hd_user::make_user_hooks()
 {
     UserHooks hooks;
+    hooks.initialize_units=initialize_units;
     hooks.initialize=initialize;
     hooks.userbc=outer_boundary;
     return hooks;

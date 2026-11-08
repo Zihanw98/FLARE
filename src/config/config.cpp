@@ -182,6 +182,18 @@ namespace config
             }},
             {"init_profile_file_name",[&cfg](const std::string& v){
                 cfg.init_profile_file_name = v;
+            }},
+            {"init_from_mesa_profile",[&cfg](const std::string& v){
+                cfg.init_from_mesa_profile = parse_value<bool>(v);
+            }},
+            {"init_mesa_profile_name",[&cfg](const std::string& v){
+                cfg.init_mesa_profile_name = v;
+            }},
+            {"mesa_radius_inner",[&cfg](const std::string& v){
+                cfg.mesa_radius_inner = parse_value<double>(v);
+            }},
+            {"mesa_radius_outer",[&cfg](const std::string& v){
+                cfg.mesa_radius_outer = parse_value<double>(v);
             }}
         };
 
@@ -284,32 +296,35 @@ namespace config
                     "Missing required parameter: " + key
                 );
         };
+        if (cfg.init_from_mesa_profile && hd_core::NDIM != 1)
+            throw std::runtime_error("Building a MESA radial mesh requires HD_NDIM=1");
         constexpr std::array<const char*, 3> axes{"x", "y", "z"};
         for(int d=0; d< hd_core::NDIM; d++)
         {
             const std::string axis = axes[d];
-            require("n" + axis + "a");       //active zone required
+            // The MESA builder derives the active count and bounds from the profile faces.
+            if (!cfg.init_from_mesa_profile)
+            {
+                require("n" + axis + "a");
+                if (cfg.nactive[d] <= 0)
+                    throw std::runtime_error("n" + axis + "a must be > 0");
+            }
             require("n" + axis + "g");
-            require(axis + "_upper" );
-            require(axis + "_lower");
-            if (cfg.nactive[d] <= 0)
-                throw std::runtime_error(
-                    "n" + axis + "a must be > 0"
-                );
-
+            if (!cfg.init_mesh_from_file && !cfg.init_from_mesa_profile)
+            {
+                require(axis + "_upper" );
+                require(axis + "_lower");
+                if (!std::isfinite(cfg.lower[d]) || !std::isfinite(cfg.upper[d]) || cfg.upper[d] <= cfg.lower[d])
+                {
+                    throw std::runtime_error(
+                        axis + " bounds must be finite and upper > lower"
+                    );
+                }
+            }
             if (cfg.nghost[d] < 1)
                 throw std::runtime_error(
                     "n" + axis + "g must be >= 1"
                 );
-
-            if (!std::isfinite(cfg.lower[d]) ||
-                !std::isfinite(cfg.upper[d]) ||
-                cfg.upper[d] <= cfg.lower[d])
-            {
-                throw std::runtime_error(
-                    axis + " bounds must be finite and upper > lower"
-                );
-            }
             const bool& bc_upper_periodic = utils::iequals(cfg.boundary_upper[d],"periodic");
             const bool& bc_lower_periodic = utils::iequals(cfg.boundary_lower[d],"periodic");
             if(bc_upper_periodic!=bc_lower_periodic)

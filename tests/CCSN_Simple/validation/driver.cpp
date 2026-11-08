@@ -98,12 +98,14 @@ int main(int argc,char** argv)
         injection_energy_erg=std::stod(argv[4]);
         auto cfg=config::ReadParameters(argv[1]);
         cfg.output_step_every=1;
+        auto hooks=hd_user::make_user_hooks();
+        if (hooks.initialize_units)
+            hooks.initialize_units(physcon::units,cfg);
         hd_core::MeshBlock mesh;
         mesh.build_mesh(cfg);
         auto solver=hydro::make_riemann_solver(cfg.riemann_solver,cfg.riemann_tolerance,cfg.riemann_max_iterations);
         const auto spatial=hydro::parse_spatial_scheme("Godunov");
         const auto integrator=hd_time::parse_time_integrator(cfg.time_integrator);
-        auto hooks=hd_user::make_user_hooks();
         hooks.initialize(mesh,cfg);
         boundary::FillBoundary(mesh,0,hooks);
         auto sources=hd_source::make_sources(cfg,mesh,hooks);

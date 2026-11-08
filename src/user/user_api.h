@@ -23,6 +23,12 @@ namespace config
 
 namespace hd_user
 {
+    /**
+     * @brief Optional callback run once after parameter parsing and before any mesh or profile is read.
+     * @param[in,out] units Simulation unit system. Select scales with init_unitsystem_MLT or init_unitsystem_RHOLV.
+     * @param[in] cfg Parsed input parameters. Profile-derived mesh bounds and counts are populated later.
+     */
+    using UnitInitializer = void (*)(physcon::Unit& units, const config::SimulationConfig& cfg);
     /** @brief Problem callback that initializes cell states and their adiabatic indices. */
     using Initializer = void (*)(
         hd_core::MeshBlock&,
@@ -53,6 +59,7 @@ namespace hd_user
         UserBoundaryCondition userbc = nullptr;
         UserOutput useroutput = nullptr;
         RegisterSources register_sources = nullptr;
+        UnitInitializer initialize_units = nullptr;
     };
     // void register_sources(/* 配置、网格、sources */)
     // {

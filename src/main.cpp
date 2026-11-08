@@ -6,6 +6,7 @@
 #include "boundary/boundary.h"
 #include "source/source.h"
 #include "io/output.h"
+#include "config/read_mesa_profile.h"
 #include <cstddef>
 #include <exception>
 #include <iostream>
@@ -51,12 +52,24 @@ int main(int argc, char* argv[])
             std::cout<<"Parameter File -par <parameterfile> not given, using default parameters.txt instead\n";
             parameter_file = "parameters.txt";
         }
-        const auto cfg = config::ReadParameters(parameter_file);
+        auto cfg_temp = config::ReadParameters(parameter_file);
         std::cout << "Loaded parameters from: "
                   << parameter_file << '\n';
+        auto hooks = hd_user::make_user_hooks();
+        if (hooks.initialize_units)
+            hooks.initialize_units(physcon::units, cfg_temp);
         hd_core::MeshBlock mesh;
-        mesh.build_mesh(cfg);
-        
+        if(cfg_temp.init_from_mesa_profile)
+        {
+            config::MesaProfile mesaprofile = config::read_mesa_profile(cfg_temp.init_mesa_profile_name,cfg_temp.mesa_radius_inner,cfg_temp.mesa_radius_outer,"linear",100,100);
+            mesh = config::build_mesh_from_mesa_profile(mesaprofile,cfg_temp,true);
+        }
+        else
+        {
+            mesh.build_mesh(cfg_temp);
+        }
+
+        const auto cfg = cfg_temp;
         auto solver = hydro::make_riemann_solver(cfg.riemann_solver,cfg.riemann_tolerance,cfg.riemann_max_iterations);
 
         //In the future, if the simulation doesn't require a riemann solver, use a if/switch branch to avoid creating a default solver
@@ -65,7 +78,6 @@ int main(int argc, char* argv[])
 
         auto integrator = hd_time::parse_time_integrator(cfg.time_integrator);
 
-        auto hooks = hd_user::make_user_hooks();
         if(!hooks.initialize)
         {
             throw std::runtime_error("User initializer is not registered");

@@ -75,6 +75,12 @@ namespace config
         bool init_profile_from_file = false;
         std::string init_profile_file_name = "";
 
+        bool init_from_mesa_profile = false;
+        std::string init_mesa_profile_name = "";
+
+        double mesa_radius_outer = -1.0;
+        double mesa_radius_inner = -1.0;
+
     };
     /**
      * @brief Read and validate a key=value simulation parameter file.

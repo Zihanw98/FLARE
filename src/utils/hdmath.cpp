@@ -6,6 +6,8 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <vector>
+#include <array>
 #include <utility>
 
 namespace hdmath
@@ -147,4 +149,49 @@ Vector Vector::slice(std::size_t start, std::size_t stop) const
 
     return result;
 }
+    double interp_linear(const std::vector<double>& value,
+                        const std::vector<double>& grid,
+                        const std::vector<double>& interp_pos,
+                        int ndim)
+    {
+        if (ndim < 1 || ndim > 3)
+            throw std::invalid_argument("interp_linear: ndim must be 1, 2, or 3");
+
+        const auto dim = static_cast<std::size_t>(ndim);
+        const std::size_t npoints = std::size_t{1} << dim;
+
+        if (value.size() != npoints || grid.size() != 2 * dim ||
+            interp_pos.size() != dim)
+            throw std::invalid_argument("interp_linear: invalid input size");
+
+        // t[d] 是查询点沿第 d 个方向从低端到高端的相对位置。
+        std::array<double, 3> t{};
+        for (std::size_t d = 0; d < dim; ++d)
+        {
+            const double lo = grid[2 * d];
+            const double hi = grid[2 * d + 1];
+            const double width = hi - lo;
+            const double pos = interp_pos[d];
+
+            if (!std::isfinite(width) || width <= 0.0)
+                throw std::invalid_argument("interp_linear: invalid grid interval");
+            if (!std::isfinite(pos) || pos < lo || pos > hi)
+                throw std::out_of_range("interp_linear: point outside grid cell");
+
+            t[d] = (pos - lo) / width;
+        }
+
+        double result = 0.0;
+        for (std::size_t corner = 0; corner < npoints; ++corner)
+        {
+            double W = 1.0;
+            for (std::size_t d = 0; d < dim; ++d)
+            {
+                const bool high = ((corner >> d) & 1u) != 0;
+                W *= high ? t[d] : (1.0 - t[d]);
+            }
+            result += W * value[corner];
+        }
+        return result;
+    }
 } // namespace hdmath

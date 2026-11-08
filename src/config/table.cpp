@@ -9,8 +9,8 @@
 namespace config
 {
     Table read_table(const std::string& filename,
-                    std::size_t skip_rows = 0,
-                    bool has_header = true)
+                    std::size_t skip_rows,
+                    bool has_header)
     {
         std::ifstream file(filename);
         if(!file.is_open())
@@ -46,7 +46,18 @@ namespace config
             std::vector<double> row;
             double value;
 
-            while (fields >> value) {
+            std::string token;
+            while (fields >> token)
+            {
+                const auto pos = token.find_first_of("Dd");
+                if (pos != std::string::npos)
+                    token[pos] = 'E';
+
+                std::istringstream number(token);
+                double value;
+                if (!(number >> value) || !number.eof())
+                    throw std::runtime_error("Invalid number '" + token + "' in " + filename);
+
                 row.push_back(value);
             }
 
@@ -61,5 +72,21 @@ namespace config
             table.data.push_back(std::move(row));
         }
         return table;
+    }
+    std::vector<double> Table::column(const std::string& name) const {
+        auto it = std::find(headers.begin(), headers.end(), name);
+        if (it == headers.end()) {
+            throw std::runtime_error("Column not found: " + name);
+        }
+
+        const auto index =
+            static_cast<std::size_t>(std::distance(headers.begin(), it));
+
+        std::vector<double> values;
+        values.reserve(data.size());
+        for (const auto& row : data) {
+            values.push_back(row.at(index));
+        }
+        return values;
     }
 }
