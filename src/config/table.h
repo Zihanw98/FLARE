@@ -1,7 +1,7 @@
 #pragma once
-#include "core.h"
-#include "config.h"
+#include <cstddef>
 #include <string>
+#include <vector>
 namespace config
 {
     struct Table

@@ -66,7 +66,8 @@ namespace config
      *            velocity to code units and construct each populated cell with cfg.gamma.
      *            If false, allocate default cells and skip the parameter table entirely.
      * @pre Build with HD_NDIM=1. Use the same unit system as when the profile was read.
-     * @return A mesh with extrapolated ghost faces, shell volumes and face areas. Ghost and
+     * @return A mesh with mirrored ghost faces at reflective boundaries and linearly
+     *         extrapolated ghost faces elsewhere, shell volumes and face areas. Ghost and
      *         exterior padding cells retain their default state for the caller to fill.
      * @note Each populated cell takes the velocity in its own MESA row (the outer-face value).
      * @throws std::invalid_argument If the dimension, geometry data, units or gas state is invalid.

@@ -1,0 +1,27 @@
+# Nonuniform tensor-product mesh and cell-average primitives, all in code units.
+geometry = Cartesian
+nxa = 32
+nya = 32
+nxg = 2
+nyg = 2
+init_mesh_from_file = true
+init_mesh_file_name = mesh.dat
+init_profile_from_file = true
+init_profile_file_name = profile.dat
+gamma = 1.4
+boundary_x_lower = periodic
+boundary_x_upper = periodic
+boundary_y_lower = periodic
+boundary_y_upper = periodic
+t_end = 0.25
+cfl = 0.35
+maxsteps = 20000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
+output_step_every = 20
+output_directory = output
+output_suffix = file_profile

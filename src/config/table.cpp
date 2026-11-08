@@ -1,4 +1,5 @@
 #include "table.h"
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -44,8 +45,6 @@ namespace config
         {
             std::istringstream fields(line);
             std::vector<double> row;
-            double value;
-
             std::string token;
             while (fields >> token)
             {

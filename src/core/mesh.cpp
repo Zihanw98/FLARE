@@ -112,11 +112,19 @@ namespace
 
                 const double dx_left  = coordinates[first + 1] - coordinates[first];
                 const double dx_right = coordinates[last] - coordinates[last - 1];
+                const bool reflect_left = bc_lower[d] == boundary::BoundaryCondition::Reflective;
+                const bool reflect_right = bc_upper[d] == boundary::BoundaryCondition::Reflective;
+                if ((reflect_left || reflect_right) && nghost[d] > nactive[d])
+                    throw std::invalid_argument("Mirror boundary requires nghost <= nactive");
 
                 for (int g = 1; g <= nghost[d]; g++)
                 {
-                    coordinates[first - g] = std::fma(-static_cast<double>(g), dx_left,  coordinates[first]);
-                    coordinates[last + g]  = std::fma( static_cast<double>(g), dx_right, coordinates[last]);
+                    coordinates[first - g] = reflect_left
+                        ? coordinates[first] - (coordinates[first + g] - coordinates[first])
+                        : std::fma(-static_cast<double>(g), dx_left, coordinates[first]);
+                    coordinates[last + g] = reflect_right
+                        ? coordinates[last] + (coordinates[last] - coordinates[last - g])
+                        : std::fma(static_cast<double>(g), dx_right, coordinates[last]);
                 }
                 //finally we got 2nghost + nactive + 1, which is ntotal +1
                 validate_axis(coordinates, count);
@@ -150,10 +158,15 @@ namespace
         }
         allocate(); // Validates coordinates and geometry before allocating cells.
         build_geometry();
-        if (cfg.init_mesh_from_file && cfg.init_profile_from_file)
+        if (cfg.init_profile_from_file)
         {
             config::read_profile(cfg.init_profile_file_name, *this);
         }
+    }
+    void MeshBlock::build_mesh(const config::SimulationConfig& cfg)
+    {
+        auto resolved = cfg;
+        build_mesh(resolved);
     }
     void MeshBlock::build_geometry()
     {

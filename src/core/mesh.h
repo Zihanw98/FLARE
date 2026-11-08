@@ -317,6 +317,8 @@ namespace hd_core
         ) const;
 
         void build_mesh(config::SimulationConfig& cfg);
+        // Compatibility overload: a const configuration cannot receive file-derived bounds.
+        void build_mesh(const config::SimulationConfig& cfg);
 
         /**
          * @brief Allocate and recompute volume_cell and face_area from current faces.

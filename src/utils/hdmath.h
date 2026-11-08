@@ -189,5 +189,6 @@ namespace hdmath
      */
     Vector operator*(double scalar, const Vector& vector);
 
-    double interp_linear(std::vector<double> value, std::vector<double> grid, std::vector<double> interp_pos, int ndim);
+    double interp_linear(const std::vector<double>& value, const std::vector<double>& grid,
+                         const std::vector<double>& interp_pos, int ndim);
 } // namespace hdmath

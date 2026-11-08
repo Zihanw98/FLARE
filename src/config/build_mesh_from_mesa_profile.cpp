@@ -79,13 +79,24 @@ hd_core::MeshBlock build_mesh_from_mesa_profile(const MesaProfile& profile,
     const int last = first + mesh.nactive[0]; // Outer active face.
     std::copy(radii.begin(), radii.end(), faces.begin() + first);
 
-    // Continue each boundary shell's linear width through its own ghost region.
+    // Reflecting states need reflecting geometry as well: PLM uses distances
+    // to both neighbouring centres. Repeating only the boundary width on a
+    // nonuniform grid breaks the wall symmetry and can leak mass/energy.
+    const bool reflect_inner = mesh.bc_lower[0] == boundary::BoundaryCondition::Reflective;
+    const bool reflect_outer = mesh.bc_upper[0] == boundary::BoundaryCondition::Reflective;
+    if ((reflect_inner || reflect_outer) && mesh.nghost[0] > mesh.nactive[0])
+        throw std::invalid_argument("Mirror boundary requires nghost <= nactive");
+    // Other boundaries continue each boundary shell's linear width.
     const double inner_width = faces[first + 1] - faces[first];
     const double outer_width = faces[last] - faces[last - 1];
     for (int g = 1; g <= mesh.nghost[0]; ++g) // g counts ghost layers away from the active face.
     {
-        faces[first - g] = std::fma(-static_cast<double>(g), inner_width, faces[first]);
-        faces[last + g] = std::fma(static_cast<double>(g), outer_width, faces[last]);
+        faces[first - g] = reflect_inner
+            ? faces[first] - (faces[first + g] - faces[first])
+            : std::fma(-static_cast<double>(g), inner_width, faces[first]);
+        faces[last + g] = reflect_outer
+            ? faces[last] + (faces[last] - faces[last - g])
+            : std::fma(static_cast<double>(g), outer_width, faces[last]);
     }
     mesh.allocate();
     mesh.build_geometry();

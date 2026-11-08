@@ -40,6 +40,7 @@ int main()
                 mesh.face[d].push_back(mesh.face[d].back() + 0.2 * (d + 1) * (1 + 0.05 * i));
         }
         mesh.allocate();
+        mesh.build_geometry();
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {
             hd_core::Primitives w{};

@@ -298,6 +298,14 @@ namespace config
         };
         if (cfg.init_from_mesa_profile && hd_core::NDIM != 1)
             throw std::runtime_error("Building a MESA radial mesh requires HD_NDIM=1");
+        if (cfg.init_from_mesa_profile && (cfg.init_mesh_from_file || cfg.init_profile_from_file))
+            throw std::runtime_error("MESA initialization cannot be combined with mesh/profile file initialization");
+        if (cfg.init_from_mesa_profile && cfg.init_mesa_profile_name.empty())
+            throw std::runtime_error("init_mesa_profile_name is required for MESA initialization");
+        if (cfg.init_mesh_from_file && cfg.init_mesh_file_name.empty())
+            throw std::runtime_error("init_mesh_file_name is required for file mesh initialization");
+        if (cfg.init_profile_from_file && cfg.init_profile_file_name.empty())
+            throw std::runtime_error("init_profile_file_name is required for file profile initialization");
         constexpr std::array<const char*, 3> axes{"x", "y", "z"};
         for(int d=0; d< hd_core::NDIM; d++)
         {

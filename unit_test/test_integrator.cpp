@@ -14,6 +14,7 @@ int main()
             mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::Periodic;
         }
         mesh.allocate();
+        mesh.build_geometry();
         std::vector<bool> active(mesh.cells.size(), true);
         std::vector<hd_core::Conserved> rhs(mesh.cells.size());
         std::size_t last_active = 0;
