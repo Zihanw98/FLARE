@@ -63,7 +63,8 @@ namespace hd_time
         const config::SimulationConfig& cfg,
         double cfl,
         double& hydro_inverse_dt,
-        double& source_dt_limit
+        double& source_dt_limit,
+        bool use_source_limits
     )
     {
         performance::Scope timer(performance::Section::RHS);
@@ -86,6 +87,8 @@ namespace hd_time
                 throw std::invalid_argument("Missing source function");
             double source_limit = std::numeric_limits<double>::infinity();
             source.func(mesh, time, cfg, rhs, source_limit);
+            if (!use_source_limits)
+                continue;
             if (std::isnan(source_limit) || source_limit <= 0.0)
                 throw std::invalid_argument("Source timestep must be positive (infinity allowed)");
             source_limit_all = std::min(source_limit_all, source_limit);
@@ -103,6 +106,8 @@ namespace hd_time
             return TimeIntegrator::Euler;
         if(utils::iequals(name,"rk2"))
             return TimeIntegrator::RK2;
+        if (utils::iequals(name, "backward_euler"))
+            return TimeIntegrator::BackwardEuler;
         throw std::invalid_argument("Unknown or unavailable time integrator: " + name);
     }
 
@@ -131,6 +136,11 @@ namespace hd_time
             case TimeIntegrator::RK2:
                 dt = advance_rk2(mesh,time,dt_limit,spatial_scheme,solver,source_list,cfg,hooks,cfl,dt_next);
                 break;
+            case TimeIntegrator::BackwardEuler:
+                dt = advance_backward_euler(mesh, time, dt_limit, spatial_scheme, solver,
+                                            source_list, cfg, hooks, cfl);
+                dt_next = std::numeric_limits<double>::infinity();
+                return dt; // The accepted residual already filled the new-time ghosts.
             default:
                 throw std::invalid_argument("Invalid time integrator");
         }

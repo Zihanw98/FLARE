@@ -2,7 +2,7 @@
 #include "user/user_api.h"
 #include "hydro/riemann/exact.h"
 #include "hydro/wave_timestep.h"
-// Exercise the private Jacobian without adding an unfinished solver to the API.
+// Exercise the private Jacobian alongside the public time-step entry point.
 // The archive's backward_euler object is not pulled into this executable.
 #include "../src/time/backward_euler.cpp"
 
@@ -170,9 +170,85 @@ void jacobian_tests()
         for (std::size_t j = 0; j < n; ++j)
             CHECK(near(cold_J[i][j], i == j ? 1.0 : 0.0, 2e-7));
 }
+
+void linear_solve_tests()
+{
+    const auto x = hd_time::linear_solve({{0.0, 2.0}, {1.0, 1.0}}, {4.0, 3.0});
+    CHECK(x.has_value());
+    CHECK(near((*x)[0], 1.0));
+    CHECK(near((*x)[1], 2.0));
+    CHECK(!hd_time::linear_solve({{1.0, 2.0}, {2.0, 4.0}}, {3.0, 6.0}));
+}
+
+void timestep_tests()
+{
+    hd_core::MeshBlock mesh;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        mesh.nactive[d] = 2;
+        mesh.nghost[d] = 1;
+        mesh.set_linear_uniform_faces(d, 0.0, 1.0);
+        mesh.bc_lower[d] = mesh.bc_upper[d] = boundary::BoundaryCondition::Periodic;
+    }
+    mesh.allocate();
+    mesh.build_geometry();
+    for (auto& cell : mesh.cells)
+    {
+        cell.U[hd_core::RHO] = 1.0;
+        cell.U[hd_core::ENERGY] = 4.0;
+    }
+    const hd_user::UserHooks hooks{};
+    const ZeroFluxSolver solver;
+    double energy_rate = -2.0;
+    const hd_source::SourceList sources{{"implicit source with explicit step limit", hd_source::SourceKind::General,
+        [&](const hd_core::MeshBlock& state, double time, const config::SimulationConfig&,
+           std::vector<hd_core::Conserved>& rhs, double& limit) {
+            for (const auto flat : state.get_all_active_flats())
+                rhs[flat][hd_core::ENERGY] += energy_rate * state.cells[flat].U[hd_core::ENERGY];
+            limit = time == 0.0 ? 1e-5 : 1e-6;
+        }}};
+    config::SimulationConfig cfg;
+    double dt_limit = 1.0;
+    double dt_next = 0.5;
+    auto advance = [&] {
+        return hd_time::advance_one_step(mesh, 0.0, dt_limit,
+            hd_time::parse_time_integrator("backward_euler"), hydro::SpatialScheme::Godunov,
+            solver, sources, cfg, hooks, cfg.cfl, dt_next);
+    };
+    const auto original = mesh.cells;
+    cfg.integrator_retry_max = 0;
+    for (double suggestion : {0.5, std::numeric_limits<double>::infinity()})
+    {
+        mesh.cells = original;
+        dt_next = suggestion;
+        CHECK(advance() == dt_limit);
+        CHECK(dt_next == std::numeric_limits<double>::infinity());
+        for (const auto& cell : mesh.cells)
+            CHECK(near(cell.U[hd_core::ENERGY], 4.0 / (1.0 - energy_rate * dt_limit), 1e-8));
+    }
+
+    // For E' = 2 E the Jacobian is singular at dt = 0.5. Retry from the old state.
+    mesh.cells = original;
+    energy_rate = 2.0;
+    dt_limit = 0.5;
+    dt_next = 0.01;
+    expect_throw<std::runtime_error>(advance);
+    CHECK(dt_next == 0.01);
+    for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
+        CHECK(mesh.cells[flat].U.data == original[flat].U.data);
+    cfg.integrator_retry_max = 1;
+    CHECK(advance() == 0.25);
+    CHECK(dt_next == std::numeric_limits<double>::infinity());
+    for (const auto& cell : mesh.cells)
+        CHECK(near(cell.U[hd_core::ENERGY], 8.0, 1e-8));
+}
 }
 
 int main()
 {
-    return run_test("backward Euler residual Jacobian", jacobian_tests);
+    return run_test("backward Euler Jacobian and time step", [] {
+        jacobian_tests();
+        linear_solve_tests();
+        timestep_tests();
+    });
 }

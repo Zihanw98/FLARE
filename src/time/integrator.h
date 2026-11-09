@@ -17,20 +17,28 @@ namespace hd_core
 
 namespace hd_time
 {
-    /** @brief Forward Euler and two-stage SSP-RK2 integrators. */
+    /** @brief Available time integration methods. */
     enum class TimeIntegrator
     {
         Euler, ///< One-stage forward Euler update.
-        RK2 ///< Two-stage SSP-RK2 update with timestep retries.
+        RK2, ///< Two-stage SSP-RK2 update with timestep retries.
+        BackwardEuler ///< Fully implicit update with damped Newton and a dense linear solve.
     };
 
     /**
      * @brief Parse a case-insensitive time-integrator name.
-     * @param[in] name euler or rk2.
+     * @param[in] name euler, rk2 or backward_euler.
      * @return The corresponding TimeIntegrator enum.
      * @throws std::invalid_argument If the method is unknown or unavailable.
      */
     TimeIntegrator parse_time_integrator(const std::string& name);
+
+    /** @brief Try dt_limit for a fully implicit step and return the accepted dt after any retries. */
+    double advance_backward_euler(
+        hd_core::MeshBlock& mesh, double time, double dt_limit,
+        hydro::SpatialScheme spatial_scheme, const hydro::RiemannSolver& solver,
+        const hd_source::SourceList& source_list, const config::SimulationConfig& cfg,
+        const hd_user::UserHooks& hooks, double cfl);
 
     // 对活跃单元执行 U += dt * rhs，并逐个校验候选状态。
     // rhs 与 mesh.cells 等长；dt 必须有限，零表示不更新。
@@ -61,19 +69,20 @@ namespace hd_time
      * @param[in,out] mesh Allocated mesh whose active states are advanced.
      * @param[in] time Finite physical time at the start of the step.
      * @param[in] dt_limit Finite positive upper bound, such as time remaining to the end.
-     * @param[in] integrator Euler or SSP-RK2 method to dispatch.
+     * @param[in] integrator Time integration method to dispatch.
      * @param[in] spatial_scheme Hydrodynamic spatial operator.
      * @param[in] solver Riemann solver used for fluxes and CFL wave speeds.
      * @param[in] source_list Source callbacks that add unscaled rates and supply independent timestep limits.
      * @param[in] cfg Numerical settings, including reconstruction, limiter, and RK2 acceptance/retry controls.
      * @param[in] hooks Boundary callbacks used by RK2 stages and final boundary filling.
      * @param[in] cfl Finite positive target CFL; Euler requires at most 0.5, RK2 requires cfl <= cfg.cfl_max <= 0.5.
-     * @param[in,out] dt_next Previous positive timestep suggestion (initially infinity); replaced by the next RK2 suggestion or infinity for Euler.
+     * @param[in,out] dt_next RK2 timestep suggestion (initially infinity). Both Euler methods
+     * ignore the incoming value and reset it to infinity after acceptance.
      * @return The finite positive timestep actually used; the caller advances time by this value.
      * @pre Active states and ghost states at time are initialized and consistent.
      * @throws std::invalid_argument If timestep/CFL settings or a required state are invalid.
      * @throws std::runtime_error If the timestep cannot advance time or RK2 exhausts its retries.
-     * @note The active update is committed before the final boundary fill. A boundary-callback failure can therefore leave mesh advanced.
+     * @note Explicit methods commit before the final boundary fill. Backward Euler commits a boundary-filled candidate.
      */
     double advance_one_step(
         hd_core::MeshBlock& mesh,
@@ -163,9 +172,10 @@ namespace hd_time
      * @param[in] cfg Reconstruction, limiter, and source settings.
      * @param[in] cfl Finite positive target CFL coefficient.
      * @param[out] hydro_inverse_dt Largest cell inverse timescale measured from interface waves.
-     * @param[out] source_dt_limit Minimum independent source limit, or infinity if unrestricted.
-     * @return Pair {target timestep, RHS}, where the timestep is the minimum hydrodynamic and source limit and may be infinity.
-     * @pre Each source callback is valid, returns a positive limit or infinity, and does not make its rate depend on the incoming limit.
+     * @param[out] source_dt_limit Minimum independent source limit, or infinity when unrestricted or ignored.
+     * @param[in] use_source_limits Apply reported timestep limits for explicit source updates.
+     * @return Pair {target timestep, RHS}. Only the hydro estimate enters the target when use_source_limits is false.
+     * @pre Each source callback adds rates independently of the limit and reports a positive limit or infinity when use_source_limits is true.
      * @throws std::invalid_argument If CFL, recorded wave rate, callback, or source limit is invalid.
      * @throws std::logic_error If a source changes the RHS array size.
      * @note Each source receives a fresh infinity limit. Updates the shared hydro::wave_timestep record; source exceptions propagate.
@@ -179,6 +189,7 @@ namespace hd_time
         const config::SimulationConfig& cfg,
         double cfl,
         double& hydro_inverse_dt,
-        double& source_dt_limit
+        double& source_dt_limit,
+        bool use_source_limits = true
     );
 }

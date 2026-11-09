@@ -8,6 +8,7 @@
 #include "boundary.h"
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <unordered_set>
 namespace config
@@ -24,6 +25,7 @@ namespace config
         std::array<double,hd_core::NDIM> lower{};
         std::array<double,hd_core::NDIM> upper{};
         double t_end = 1.0;
+        double dt_implicit = std::numeric_limits<double>::infinity(); ///< Requested backward Euler step.
         // 保留原 cfl 成员作为目标值；参数文件也支持 cfl_desired 这一别名。
         double cfl = 0.4;
         double cfl_max = 0.5;

@@ -8,6 +8,7 @@
 #include "io/output.h"
 #include "config/read_mesa_profile.h"
 #include "utils/performance.h"
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <fstream>
@@ -142,11 +143,12 @@ int main(int argc, char* argv[])
             );
 
             const double remaining = cfg.t_end - t_current;
-            //Avoid too small remaining time
+            const double dt_limit = integrator == hd_time::TimeIntegrator::BackwardEuler
+                ? std::min(cfg.dt_implicit, remaining) : remaining;
             const double dt = hd_time::advance_one_step(
                 mesh,
                 t_current,
-                remaining,
+                dt_limit,
                 integrator,
                 spatial,
                 *solver,
@@ -157,7 +159,7 @@ int main(int argc, char* argv[])
                 dt_next
             );
             if (!std::isfinite(dt) || dt <= 0.0 ||
-                dt > remaining || t_current + dt <= t_current)
+                dt > dt_limit || t_current + dt <= t_current)
             {
                 throw std::runtime_error("Invalid time step");
             }

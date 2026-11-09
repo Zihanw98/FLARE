@@ -1,7 +1,6 @@
 #include "integrator.h"
 #include "core/mesh.h"
 #include "core/core.h"
-#include "hydro/timestep_CFL.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -9,13 +8,12 @@
 #include <stdexcept>
 #include <vector>
 #include <optional>
+#include <utility>
 namespace hd_time
 {
     namespace
     {
-        int max_newton_iteration = 15;
-        std::vector<hd_core::Conserved> Residual(hd_core::MeshBlock& mesh_trial, const hd_core::MeshBlock& mesh_old,double t_new, double dt,hydro::SpatialScheme scheme, const hd_source::SourceList& source_list,
-        const hydro::RiemannSolver& solver, const config::SimulationConfig& cfg, const hd_user::UserHooks& hooks, double cfl);
+        constexpr int max_newton_iteration = 15;
 
         std::vector<hd_core::Conserved> Residual(hd_core::MeshBlock& mesh_trial, const hd_core::MeshBlock& mesh_old,double t_new, double dt,hydro::SpatialScheme scheme, const hd_source::SourceList& source_list,
         const hydro::RiemannSolver& solver, const config::SimulationConfig& cfg, const hd_user::UserHooks& hooks, double cfl)
@@ -23,8 +21,9 @@ namespace hd_time
             std::vector<hd_core::Conserved> residual;
             residual.resize(mesh_trial.cells.size());
             boundary::FillBoundary(mesh_trial,t_new,hooks);
-            double dt1=0,dt2=0;
-            auto [_,rhs]  = evaluate_RHS(mesh_trial,t_new,scheme,source_list,solver,cfg,cfl,dt1,dt2);
+            double hydro_inverse_dt, source_limit;
+            auto [_,rhs] = evaluate_RHS(mesh_trial,t_new,scheme,source_list,solver,cfg,cfl,
+                                        hydro_inverse_dt,source_limit, /*use_source_limits=*/false);
             for(size_t flat = 0; flat < mesh_trial.cells.size(); flat++)
             {
                 if(!mesh_trial.is_active(flat))
@@ -43,7 +42,7 @@ namespace hd_time
         // Cost: N residual evaluations and O(N^2) storage, N = active.size()*NVAR.
         // The unit perturbation scale assumes normalized conserved variables.
         // Exact vacuum has no admissible coordinate-wise derivative and throws.
-        [[maybe_unused]] std::vector<std::vector<double>> finite_difference_jacobian(
+        std::vector<std::vector<double>> finite_difference_jacobian(
             const hd_core::MeshBlock& mesh_trial,
             const hd_core::MeshBlock& mesh_old,
             const std::vector<std::size_t>& active,
@@ -86,7 +85,8 @@ namespace hd_time
                 const auto flat = active[column / hd_core::NVAR];
                 const int k = static_cast<int>(column % hd_core::NVAR);
                 const double value = mesh_trial.cells[flat].U[k];
-                double step = relative_step * std::max(1.0, std::abs(value));
+                double step = relative_step * std::max(1.0, std::abs(value));       //At least it's sqrt(episilon), at order of 1e-8
+                //Need further modification when working with composition...
 
                 // Restore all cells, including ghosts modified by the last probe.
                 perturbed.cells = mesh_trial.cells;
@@ -159,6 +159,56 @@ namespace hd_time
             }
             return worst;
         }
+        // Dense Gaussian elimination with partial pivoting. Row swaps preserve unknown order.
+        std::optional<std::vector<double>> linear_solve(
+            std::vector<std::vector<double>> A, std::vector<double> b)
+        {
+            const std::size_t n = b.size();
+            if (A.size() != n)
+                throw std::invalid_argument("linear_solve: matrix and RHS sizes differ");
+            for (const auto& row : A)
+                if (row.size() != n)
+                    throw std::invalid_argument("linear_solve: expected a square matrix");
+
+            for (std::size_t k = 0; k < n; ++k)
+            {
+                std::size_t pivot = k;
+                for (std::size_t i = k + 1; i < n; ++i)
+                    if (std::abs(A[i][k]) > std::abs(A[pivot][k]))
+                        pivot = i;
+
+                if (A[pivot][k] == 0.0 || !std::isfinite(A[pivot][k]))
+                    return std::nullopt;
+                if (pivot != k)
+                {
+                    std::swap(A[k], A[pivot]);
+                    std::swap(b[k], b[pivot]);
+                }
+
+                for (std::size_t i = k + 1; i < n; ++i)
+                {
+                    const double factor = A[i][k] / A[k][k];
+                    A[i][k] = 0.0;
+                    for (std::size_t j = k + 1; j < n; ++j)
+                        A[i][j] -= factor * A[k][j];
+                    b[i] -= factor * b[k];
+                }
+            }
+
+            std::vector<double> dX(n);
+            for (std::size_t end = n; end > 0; --end)
+            {
+                const std::size_t i = end - 1;
+                double rhs = b[i];
+                for (std::size_t j = i + 1; j < n; ++j)
+                    rhs -= A[i][j] * dX[j];
+                dX[i] = rhs / A[i][i];
+                if (!std::isfinite(dX[i]))
+                    return std::nullopt;
+            }
+            return dX;
+        }
+
         std::optional<hd_core::MeshBlock> Solve_Newton(const hd_core::MeshBlock& mesh_old, double t_new, double dt,hydro::SpatialScheme scheme, const hd_source::SourceList& source_list,
         const hydro::RiemannSolver& solver, const config::SimulationConfig& cfg, const hd_user::UserHooks& hooks, double cfl)
         {
@@ -166,23 +216,65 @@ namespace hd_time
             std::array<double, hd_core::NVAR> atol;
             atol.fill(1e-10);
             hd_core::MeshBlock mesh_trial = mesh_old;
-            for(int k=0; k<max_newton_iteration; k++)
+            const auto active = mesh_old.get_all_active_flats();
+
+            auto R = Residual(mesh_trial, mesh_old, t_new, dt, scheme, source_list,
+                              solver, cfg, hooks, cfl);
+            for (int iter = 0; ; ++iter)
             {
-                auto R = Residual(mesh_trial,mesh_old,t_new,dt,scheme,source_list,solver,cfg,hooks,cfl);
-                if(scaled_norm(R,mesh_old,mesh_trial,atol,rtol) <= 1.0)
-                {
-                    //If we have some sources that lasts for finite time, then here we will check the time...(hard upper limit)---> Add a t_stop, and cut off before call this function is the best way
+                const double norm = scaled_norm(R, mesh_old, mesh_trial, atol, rtol);
+                if (norm <= 1.0)
                     return mesh_trial;
+                if (!std::isfinite(norm) || iter == max_newton_iteration)
+                    return std::nullopt;
+
+                auto J = finite_difference_jacobian(
+                    mesh_trial, mesh_old, active, R, t_new, dt,
+                    scheme, source_list, solver, cfg, hooks, cfl);
+                std::vector<double> b;
+                b.reserve(J.size());
+                for (const auto flat : active)
+                    for (int k = 0; k < hd_core::NVAR; ++k)
+                        b.push_back(-R[flat][k]);
+                const auto result = linear_solve(std::move(J), std::move(b));
+                if (!result)
+                    return std::nullopt;
+                const auto& dX = *result;
+
+                bool accepted = false;
+                for (double alpha = 1.0; alpha >= 1.0 / 4096; alpha *= 0.5)
+                {
+                    auto candidate = mesh_trial;
+                    std::size_t j = 0;
+                    for (const auto flat : active)
+                        for (int k = 0; k < hd_core::NVAR; ++k)
+                            candidate.cells[flat].U[k] += alpha * dX[j++];
+                    try {
+                        candidate.validate_active();
+                    } catch (const std::invalid_argument&) {
+                        continue;
+                    }
+
+                    auto next_R = Residual(candidate, mesh_old, t_new, dt, scheme,
+                        source_list, solver, cfg, hooks, cfl);
+                    // Compare both residuals using the current iterate's scales.
+                    if (scaled_norm(next_R, mesh_old, mesh_trial, atol, rtol) < norm)
+                    {
+                        mesh_trial.cells.swap(candidate.cells);
+                        R.swap(next_R);
+                        accepted = true;
+                        break;
+                    }
                 }
+                if (!accepted)
+                    return std::nullopt;
             }
-            return std::nullopt;
         }
     }
     double advance_backward_euler(
         hd_core::MeshBlock& mesh,
         double time,
         double dt_limit,
-        TimeIntegrator integrator,
         hydro::SpatialScheme spatial_scheme,
         const hydro::RiemannSolver& solver,
         const hd_source::SourceList& source_list,
@@ -191,6 +283,25 @@ namespace hd_time
         double cfl
     )
     {
-        throw std::logic_error("Backward Euler time stepping is not implemented");
+        if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0
+            || cfg.integrator_retry_max < 0)
+            throw std::invalid_argument("Invalid backward Euler timestep or retry settings");
+        mesh.validate_active();
+        double dt = dt_limit;
+        for (long long attempt = 0; attempt <= cfg.integrator_retry_max; ++attempt)
+        {
+            if (!std::isfinite(time + dt) || time + dt <= time)
+                throw std::runtime_error("Backward Euler timestep cannot advance time");
+            auto solution = Solve_Newton(mesh, time + dt, dt, spatial_scheme, source_list,
+                                         solver, cfg, hooks, cfl);
+            if (!solution)
+            {
+                dt *= 0.5;
+                continue;
+            }
+            mesh.cells.swap(solution->cells); // Includes the converged new-time ghosts.
+            return dt;
+        }
+        throw std::runtime_error("Backward Euler retry limit exceeded");
     }
 }
