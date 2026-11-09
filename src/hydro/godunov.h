@@ -4,6 +4,7 @@
  */
 #pragma once
 #include "core.h"
+#include "star_pressure_cache.h"
 #include "reconstruction.h"
 #include "limiter.h"
 #include "riemann/riemann.h"
@@ -38,6 +39,6 @@ namespace hydro
         const Reconstructor& reconstructor = Reconstructor::PCM,
         const Limiter& limiter = Limiter::none,
         const double limiter_beta = 1.5,
-        std::array<std::vector<double>, hd_core::NDIM>* pressure_hints = nullptr
+        hydro::StarPressureCache* star_pressure_cache = nullptr
     );
 }

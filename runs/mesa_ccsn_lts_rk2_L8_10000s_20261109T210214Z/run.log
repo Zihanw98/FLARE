@@ -1,0 +1,12 @@
+Loaded parameters from: /home/u0190250/Research/FLARE/runs/mesa_ccsn_lts_rk2_L8_10000s_20261109T210214Z/parameters.txt
+MESA CCSN: retained 2599 native shells, 100 atmosphere shells; initial dt=5.77651e-06 s
+step = 0, time = 0, dt = 0, active_cells = 2699, rho = [1.693402122e-16, 7.12827032], p = [1.190454947e-19, 257585.3671], mass = 8.21586008, energy = 426.7228892, csv = /home/u0190250/Research/FLARE/runs/mesa_ccsn_lts_rk2_L8_10000s_20261109T210214Z/output/ccsn_mesa_00000000.csv
+step = 1, time = 4.086900037e-07, dt = 4.086900037e-07, active_cells = 2699, rho = [1.693402122e-16, 7.174794022], p = [1.190454947e-19, 252807.989], mass = 8.21586008, energy = 426.7228881, csv = /home/u0190250/Research/FLARE/runs/mesa_ccsn_lts_rk2_L8_10000s_20261109T210214Z/output/ccsn_mesa_00000001.csv
+step = 2, time = 8.147269502e-07, dt = 4.060369465e-07, active_cells = 2699, rho = [1.693402122e-16, 7.317336772], p = [1.190454947e-19, 247978.3238], mass = 8.21586008, energy = 426.7228849
+step = 3, time = 1.222245657e-06, dt = 4.075187073e-07, active_cells = 2699, rho = [1.693402122e-16, 7.436645509], p = [1.190454947e-19, 243058.0538], mass = 8.21586008, energy = 426.7228796
+step = 4, time = 1.630790569e-06, dt = 4.085449117e-07, active_cells = 2699, rho = [1.693402122e-16, 7.532711981], p = [1.190454947e-19, 238060.7232], mass = 8.21586008, energy = 426.7228723
+step = 5, time = 2.039483279e-06, dt = 4.086927093e-07, active_cells = 2699, rho = [1.693402122e-16, 7.605321292], p = [1.190454947e-19, 233005.3817], mass = 8.21586008, energy = 426.7228628
+step = 856, time = 0.0003500863482, dt = 4.092963287e-07, active_cells = 2699, rho = [1.693402122e-16, 14.82989674], p = [1.190454947e-19, 14228.4231], mass = 8.21586008, energy = 426.6200217
+step = 1000, time = 0.0004090327733, dt = 4.09403489e-07, active_cells = 2699, rho = [1.693402122e-16, 14.65682471], p = [1.190454947e-19, 13000.48436], mass = 8.21586008, energy = 426.5974646
+step = 1849, time = 0.0007568918824, dt = 4.100581588e-07, active_cells = 2699, rho = [1.693402122e-16, 12.39961867], p = [1.190454947e-19, 7260.246222], mass = 8.21586008, energy = 426.4531971
+step = 2000, time = 0.000818819816, dt = 4.101788132e-07, active_cells = 2699, rho = [1.693402122e-16, 12.01632121], p = [1.190454947e-19, 6880.533232], mass = 8.21586008, energy = 426.4261366

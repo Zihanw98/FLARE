@@ -1,0 +1,19 @@
+{
+  "status": "running",
+  "supervisor_pid": 1231763,
+  "started_utc": "2026-11-09T21:03:33.933484+00:00",
+  "target_physical_seconds": 10000,
+  "time_unit_seconds": 1592.8584656366752,
+  "integrator": "lts_rk2",
+  "max_levels": 8,
+  "cfl": 0.2,
+  "physical_time_seconds": 1.5748650580734462,
+  "step": 2414,
+  "updated_utc": "2026-11-09T21:06:24.579894+00:00",
+  "elapsed_wall_seconds": 170.64644351799507,
+  "solver_pid": 1231764,
+  "last_macro_step_seconds": 0.0006538961580919066,
+  "last_diagnostic": "step = 2414, time = 0.0009887036997, dt = 4.105174265e-07, active_cells = 2699, rho = [1.693402122e-16, 11.40251545], p = [1.190454947e-19, 5838.87546], mass = 8.21586008, energy = 426.3506087",
+  "mean_physical_seconds_per_wall_second": 0.009228822555740627,
+  "estimated_remaining_wall_seconds_at_mean_rate": 1083391.1990996706
+}

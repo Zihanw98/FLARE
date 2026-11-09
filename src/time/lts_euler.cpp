@@ -1,11 +1,11 @@
 /**
  * @file lts_euler.cpp
- * @brief Experimental two-level, conservative, first-order explicit subcycling.
+ * @brief Experimental multilevel, conservative, first-order explicit subcycling.
  *
  * Fixed spatial grid, 1D Godunov with PCM/PLM/PLM_corrected. Each macro step starts
- * synchronized. Fast cells and a reconstruction-dependent neighbour buffer take
- * two half steps; other cells take one full step. PCM holds slow boundary data
- * at their start state. PLM predicts slow states to the fine-stage time before
+ * synchronized. Time levels take H/2^level, with neighbour buffers. PCM holds
+ * coarse boundary data at their local step's start state. PLM predicts coarse
+ * states to the fine-stage time before
  * reconstructing the entire stencil. Time integration remains first order.
  * Flux registers include face area and time, and synchronize both sides
  * of every interface, including the periodic seam. Failed trials never commit.
@@ -120,13 +120,14 @@ struct LTSEulerWorkspace::Impl
 {
     MeshBlock start, work, candidate;
     std::unique_ptr<hydro::ReconstructionCache> initial_reconstruction, sub_reconstruction;
-    std::vector<double> local_dt;
+    std::vector<double> local_dt, step_fraction;
     // One scalar per face, plus transactional copies for macro steps/retries.
-    std::array<std::vector<double>, hd_core::NDIM> pressure_history, initial_pressure, trial_pressure;
-    std::vector<FaceResult> initial;
-    std::vector<Conserved> source, contribution, fine_integral, coarse_integral, delta, next_fast;
-    std::vector<unsigned char> fast, predicted;
-    std::vector<int> fast_cells, fast_faces, prediction_cells;
+    hydro::StarPressureCache star_pressure_cache, initial_pressure, trial_pressure;
+    std::vector<FaceResult> initial, stage;
+    std::vector<Conserved> source, contribution, pending_flux, step_start;
+    std::vector<int> level, face_level;
+    std::vector<unsigned char> predicted, lower_ghosts, upper_ghosts;
+    std::vector<std::vector<int>> level_cells, level_faces, prediction_cells;
 
     void prepare(const MeshBlock& mesh)
     {
@@ -138,18 +139,17 @@ struct LTSEulerWorkspace::Impl
             start = mesh;
             work = mesh;
             candidate = mesh;
-            pressure_history[0].assign(mesh.nactive[0] + 1, 0.0);
+            star_pressure_cache.reset(0, mesh.nactive[0] + 1);
         }
         start.bc_lower = work.bc_lower = candidate.bc_lower = mesh.bc_lower;
         start.bc_upper = work.bc_upper = candidate.bc_upper = mesh.bc_upper;
         start.cells = mesh.cells; // Transaction snapshot: geometry is not copied.
         const auto n = static_cast<std::size_t>(mesh.nactive[0]);
-        local_dt.resize(n); initial.resize(n + 1);
-        initial_pressure[0].resize(n + 1); trial_pressure[0].resize(n + 1);
+        local_dt.resize(n); step_fraction.resize(n);
+        initial.resize(n + 1); stage.resize(n + 1);
         source.resize(mesh.cells.size()); contribution.resize(mesh.cells.size());
-        fine_integral.resize(n + 1); coarse_integral.resize(n + 1); delta.resize(n + 1);
-        next_fast.resize(n); fast.resize(n); predicted.resize(n);
-        fast_cells.reserve(n); fast_faces.reserve(n + 1); prediction_cells.reserve(n);
+        pending_flux.resize(n); step_start.resize(n);
+        level.resize(n); face_level.resize(n + 1); predicted.resize(n);
     }
 };
 
@@ -174,7 +174,7 @@ double advance_lts_euler(
     if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0 ||
         !std::isfinite(cfl) || !std::isfinite(cfg.cfl_max) ||
         cfl <= 0.0 || cfl > cfg.cfl_max || cfg.cfl_max > 0.5 ||
-        cfg.integrator_retry_max < 0)
+        cfg.integrator_retry_max < 0 || cfg.lts_max_levels < 1 || cfg.lts_max_levels > 16)
         throw std::invalid_argument("Invalid LTS time, CFL or retry settings");
     (void)mesh.flat_index(hd_core::Index{}, true);
     if (mesh.nghost[0] < (linear ? 2 : 1))
@@ -208,7 +208,7 @@ double advance_lts_euler(
             start, method, limiter, cfg.limiter_beta);
     else
         scratch.initial_reconstruction->reset(start, method, limiter, cfg.limiter_beta);
-    scratch.initial_pressure = scratch.pressure_history;
+    scratch.initial_pressure = scratch.star_pressure_cache;
     for (int f = 0; f <= n; ++f)
     {
         if (periodic && f == n)
@@ -251,180 +251,186 @@ double advance_lts_euler(
     }
     source_limit = std::min(source_limit, source_change_limit(start, source));
 
-    double H = std::min({dt_limit, 2.0 * min_dt, source_limit});
-    auto& fine_integral = scratch.fine_integral;
-    auto& coarse_integral = scratch.coarse_integral;
-    auto& delta = scratch.delta;
-    auto& next_fast = scratch.next_fast;
+    const int max_depth = cfg.lts_max_levels - 1;
+    double H = std::min({dt_limit, std::ldexp(min_dt, max_depth), source_limit});
+    auto& level = scratch.level;
+    auto& face_level = scratch.face_level;
+    auto& stage = scratch.stage;
+    auto& pending = scratch.pending_flux;
+    auto& step_start = scratch.step_start;
+    auto& step_fraction = scratch.step_fraction;
+    auto left = [&](int f) { return f == 0 ? (periodic ? n - 1 : -1) : f - 1; };
+    auto right = [&](int f) { return f == n ? (periodic ? 0 : -1) : f; };
+    const int unique_faces = periodic ? n : n + 1;
+    const int buffer = linear ? 2 : 1;
     for (long long attempt = 0; attempt <= cfg.integrator_retry_max; ++attempt, H *= 0.5)
     {
         if (!std::isfinite(H) || H <= 0.0 || !std::isfinite(time + H) || time + H <= time)
             throw std::runtime_error("LTS macro step cannot advance time");
-        auto& fast = scratch.fast;
-        std::fill(fast.begin(), fast.end(), false);
+        std::fill(level.begin(), level.end(), 0);
         for (int i = 0; i < n; ++i)
-            if (H > local_dt[i])
+        {
+            int depth = 0;
+            while (depth < max_depth && std::ldexp(H, -depth) > local_dt[i]) ++depth;
+            // Preserve the original fast-region buffer at every required depth.
+            for (int offset = -buffer; offset <= buffer; ++offset)
             {
-                // PLM faces depend on one additional cell on each side.
-                const int buffer = linear ? 2 : 1;
-                for (int offset = -buffer; offset <= buffer; ++offset)
-                {
-                    int j = i + offset;
-                    if (periodic) j = (j % n + n) % n;
-                    if (j >= 0 && j < n) fast[j] = true;
-                }
+                int j = i + offset;
+                if (periodic) j = (j % n + n) % n;
+                if (j >= 0 && j < n) level[j] = std::max(level[j], depth);
             }
-        auto& fast_cells = scratch.fast_cells;
-        auto& fast_faces = scratch.fast_faces;
-        fast_cells.clear(); fast_faces.clear();
-        for (int i = 0; i < n; ++i) if (fast[i]) fast_cells.push_back(i);
-        if (!fast_cells.empty() && time + H / 2.0 <= time)
-            throw std::runtime_error("LTS half step cannot advance time");
-        auto left = [&](int f) { return f == 0 ? (periodic ? n - 1 : -1) : f - 1; };
-        auto right = [&](int f) { return f == n ? (periodic ? 0 : -1) : f; };
-        for (int f = 0; f < (periodic ? n : n + 1); ++f)
-            if ((left(f) >= 0 && fast[left(f)]) || (right(f) >= 0 && fast[right(f)]))
-                fast_faces.push_back(f);
+        }
+        const int deepest = *std::max_element(level.begin(), level.end());
+        // Grade transitions: every reconstruction neighbour is at most one
+        // level coarser. Descending passes propagate buffers without substep scans.
+        for (int depth = deepest; depth > 1; --depth)
+            for (int i = 0; i < n; ++i)
+                if (level[i] == depth)
+                    for (int offset = -buffer; offset <= buffer; ++offset)
+                    {
+                        int j = i + offset;
+                        if (periodic) j = (j % n + n) % n;
+                        if (j >= 0 && j < n) level[j] = std::max(level[j], depth - 1);
+                    }
 
-        // Union of active slow cells actually read by fine-face stencils.
-        // Include the donors of any required periodic/reflecting ghost cells.
-        auto& predicted = scratch.predicted;
-        auto& prediction_cells = scratch.prediction_cells;
-        std::fill(predicted.begin(), predicted.end(), false);
-        prediction_cells.clear();
-        bool lower_ghosts = false, upper_ghosts = false, global_boundary = false;
-        auto mark_prediction = [&](int i) {
-            if (!fast[i] && !predicted[i])
-            {
-                predicted[i] = true;
-                prediction_cells.push_back(i);
-            }
-        };
-        for (int f : fast_faces)
-            for (int i = f - (linear ? 2 : 1); i <= f + (linear ? 1 : 0); ++i)
-            {
-                if (i >= 0 && i < n)
+        auto& cells = scratch.level_cells;
+        auto& faces = scratch.level_faces;
+        auto& predictions = scratch.prediction_cells;
+        cells.resize(deepest + 1); faces.resize(deepest + 1); predictions.resize(deepest + 1);
+        scratch.lower_ghosts.assign(deepest + 1, false);
+        scratch.upper_ghosts.assign(deepest + 1, false);
+        for (int depth = 0; depth <= deepest; ++depth)
+        {
+            cells[depth].clear(); faces[depth].clear(); predictions[depth].clear();
+        }
+        for (int i = 0; i < n; ++i) cells[level[i]].push_back(i);
+        for (int f = 0; f < unique_faces; ++f)
+        {
+            face_level[f] = std::max(left(f) >= 0 ? level[left(f)] : 0,
+                                     right(f) >= 0 ? level[right(f)] : 0);
+            for (int depth = 0; depth <= face_level[f]; ++depth) faces[depth].push_back(f);
+        }
+        if (periodic) face_level[n] = face_level[0];
+
+        for (int depth = 1; depth <= deepest; ++depth)
+        {
+            std::fill(scratch.predicted.begin(), scratch.predicted.end(), false);
+            bool global_boundary = false;
+            auto mark = [&](int i) {
+                if (level[i] < depth && !scratch.predicted[i])
                 {
-                    if (linear) mark_prediction(i);
-                    continue;
+                    scratch.predicted[i] = true;
+                    predictions[depth].push_back(i);
                 }
-                const bool lower = i < 0;
-                lower_ghosts = lower_ghosts || lower;
-                upper_ghosts = upper_ghosts || !lower;
-                const auto bc = lower ? start.bc_lower[0] : start.bc_upper[0];
-                if (!linear) continue;
-                if (bc == boundary::BoundaryCondition::Periodic)
-                    mark_prediction((i % n + n) % n);
-                else if (bc == boundary::BoundaryCondition::Reflective)
-                    mark_prediction(lower ? -i - 1 : 2 * n - i - 1);
-                else if (bc == boundary::BoundaryCondition::User)
-                    global_boundary = true; // Arbitrary userbc may read any active cell.
-            }
-        if (global_boundary)
-            for (int i = 0; i < n; ++i) mark_prediction(i);
+            };
+            for (int f : faces[depth])
+                for (int i = f - (linear ? 2 : 1); i <= f + (linear ? 1 : 0); ++i)
+                {
+                    if (i >= 0 && i < n) { mark(i); continue; }
+                    const bool lower = i < 0;
+                    scratch.lower_ghosts[depth] |= lower;
+                    scratch.upper_ghosts[depth] |= !lower;
+                    const auto bc = lower ? start.bc_lower[0] : start.bc_upper[0];
+                    if (bc == boundary::BoundaryCondition::Periodic) mark((i % n + n) % n);
+                    else if (bc == boundary::BoundaryCondition::Reflective)
+                        mark(lower ? -i - 1 : 2 * n - i - 1);
+                    else if (bc == boundary::BoundaryCondition::User) global_boundary = true;
+                }
+            // A custom boundary can inspect any active cell, not just its stencil.
+            if (global_boundary) for (int i = 0; i < n; ++i) mark(i);
+        }
 
         work.cells = start.cells;
         candidate.cells = start.cells;
         scratch.trial_pressure = scratch.initial_pressure;
-        std::fill(fine_integral.begin(), fine_integral.end(), Conserved{});
-        for (int f = 0; f <= n; ++f) coarse_integral[f] = initial[f].flux * (H * area[f]);
-        bool valid = true;
-        for (int i = 0; i < n; ++i)
-            if (!fast[i])
-            {
-                auto& cell = candidate.cells[ng + i];
-                cell.U += (coarse_integral[i] - coarse_integral[i + 1]) / volume[i]
-                          + source[ng + i] * H;
-                valid = valid && physical(cell.U, cell.gamma);
-            }
-        if (!valid) continue;
+        stage = initial;
+        std::fill(pending.begin(), pending.end(), Conserved{});
 
-        const double h = H / 2.0;
-        for (int sub = 0; sub < 2 && valid && !fast_cells.empty(); ++sub)
-        {
-            if (sub != 0)
+        // Recursively take two child steps. No extra integrator/level class:
+        // lists, local predictors and flux registers live in the existing workspace.
+        auto advance_level = [&](auto&& self, int depth, double fraction, bool reuse_flux) -> bool {
+            const double h = std::ldexp(H, -depth);
+            const double span = std::ldexp(1.0, -depth);
+            const double stage_time = time + fraction * H;
+            if (time + (fraction + span) * H <= stage_time)
+                throw std::runtime_error("LTS substep cannot advance time");
+            if (!reuse_flux)
             {
-                if (linear)
+                for (int i : predictions[depth])
                 {
-                    // Only cells read by PLM/boundaries need to represent t+h:
-                    // fast cells completed Euler(h); slow cells interpolate
-                    // between their start and provisional Euler(H) states.
-                    // This is prediction only, never a second committed update.
-                    for (int i : prediction_cells)
-                    {
-                        auto& cell = work.cells[ng + i];
-                        cell.U = 0.5 * start.cells[ng + i].U
-                               + 0.5 * candidate.cells[ng + i].U;
-                        if (!physical(cell.U, cell.gamma)) valid = false;
-                    }
-                    if (!valid) break;
+                    auto& cell = work.cells[ng + i];
+                    const double theta = linear ? std::ldexp(fraction - step_fraction[i], level[i]) : 0.0;
+                    cell.U = (1.0 - theta) * step_start[i] + theta * candidate.cells[ng + i].U;
+                    if (!physical(cell.U, cell.gamma)) return false;
                 }
-                // Unused ghosts do not need a half-time fill. Required custom
-                // boundaries above retain the full synchronized prediction view.
-                if (lower_ghosts)
-                    boundary::ApplyBoundaryCondition(work, 0, boundary::BoundarySide::Lower, time + h, hooks);
-                if (upper_ghosts)
-                    boundary::ApplyBoundaryCondition(work, 0, boundary::BoundarySide::Upper, time + h, hooks);
-                // No slope/primitive cache may survive a state or ghost update.
+                if (scratch.lower_ghosts[depth])
+                    boundary::ApplyBoundaryCondition(work, 0, boundary::BoundarySide::Lower, stage_time, hooks);
+                if (scratch.upper_ghosts[depth])
+                    boundary::ApplyBoundaryCondition(work, 0, boundary::BoundarySide::Upper, stage_time, hooks);
                 if (!scratch.sub_reconstruction)
                     scratch.sub_reconstruction = std::make_unique<hydro::ReconstructionCache>(
                         work, method, limiter, cfg.limiter_beta);
                 else
                     scratch.sub_reconstruction->reset(work, method, limiter, cfg.limiter_beta);
-            }
-            for (int f : fast_faces)
-            {
-                const auto result = sub == 0 ? initial[f]
-                    : solve_face(work, *scratch.sub_reconstruction, f, solver, scratch.trial_pressure[0][f]);
-                for (int i : {left(f), right(f)})
-                    if (i >= 0)
-                    {
-                        const double rate = result.speed / start.cell_width(0, ng + i);
-                        hydro::wave_timestep.max_inverse_dt =
-                            std::max(hydro::wave_timestep.max_inverse_dt, rate);
-                        // Crucially check a slow neighbour with H, not h.
-                        if (!std::isfinite(rate) || (fast[i] ? h : H) * rate > cfg.cfl_max)
-                            valid = false;
-                    }
-                if (!valid) break;
-                delta[f] = result.flux * (h * area[f]);
-                fine_integral[f] += delta[f];
-                if (periodic && f == 0)
+                for (int f : faces[depth])
+                    stage[f] = solve_face(work, *scratch.sub_reconstruction, f, solver,
+                                          scratch.trial_pressure[0][f]);
+                if (periodic)
                 {
-                    delta[n] = delta[0];
-                    fine_integral[n] = fine_integral[0];
+                    stage[n] = stage[0];
                     scratch.trial_pressure[0][n] = scratch.trial_pressure[0][0];
                 }
             }
-            if (!valid) break;
-            for (int i : fast_cells)
+            for (int f : faces[depth])
             {
-                next_fast[i] = work.cells[ng + i].U
-                    + (delta[i] - delta[i + 1]) / volume[i] + source[ng + i] * h;
-                if (!physical(next_fast[i], work.cells[ng + i].gamma)) valid = false;
+                for (int i : {left(f), right(f)})
+                    if (i >= 0)
+                    {
+                        const double rate = stage[f].speed / start.cell_width(0, ng + i);
+                        hydro::wave_timestep.max_inverse_dt = std::max(hydro::wave_timestep.max_inverse_dt, rate);
+                        // Check EACH side with its own full local step, not h.
+                        if (!std::isfinite(rate) || std::ldexp(H, -level[i]) * rate > cfg.cfl_max)
+                            return false;
+                    }
+                if (face_level[f] == depth)
+                {
+                    // Integrate a physical face only at the finer adjacent level.
+                    // Both sides receive exactly the same area*time-weighted flux.
+                    const auto integral = stage[f].flux * (h * area[f]);
+                    if (left(f) >= 0) pending[left(f)] -= integral;
+                    if (right(f) >= 0) pending[right(f)] += integral;
+                }
             }
-            if (!valid) break;
-            for (int i : fast_cells) work.cells[ng + i].U = next_fast[i];
-        }
-        if (!valid) continue;
+            for (int i : cells[depth])
+            {
+                step_start[i] = work.cells[ng + i].U;
+                step_fraction[i] = fraction;
+                auto& cell = candidate.cells[ng + i];
+                cell.U = step_start[i]
+                    + (stage[i].flux * area[i] - stage[i + 1].flux * area[i + 1]) * (h / volume[i])
+                    + source[ng + i] * h;
+                if (!physical(cell.U, cell.gamma)) return false;
+            }
+            if (depth < deepest)
+            {
+                if (!self(self, depth + 1, fraction, true)) return false;
+                if (!self(self, depth + 1, fraction + span / 2.0, false)) return false;
+            }
+            for (int i : cells[depth])
+            {
+                auto& cell = work.cells[ng + i];
+                cell.U = step_start[i] + pending[i] / volume[i] + source[ng + i] * h;
+                if (!physical(cell.U, cell.gamma)) return false;
+                pending[i] = Conserved{};
+            }
+            return true;
+        };
+        if (!advance_level(advance_level, 0, 0.0, true)) continue;
 
-        // Replace the provisional slow-side integral at each mixed interface.
-        for (int f : fast_faces)
-        {
-            const auto correction = fine_integral[f] - coarse_integral[f];
-            const int L = left(f), R = right(f);
-            if (L >= 0 && !fast[L]) candidate.cells[ng + L].U -= correction / volume[L];
-            if (R >= 0 && !fast[R]) candidate.cells[ng + R].U += correction / volume[R];
-        }
-        for (int i : fast_cells) candidate.cells[ng + i].U = work.cells[ng + i].U;
-        for (int i = 0; i < n; ++i)
-            if (!physical(candidate.cells[ng + i].U, candidate.cells[ng + i].gamma)) valid = false;
-        if (!valid) continue;
-
-        // Even boundary exceptions must not leave a partially committed step.
-        boundary::FillBoundary(candidate, time + H, hooks);
-        mesh.cells.swap(candidate.cells);
-        scratch.pressure_history.swap(scratch.trial_pressure);
+        // All cells are synchronized; exceptions cannot commit partial states/history.
+        boundary::FillBoundary(work, time + H, hooks);
+        mesh.cells.swap(work.cells);
+        scratch.star_pressure_cache.swap(scratch.trial_pressure);
         return H;
     }
     throw std::runtime_error("LTS Euler retry limit exceeded");

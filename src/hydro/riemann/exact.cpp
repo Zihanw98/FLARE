@@ -452,7 +452,7 @@ namespace hydro
                     throw std::runtime_error("ExactSolver: pressure bracket overflow");
             }
             double p = (low + high) / 2;
-            // A history value is only an initial iterate: bracket construction,
+            // A cached pressure is only an initial iterate: bracket construction,
             // exact residuals, convergence certification and fallback are unchanged.
             if (std::isfinite(pressure_hint) && pressure_hint > low && pressure_hint <= high)
                 p = pressure_hint;

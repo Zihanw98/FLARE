@@ -1,0 +1,392 @@
+{
+  "formula": "dt = (r_outer-r_inner)/(csound+abs(velocity)); CFL=1",
+  "assumptions": "Same approximate AMR algorithm as estimate.py, inherited sound speed; no EOS, no hydrodynamic evolution, no gravitational radius correction.",
+  "results": [
+    {
+      "name": "whole_original",
+      "zones": 4147,
+      "min_dt_s": 6.633202931382534e-08,
+      "min_sound_only_dt_s": 6.633202931382534e-08,
+      "limiting_zone_surface_inward": 2993,
+      "limiting_r_inner_cm": 5808697798.677284,
+      "limiting_r_outer_cm": 5808697811.08948,
+      "limiting_dr_cm": 12.412196159362793,
+      "limiting_csound_cm_s": 187122213.62381515,
+      "limiting_velocity_cm_s": 0.0,
+      "config": null
+    },
+    {
+      "name": "whole_log_merge",
+      "zones": 548,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 4147,
+        "nbase": 1200,
+        "logarithmic": true,
+        "full_amr": false,
+        "cut": false,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": true,
+        "final_zones": 548,
+        "merges": 3599,
+        "splits": 0,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 3147,
+            "merges": 1000,
+            "splits": 0
+          },
+          "2000": {
+            "zones": 2147,
+            "merges": 2000,
+            "splits": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "whole_log_amr",
+      "zones": 928,
+      "min_dt_s": 9.534730364890534e-06,
+      "min_sound_only_dt_s": 9.534730364890534e-06,
+      "limiting_zone_surface_inward": 893,
+      "limiting_r_inner_cm": 169577.22724489117,
+      "limiting_r_outer_cm": 172549.19777200115,
+      "limiting_dr_cm": 2971.970527109981,
+      "limiting_csound_cm_s": 311699483.191846,
+      "limiting_velocity_cm_s": 0.0,
+      "config": {
+        "initial_zones": 4147,
+        "nbase": 1200,
+        "logarithmic": true,
+        "full_amr": true,
+        "cut": false,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": true,
+        "final_zones": 928,
+        "merges": 3599,
+        "splits": 380,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 3751,
+            "merges": 698,
+            "splits": 302
+          },
+          "2000": {
+            "zones": 2751,
+            "merges": 1698,
+            "splits": 302
+          }
+        }
+      }
+    },
+    {
+      "name": "whole_log_amr_no_center_split",
+      "zones": 744,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 4147,
+        "nbase": 1200,
+        "logarithmic": true,
+        "full_amr": true,
+        "cut": false,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": false,
+        "final_zones": 744,
+        "merges": 3599,
+        "splits": 196,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 3385,
+            "merges": 881,
+            "splits": 119
+          },
+          "2000": {
+            "zones": 2385,
+            "merges": 1881,
+            "splits": 119
+          }
+        }
+      }
+    },
+    {
+      "name": "whole_linear_merge",
+      "zones": 949,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 4147,
+        "nbase": 1600,
+        "logarithmic": false,
+        "full_amr": false,
+        "cut": false,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": false,
+        "final_zones": 949,
+        "merges": 3198,
+        "splits": 0,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 3147,
+            "merges": 1000,
+            "splits": 0
+          },
+          "2000": {
+            "zones": 2147,
+            "merges": 2000,
+            "splits": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "whole_linear_amr",
+      "zones": 1614,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 4147,
+        "nbase": 1600,
+        "logarithmic": false,
+        "full_amr": true,
+        "cut": false,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": false,
+        "final_zones": 1614,
+        "merges": 3198,
+        "splits": 665,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 3967,
+            "merges": 590,
+            "splits": 410
+          },
+          "2000": {
+            "zones": 2967,
+            "merges": 1590,
+            "splits": 410
+          }
+        }
+      }
+    },
+    {
+      "name": "cut4msun_original",
+      "zones": 2599,
+      "min_dt_s": 3.138894284559424e-05,
+      "min_sound_only_dt_s": 3.1388965179740166e-05,
+      "limiting_zone_surface_inward": 1990,
+      "limiting_r_inner_cm": 246915979266.13766,
+      "limiting_r_outer_cm": 246915980228.90433,
+      "limiting_dr_cm": 962.7666625976562,
+      "limiting_csound_cm_s": 30672137.71096438,
+      "limiting_velocity_cm_s": 21.82411822,
+      "config": null
+    },
+    {
+      "name": "cut4msun_log_merge",
+      "zones": 1032,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 2599,
+        "nbase": 1200,
+        "logarithmic": true,
+        "full_amr": false,
+        "cut": true,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": true,
+        "final_zones": 1032,
+        "merges": 1567,
+        "splits": 0,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 1599,
+            "merges": 1000,
+            "splits": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "cut4msun_log_amr",
+      "zones": 1248,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 2599,
+        "nbase": 1200,
+        "logarithmic": true,
+        "full_amr": true,
+        "cut": true,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": true,
+        "final_zones": 1248,
+        "merges": 1567,
+        "splits": 216,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 1741,
+            "merges": 929,
+            "splits": 71
+          }
+        }
+      }
+    },
+    {
+      "name": "cut4msun_log_amr_no_center_split",
+      "zones": 1248,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 2599,
+        "nbase": 1200,
+        "logarithmic": true,
+        "full_amr": true,
+        "cut": true,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": false,
+        "final_zones": 1248,
+        "merges": 1567,
+        "splits": 216,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 1741,
+            "merges": 929,
+            "splits": 71
+          }
+        }
+      }
+    },
+    {
+      "name": "cut4msun_linear_merge",
+      "zones": 948,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 2599,
+        "nbase": 1600,
+        "logarithmic": false,
+        "full_amr": false,
+        "cut": true,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": false,
+        "final_zones": 948,
+        "merges": 1651,
+        "splits": 0,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 1599,
+            "merges": 1000,
+            "splits": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "cut4msun_linear_amr",
+      "zones": 1612,
+      "min_dt_s": 0.00014119067562228725,
+      "min_sound_only_dt_s": 0.00014936306224265064,
+      "limiting_zone_surface_inward": 1,
+      "limiting_r_inner_cm": 109145940054174.48,
+      "limiting_r_outer_cm": 109145940054245.02,
+      "limiting_dr_cm": 70.53125,
+      "limiting_csound_cm_s": 472213.4705929978,
+      "limiting_velocity_cm_s": 27332.61975,
+      "config": {
+        "initial_zones": 2599,
+        "nbase": 1600,
+        "logarithmic": false,
+        "full_amr": true,
+        "cut": true,
+        "sound_mode": "retain",
+        "velocity_limit": 0.1,
+        "split_center": false,
+        "final_zones": 1612,
+        "merges": 1651,
+        "splits": 664,
+        "converged": true,
+        "checkpoints": {
+          "1000": {
+            "zones": 2419,
+            "merges": 590,
+            "splits": 410
+          },
+          "2000": {
+            "zones": 1783,
+            "merges": 1408,
+            "splits": 592
+          }
+        }
+      }
+    }
+  ]
+}

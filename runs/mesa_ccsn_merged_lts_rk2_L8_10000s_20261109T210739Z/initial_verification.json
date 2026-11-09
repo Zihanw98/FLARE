@@ -1,0 +1,14 @@
+{
+  "merged_profile_mapping": "PASS",
+  "active_cells": 2673,
+  "retained_merged_shells": 2573,
+  "atmosphere_cells": 100,
+  "maximum_relative_mapping_errors": {
+    "r_right": 0.0,
+    "rho": 0.0,
+    "p": 3.8647843812890857e-16,
+    "vx": 2.0740101859324638e-16
+  },
+  "minimum_cell_width_cm": 8678.156709720497,
+  "target_time_s": 10000
+}

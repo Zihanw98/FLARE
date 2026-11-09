@@ -22,7 +22,8 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `optimization` | 转换无堆分配及原公式逐位一致；非均匀网格所有 limiter 的缓存/直接重构一致；随机 exact 通量和波速对比、压力初值复用与无效初值回退、静止气体解析通量、近真空、失败统计 |
 | `reconstruction` | PLM_corrected 在非均匀网格上的密度/压力正性、共享斜率系数、阈值连续性、低密度、各方向缓存/直接接口一致及未受限状态逐位兼容 |
 | `state` | 原始量/守恒量转换、动能与压力、算术运算、真空、非法状态、各方向物理通量 |
-| `lts_euler` | PCM/PLM/PLM_corrected 两级子循环、同一子步时刻的 PLM 邻域预测、快慢界面与周期边界守恒、Euler 等价性、界面压力历史与异常回滚、减少界面求解、球对称几何源项、源项限制、激波跨界、重试回滚及维度限制 |
+| `lts_euler` | PCM/PLM/PLM_corrected 多层子循环、16:1 步长、同一子步时刻的 PLM 邻域预测、跨层与周期边界守恒、Euler 等价性、界面压力历史与异常回滚、减少界面求解、球对称几何源项、源项限制、激波跨界、重试回滚及维度限制 |
+| `lts_rk2` | 独立的多层 Heun 子循环、单层/全细层 RK2 等价性、固定网格上的二阶时间收敛（含非局部时变源项）、跨层/周期守恒、球对称自引力、激波、界面求解次数、阶段源项限制及状态/压力缓存回滚 |
 | `mesh` | flat/Index、active/ghost 偏移、const 访问、非均匀间距、越界与损坏的几何 |
 | `facefield` | 各方向面数量、flat/Index、const 访问、清零、错误分配和越界 |
 | `godunov` | 每个面的左右单元和 gamma、ghost 偏移、散度负号、非均匀网格宽度、面波速归约 |

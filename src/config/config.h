@@ -33,6 +33,12 @@ namespace config
         std::string riemann_solver = "exact";
         std::string spatial_scheme = "godunov";
         std::string time_integrator = "euler";
+        double dt_implicit = 0.0; ///< Required for implicit: desired/max step in code time units.
+        bool implicit_adaptive = true;
+        double implicit_tolerance = 1e-6;
+        int implicit_newton_max_iterations = 60;
+        bool implicit_verbose = false;
+        std::string implicit_report_file;
         std::string reconstructor = "PCM"; // PCM, PLM, or PLM_corrected.
         // Slope limiter for PLM; PCM does not use a limiter.
         std::string limiter = "minmod";
@@ -62,6 +68,7 @@ namespace config
         double heating_rate = 0.0; ///< Energy added per unit mass per unit time.
 
         int integrator_retry_max = 20;
+        int lts_max_levels = 2; ///< lts_euler/lts_rk2: 1..16 levels, adjacent steps differ by two.
 
         std::string geometry = "Cartesian";
         bool spherical_gravity_enabled = false;

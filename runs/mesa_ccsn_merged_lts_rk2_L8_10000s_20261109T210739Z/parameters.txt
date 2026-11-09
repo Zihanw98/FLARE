@@ -1,0 +1,38 @@
+# PLM/MC uses two ghost layers and predicts slow stencil states to the fine time.
+# Experimental multilevel conservative RK2; sources are reevaluated at stage times.
+# Eight levels allow a fast/slow timestep ratio up to 128:1.
+# Use the existing merged profile; format adaptation only, no further merging.
+# Length = 6.957e10 cm, mass = GM_sun/G, time = sqrt(R_sun^3/GM_sun).
+init_from_mesa_profile = true
+init_mesa_profile_name = /home/u0190250/Research/FLARE/runs/mesa_ccsn_merged_lts_rk2_L8_10000s_20261109T210739Z/inputs/profile013_merged.data
+# A native shell face with enclosed MESA mass 4.001260592007234 M_sun.
+# The reader converts MESA logR with its documented solar_radius_cm=6.96e10.
+mesa_radius_inner = 0.20711213012337312
+# Native surface is 1568.8650288090414 code lengths; add 100 outer cells.
+mesa_radius_outer = 1800.0
+geometry = spherical
+nxg = 2
+gamma = 1.6666666666666667
+spherical_gravity_enabled = true
+spherical_self_gravity_enabled = true
+spherical_gravity_central_mass = 4.001260592007234
+constant_gravity_enabled = false
+constant_heating_enabled = false
+boundary_x_lower = reflective
+boundary_x_upper = user
+# Advance 10000 physical seconds after thermal-bomb initialization.
+t_end = 6.2780216922807011
+cfl = 0.2
+maxsteps = 1000000000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+reconstructor = PLM
+limiter = MC
+time_integrator = lts_rk2
+output_step_every = 1000
+output_directory = /home/u0190250/Research/FLARE/runs/mesa_ccsn_merged_lts_rk2_L8_10000s_20261109T210739Z/output
+output_suffix = ccsn_mesa
+
+# Eight time levels: maximum fast/slow step ratio 128.
+lts_max_levels = 8

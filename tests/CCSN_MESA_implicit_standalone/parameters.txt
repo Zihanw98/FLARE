@@ -1,0 +1,38 @@
+# Use the previously merged radius-fixed profile013; no remeshing during initialization.
+# Length = 6.957e10 cm, mass = GM_sun/G, time = sqrt(R_sun^3/GM_sun).
+init_from_mesa_profile = true
+init_mesa_profile_name = inputs/profile013_merged.data
+# A native shell face with enclosed MESA mass 4.001260592007234 M_sun.
+# The reader converts MESA logR with its documented solar_radius_cm=6.96e10.
+mesa_radius_inner = 0.20711213012337312
+# Native surface is 1568.8650288090414 code lengths; add 100 outer cells.
+mesa_radius_outer = 1800.0
+geometry = spherical
+nxg = 2
+gamma = 1.6666666666666667
+spherical_gravity_enabled = true
+spherical_self_gravity_enabled = true
+spherical_gravity_central_mass = 4.001260592007234
+constant_gravity_enabled = false
+constant_heating_enabled = false
+boundary_x_lower = reflective
+boundary_x_upper = user
+# Target 10 physical seconds; dt_implicit below is in code time units.
+t_end = 0.0062780216922807006
+cfl = 0.2
+maxsteps = 10000
+riemann_solver = exact
+riemann_tolerance = 1e-12
+riemann_max_iterations = 200
+reconstructor = PLM_corrected
+limiter = MC
+time_integrator = implicit
+# Desired/max step = 0.1 physical seconds in this case.
+dt_implicit = 6.2780216922807006e-05
+implicit_adaptive = true
+implicit_tolerance = 1e-6
+implicit_newton_max_iterations = 60
+implicit_report_file = output_config_adaptive/solver.csv
+output_step_every = 1
+output_directory = output_config_adaptive
+output_suffix = ccsn_mesa

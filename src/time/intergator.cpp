@@ -3,6 +3,7 @@
  * @brief Time integration.
  */
 #include "integrator.h"
+#include "implicit.h"
 #include "core/mesh.h"
 #include "utils.h"
 #include "timestep_CFL.h"
@@ -64,7 +65,7 @@ namespace hd_time
         double cfl,
         double& hydro_inverse_dt,
         double& source_dt_limit,
-        std::array<std::vector<double>, hd_core::NDIM>* pressure_hints
+        hydro::StarPressureCache* star_pressure_cache
     )
     {
         performance::Scope timer(performance::Section::RHS);
@@ -73,7 +74,7 @@ namespace hd_time
         std::vector<hd_core::Conserved> rhs;
         hydro::Limiter limiter = hydro::parse_limiter(cfg.limiter);
         hydro::Reconstructor reconstructor = hydro::parse_reconstructor(cfg.reconstructor);
-        hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta,pressure_hints);
+        hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta,star_pressure_cache);
         const double inverse_dt = hydro::wave_timestep.max_inverse_dt;
         if (!std::isfinite(inverse_dt) || inverse_dt < 0.0)
             throw std::invalid_argument("RHS requires a finite nonnegative CFL rate");
@@ -106,6 +107,10 @@ namespace hd_time
             return TimeIntegrator::LTSEuler;
         if(utils::iequals(name,"rk2"))
             return TimeIntegrator::RK2;
+        if (utils::iequals(name,"lts_rk2"))
+            return TimeIntegrator::LTSRK2;
+        if (utils::iequals(name,"implicit"))
+            return TimeIntegrator::Implicit;
         throw std::invalid_argument("Unknown or unavailable time integrator: " + name);
     }
 
@@ -122,7 +127,8 @@ namespace hd_time
         double cfl,
         double& dt_next,
         LTSEulerWorkspace* lts_workspace,
-        std::array<std::vector<double>, hd_core::NDIM>* pressure_history
+        hydro::StarPressureCache* star_pressure_cache,
+        hd_implicit::Integrator* implicit_workspace
     )
     {
         performance::Scope timer(performance::Section::Advance);
@@ -130,17 +136,29 @@ namespace hd_time
         switch (integrator)
         {
             case TimeIntegrator::Euler:
-                dt =  advance_euler(mesh, time, dt_limit, spatial_scheme, solver, source_list, cfg, hooks,cfl,pressure_history);
+                dt =  advance_euler(mesh, time, dt_limit, spatial_scheme, solver, source_list, cfg, hooks,cfl,star_pressure_cache);
                 dt_next = std::numeric_limits<double>::infinity(); // Euler 每步重新估计，无跨步建议。
                 break;
             case TimeIntegrator::RK2:
-                dt = advance_rk2(mesh,time,dt_limit,spatial_scheme,solver,source_list,cfg,hooks,cfl,dt_next,pressure_history);
+                dt = advance_rk2(mesh,time,dt_limit,spatial_scheme,solver,source_list,cfg,hooks,cfl,dt_next,star_pressure_cache);
                 break;
             case TimeIntegrator::LTSEuler:
                 dt = advance_lts_euler(mesh, time, dt_limit, spatial_scheme, solver,
                                        source_list, cfg, hooks, cfl, lts_workspace);
                 dt_next = std::numeric_limits<double>::infinity();
                 return dt; // LTS commits only after the synchronized boundary fill.
+            case TimeIntegrator::LTSRK2:
+                dt = advance_lts_rk2(mesh, time, dt_limit, spatial_scheme, solver,
+                                     source_list, cfg, hooks, cfl, star_pressure_cache);
+                dt_next = std::numeric_limits<double>::infinity();
+                return dt;
+            case TimeIntegrator::Implicit:
+                if (!implicit_workspace)
+                    throw std::invalid_argument("Implicit integration requires a solver workspace");
+                dt = implicit_workspace->advance(mesh, time, dt_limit, spatial_scheme,
+                                                  solver, source_list, cfg, hooks);
+                dt_next = implicit_workspace->suggested_dt();
+                return dt; // The converged candidate already has new-time boundaries.
             default:
                 throw std::invalid_argument("Invalid time integrator");
         }

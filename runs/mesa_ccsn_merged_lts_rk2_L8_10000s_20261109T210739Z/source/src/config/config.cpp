@@ -1,0 +1,403 @@
+/**
+ * @file config.cpp
+ * @brief Simulation configuration.
+ */
+#include "config.h"
+#include "utils.h"
+#include "hydro/limiter/limiter.h"
+#include <array>
+#include <string>         // std::string、std::getline、std::to_string
+#include <sstream>        // std::istringstream
+#include <istream>        // std::ws
+#include <fstream>        // std::ifstream
+#include <functional>     // std::function
+#include <unordered_map>  // std::unordered_map
+#include <utility>        // std::pair
+#include <stdexcept>      // std::runtime_error
+#include <exception>      // std::exception
+#include <unordered_set> // std::unordered_set
+
+namespace config
+{
+    std::string trim(const std::string& text)
+    {
+        const auto first = text.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+            return "";
+        const auto last = text.find_last_not_of(" \t\r\n");
+        return text.substr(first, last - first + 1);
+    }
+    template<typename T>
+    T parse_value(const std::string& text)
+    {
+        std::istringstream input(text);
+        T value{};
+        if (!(input >> value))
+            throw std::runtime_error("Cannot parse value: " + text);
+        input >> std::ws;
+        if (!input.eof())
+            throw std::runtime_error("Unexpected trailing text: " + text);
+        return value;
+    }
+    /**
+     * @brief Return a string parameter without interpreting quotes or escapes.
+     * @param[in] text String value; any internal or surrounding spaces are preserved here.
+     * @return A copy of text.
+     */
+    template<>
+    std::string parse_value<std::string>(const std::string& text)
+    {
+        return text; // Keep internal spaces; no quoting/escaping syntax.
+    }
+    /**
+     * @brief Parse a boolean parameter after trimming whitespace.
+     * @param[in] text Case-insensitive true/false or numeric 1/0.
+     * @return The corresponding boolean value.
+     * @throws std::runtime_error If the value is not recognized.
+     */
+    template<>
+    bool parse_value<bool>(const std::string& text)
+    {
+        const auto value = trim(text);
+
+        if (utils::iequals(value, "true") || value == "1")
+            return true;
+
+        if (utils::iequals(value, "false") || value == "0")
+            return false;
+
+        throw std::runtime_error(
+            "Expected true, false, 1 or 0; got: " + text
+        );
+    }
+    SimulationConfig ReadParameters(const std::string& filename)
+    {
+        using Setter = std::function<void(const std::string&)>;
+
+        SimulationConfig cfg{};
+
+        using Setter = std::function<void(const std::string&)>;
+        for(int d=0;d<hd_core::NDIM;d++)
+        {
+            cfg.boundary_lower[d] = "periodic";
+            cfg.boundary_upper[d] = "periodic";
+        }
+        std::unordered_set<std::string> seen;
+        const Setter set_output_step_every = [&cfg](const std::string& v) {
+            const int interval = parse_value<int>(v);
+            if (interval <= 0)
+                throw std::runtime_error("output_step_every must be a positive integer");
+            cfg.output_step_every = static_cast<std::size_t>(interval);
+        };
+        std::unordered_map<std::string, Setter> setters = {
+            {"t_end", [&cfg](const std::string& v) {
+                cfg.t_end = parse_value<double>(v);
+            }},
+            {"cfl", [&cfg](const std::string& v) {
+                cfg.cfl = parse_value<double>(v);
+            }},
+            {"cfl_desired", [&cfg](const std::string& v) {
+                cfg.cfl = parse_value<double>(v);
+            }},
+            {"cfl_max", [&cfg](const std::string& v) {
+                cfg.cfl_max = parse_value<double>(v);
+            }},
+            {"maxsteps", [&cfg](const std::string& v) {
+                // 无符号流提取也可能接受 -1，因此必须在转换前拒绝负号。
+                if (v.empty() || v.front() == '-')
+                    throw std::runtime_error("maxsteps must be a positive integer");
+                cfg.maxsteps = parse_value<std::size_t>(v);
+            }},
+            {"gamma", [&cfg](const std::string& v) {
+                cfg.gamma = parse_value<double>(v);
+            }},
+            {"riemann_solver", [&cfg](const std::string& v) {
+                cfg.riemann_solver = v;
+            }},
+            {"riemann_tolerance", [&cfg](const std::string& v) {
+                cfg.riemann_tolerance = parse_value<double>(v);
+            }},
+            {"riemann_max_iterations", [&cfg](const std::string& v) {
+                cfg.riemann_max_iterations = parse_value<int>(v);
+            }},
+            {"spatial_scheme", [&cfg](const std::string& v) {
+                cfg.spatial_scheme = v;
+            }},
+            {"time_integrator", [&cfg](const std::string& v) {
+                cfg.time_integrator = v;
+            }},
+            {"dt_implicit", [&cfg](const std::string& v) {
+                cfg.dt_implicit = parse_value<double>(v);
+            }},
+            {"implicit_adaptive", [&cfg](const std::string& v) {
+                cfg.implicit_adaptive = parse_value<bool>(v);
+            }},
+            {"implicit_tolerance", [&cfg](const std::string& v) {
+                cfg.implicit_tolerance = parse_value<double>(v);
+            }},
+            {"implicit_newton_max_iterations", [&cfg](const std::string& v) {
+                cfg.implicit_newton_max_iterations = parse_value<int>(v);
+            }},
+            {"implicit_verbose", [&cfg](const std::string& v) {
+                cfg.implicit_verbose = parse_value<bool>(v);
+            }},
+            {"implicit_report_file", [&cfg](const std::string& v) {
+                cfg.implicit_report_file = v;
+            }},
+            {"reconstructor",[&cfg](const std::string& v){
+                cfg.reconstructor = v;
+            }},
+            {"limiter", [&cfg](const std::string& v) {
+                cfg.limiter = v;
+            }},
+            {"limiter_beta", [&cfg](const std::string& v) {
+                cfg.limiter_beta = parse_value<double>(v);
+            }},
+            {"output_directory", [&cfg](const std::string& v) {
+                cfg.output_directory = v;
+            }},
+            {"output_suffix", [&cfg](const std::string& v) {
+                cfg.output_suffix = v;
+            }},
+            {"step_every", set_output_step_every},
+            // 兼容原先配置字段的名字。
+            {"output_step_every", set_output_step_every},
+            {"constant_gravity_enabled",[&cfg](const std::string& v){
+                cfg.constant_gravity_enabled = parse_value<bool>(v);
+            }},
+            {"spherical_gravity_enabled",[&cfg](const std::string& v){
+                cfg.spherical_gravity_enabled = parse_value<bool>(v);
+            }},
+            {"spherical_self_gravity_enabled",[&cfg](const std::string& v){
+                cfg.spherical_self_gravity_enabled = parse_value<bool>(v);
+            }},
+            {"spherical_gravity_central_mass",[&cfg](const std::string& v){
+                cfg.spherical_central_mass = parse_value<double>(v);
+            }},
+            {"constant_heating_enabled", [&cfg](const std::string& v) {
+                cfg.constant_heating_enabled = parse_value<bool>(v);
+            }},
+            {"heating_rate", [&cfg](const std::string& v) {
+                cfg.heating_rate = parse_value<double>(v);
+            }},
+            {"integrator_retry_max",[&cfg](const std::string& v){
+                cfg.integrator_retry_max = parse_value<int>(v);
+            }},
+            {"lts_max_levels",[&cfg](const std::string& v){
+                cfg.lts_max_levels = parse_value<int>(v);
+            }},
+            {"geometry",[&cfg](const std::string& v){
+                cfg.geometry = v;
+            }},
+            {"init_mesh_from_file",[&cfg](const std::string& v){
+                cfg.init_mesh_from_file = parse_value<bool>(v);
+            }},
+            {"init_mesh_uniform_type",[&cfg](const std::string& v){
+                cfg.init_mesh_uniform_type = v;
+            }},
+            {"init_mesh_file_name",[&cfg](const std::string& v){
+                cfg.init_mesh_file_name = v;
+            }},
+            {"init_profile_from_file",[&cfg](const std::string& v){
+                cfg.init_profile_from_file = parse_value<bool>(v);
+            }},
+            {"init_profile_file_name",[&cfg](const std::string& v){
+                cfg.init_profile_file_name = v;
+            }},
+            {"init_from_mesa_profile",[&cfg](const std::string& v){
+                cfg.init_from_mesa_profile = parse_value<bool>(v);
+            }},
+            {"init_mesa_profile_name",[&cfg](const std::string& v){
+                cfg.init_mesa_profile_name = v;
+            }},
+            {"mesa_radius_inner",[&cfg](const std::string& v){
+                cfg.mesa_radius_inner = parse_value<double>(v);
+            }},
+            {"mesa_radius_outer",[&cfg](const std::string& v){
+                cfg.mesa_radius_outer = parse_value<double>(v);
+            }}
+        };
+
+        constexpr std::array<const char*, 3> axes{"x", "y", "z"};
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            const std::string axis = axes[d];
+
+            setters.emplace("n" + axis + "a",
+                [&cfg, d](const std::string& v) {
+                    cfg.nactive[d] = parse_value<int>(v);
+                });
+
+            setters.emplace("n" + axis + "g",
+                [&cfg, d](const std::string& v) {
+                    cfg.nghost[d] = parse_value<int>(v);
+                });
+
+            setters.emplace(axis + "_lower",
+                [&cfg, d](const std::string& v) {
+                    cfg.lower[d] = parse_value<double>(v);
+                });
+
+            setters.emplace(axis + "_upper",
+                [&cfg, d](const std::string& v) {
+                    cfg.upper[d] = parse_value<double>(v);
+                });
+
+            setters.emplace("boundary_" + axis + "_lower",
+                [&cfg, d](const std::string& v) {
+                    cfg.boundary_lower[d] = v;
+                });
+
+            setters.emplace("boundary_" + axis + "_upper",
+                [&cfg, d](const std::string& v) {
+                    cfg.boundary_upper[d] = v;
+                });
+            setters.emplace("gravity_" + axis,
+                [&cfg,d](const std::string& v)
+                {
+                    cfg.gravity[d] = parse_value<double>(v);
+                }
+            );
+        }
+        std::ifstream file(filename);
+        if (!file)
+            throw std::runtime_error("Cannot open parameter file: " + filename);
+
+        std::string line;
+        int line_number = 0;
+        while (std::getline(file, line))
+        {
+            ++line_number;
+            const auto comment = line.find('#');
+            if (comment != std::string::npos)
+                line.erase(comment);
+            line = trim(line);
+            if (line.empty())
+                continue;
+
+            const std::string location = filename + ":" + std::to_string(line_number) + ": ";
+            const auto equal = line.find('=');
+            if (equal == std::string::npos)
+                throw std::runtime_error(location + "Missing '='");
+
+            const std::pair<std::string, std::string> kv = {
+                trim(line.substr(0, equal)), trim(line.substr(equal + 1))
+            };
+            const auto& [key, value] = kv;
+            if (key.empty())
+                throw std::runtime_error(location + "Empty parameter name");
+            const auto it = setters.find(key);
+            if (it == setters.end())
+                continue; // Ignore unknown keys without parsing their values.
+            try
+            {
+                it->second(value);
+                seen.insert(key);
+            }
+            catch (const std::exception& error)
+            {
+                throw std::runtime_error(location + "Parameter '" + key + "': " + error.what());
+            }
+        }
+        if (file.bad())
+            throw std::runtime_error("Failed to read parameter file: " + filename);
+        validate_cfg(cfg,seen);
+        return cfg;
+    }
+    void validate_cfg(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
+    {
+        hydro::parse_limiter(cfg.limiter);
+        if (!std::isfinite(cfg.limiter_beta) || cfg.limiter_beta < 1.0 || cfg.limiter_beta > 2.0)
+            throw std::runtime_error("limiter_beta must be finite and in [1, 2]");
+
+        const auto require = [&seen](const std::string& key)
+        {
+            if (seen.count(key) == 0)
+                throw std::runtime_error(
+                    "Missing required parameter: " + key
+                );
+        };
+        if (cfg.init_from_mesa_profile && hd_core::NDIM != 1)
+            throw std::runtime_error("Building a MESA radial mesh requires HD_NDIM=1");
+        if (cfg.init_from_mesa_profile && (cfg.init_mesh_from_file || cfg.init_profile_from_file))
+            throw std::runtime_error("MESA initialization cannot be combined with mesh/profile file initialization");
+        if (cfg.init_from_mesa_profile && cfg.init_mesa_profile_name.empty())
+            throw std::runtime_error("init_mesa_profile_name is required for MESA initialization");
+        if (cfg.init_mesh_from_file && cfg.init_mesh_file_name.empty())
+            throw std::runtime_error("init_mesh_file_name is required for file mesh initialization");
+        if (cfg.init_profile_from_file && cfg.init_profile_file_name.empty())
+            throw std::runtime_error("init_profile_file_name is required for file profile initialization");
+        constexpr std::array<const char*, 3> axes{"x", "y", "z"};
+        for(int d=0; d< hd_core::NDIM; d++)
+        {
+            const std::string axis = axes[d];
+            // The MESA builder derives the active count and bounds from the profile faces.
+            if (!cfg.init_from_mesa_profile)
+            {
+                require("n" + axis + "a");
+                if (cfg.nactive[d] <= 0)
+                    throw std::runtime_error("n" + axis + "a must be > 0");
+            }
+            require("n" + axis + "g");
+            if (!cfg.init_mesh_from_file && !cfg.init_from_mesa_profile)
+            {
+                require(axis + "_upper" );
+                require(axis + "_lower");
+                if (!std::isfinite(cfg.lower[d]) || !std::isfinite(cfg.upper[d]) || cfg.upper[d] <= cfg.lower[d])
+                {
+                    throw std::runtime_error(
+                        axis + " bounds must be finite and upper > lower"
+                    );
+                }
+            }
+            if (cfg.nghost[d] < 1)
+                throw std::runtime_error(
+                    "n" + axis + "g must be >= 1"
+                );
+            const bool& bc_upper_periodic = utils::iequals(cfg.boundary_upper[d],"periodic");
+            const bool& bc_lower_periodic = utils::iequals(cfg.boundary_lower[d],"periodic");
+            if(bc_upper_periodic!=bc_lower_periodic)
+            {
+                throw std::runtime_error("Periodic boundary condition should be double-sided in axis" + d);
+            }
+            if(!std::isfinite(cfg.gravity[d]))
+                throw std::runtime_error("gravity not finite");
+        }
+        if (!std::isfinite(cfg.t_end) || cfg.t_end <= 0.0)
+            throw std::runtime_error("t_end must be finite and > 0");
+
+        if ((utils::iequals(cfg.time_integrator, "implicit") || seen.count("dt_implicit"))
+            && (!std::isfinite(cfg.dt_implicit) || cfg.dt_implicit <= 0.0))
+            throw std::runtime_error("dt_implicit must be finite and > 0 for implicit integration");
+        if (!std::isfinite(cfg.implicit_tolerance) || cfg.implicit_tolerance <= 0.0
+            || cfg.implicit_tolerance >= 1.0)
+            throw std::runtime_error("Require 0 < implicit_tolerance < 1");
+        if (cfg.implicit_newton_max_iterations <= 0)
+            throw std::runtime_error("implicit_newton_max_iterations must be > 0");
+
+        if (seen.count("cfl") && seen.count("cfl_desired"))
+            throw std::runtime_error("Use either cfl or cfl_desired, not both");
+        if (!std::isfinite(cfg.cfl) || !std::isfinite(cfg.cfl_max)
+            || cfg.cfl <= 0.0 || cfg.cfl > cfg.cfl_max
+            || cfg.cfl_max > 0.5)
+            throw std::runtime_error("Require 0 < cfl_desired <= cfl_max <= 0.5");
+        if (cfg.integrator_retry_max < 0)
+            throw std::runtime_error("integrator_retry_max must be nonnegative");
+        if (cfg.lts_max_levels < 1 || cfg.lts_max_levels > 16)
+            throw std::runtime_error("lts_max_levels must be in [1, 16]");
+
+        if (!std::isfinite(cfg.heating_rate) || cfg.heating_rate < 0.0)
+            throw std::runtime_error("heating_rate must be finite and nonnegative");
+
+        if (!std::isfinite(cfg.gamma) || cfg.gamma <= 1.0)
+            throw std::runtime_error("gamma must be finite and > 1");
+
+        if (!std::isfinite(cfg.riemann_tolerance) || cfg.riemann_tolerance <= 0.0)
+            throw std::runtime_error("riemann_tolerance must be finite and > 0");
+        if (cfg.riemann_max_iterations <= 0)
+            throw std::runtime_error("riemann_max_iterations must be > 0");
+
+        if (cfg.maxsteps <= 0)
+            throw std::runtime_error("maxsteps must be > 0");
+    }
+}

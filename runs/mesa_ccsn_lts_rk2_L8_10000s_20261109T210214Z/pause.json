@@ -1,0 +1,13 @@
+{
+  "status": "paused",
+  "paused_utc": "2026-11-09T21:06:33.009074+00:00",
+  "solver_pid": 1231764,
+  "supervisor_pid": 1231763,
+  "process_states": {
+    "1231764": "State:\tT (stopped)",
+    "1231763": "State:\tT (stopped)"
+  },
+  "last_reported_physical_time_seconds": 1.5748650580734462,
+  "last_reported_step": 2414,
+  "note": "Processes stopped with SIGSTOP; in-memory state retained. progress.json contains the last periodic running report."
+}

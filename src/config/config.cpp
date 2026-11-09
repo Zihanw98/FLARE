@@ -126,6 +126,24 @@ namespace config
             {"time_integrator", [&cfg](const std::string& v) {
                 cfg.time_integrator = v;
             }},
+            {"dt_implicit", [&cfg](const std::string& v) {
+                cfg.dt_implicit = parse_value<double>(v);
+            }},
+            {"implicit_adaptive", [&cfg](const std::string& v) {
+                cfg.implicit_adaptive = parse_value<bool>(v);
+            }},
+            {"implicit_tolerance", [&cfg](const std::string& v) {
+                cfg.implicit_tolerance = parse_value<double>(v);
+            }},
+            {"implicit_newton_max_iterations", [&cfg](const std::string& v) {
+                cfg.implicit_newton_max_iterations = parse_value<int>(v);
+            }},
+            {"implicit_verbose", [&cfg](const std::string& v) {
+                cfg.implicit_verbose = parse_value<bool>(v);
+            }},
+            {"implicit_report_file", [&cfg](const std::string& v) {
+                cfg.implicit_report_file = v;
+            }},
             {"reconstructor",[&cfg](const std::string& v){
                 cfg.reconstructor = v;
             }},
@@ -164,6 +182,9 @@ namespace config
             }},
             {"integrator_retry_max",[&cfg](const std::string& v){
                 cfg.integrator_retry_max = parse_value<int>(v);
+            }},
+            {"lts_max_levels",[&cfg](const std::string& v){
+                cfg.lts_max_levels = parse_value<int>(v);
             }},
             {"geometry",[&cfg](const std::string& v){
                 cfg.geometry = v;
@@ -345,6 +366,15 @@ namespace config
         if (!std::isfinite(cfg.t_end) || cfg.t_end <= 0.0)
             throw std::runtime_error("t_end must be finite and > 0");
 
+        if ((utils::iequals(cfg.time_integrator, "implicit") || seen.count("dt_implicit"))
+            && (!std::isfinite(cfg.dt_implicit) || cfg.dt_implicit <= 0.0))
+            throw std::runtime_error("dt_implicit must be finite and > 0 for implicit integration");
+        if (!std::isfinite(cfg.implicit_tolerance) || cfg.implicit_tolerance <= 0.0
+            || cfg.implicit_tolerance >= 1.0)
+            throw std::runtime_error("Require 0 < implicit_tolerance < 1");
+        if (cfg.implicit_newton_max_iterations <= 0)
+            throw std::runtime_error("implicit_newton_max_iterations must be > 0");
+
         if (seen.count("cfl") && seen.count("cfl_desired"))
             throw std::runtime_error("Use either cfl or cfl_desired, not both");
         if (!std::isfinite(cfg.cfl) || !std::isfinite(cfg.cfl_max)
@@ -353,6 +383,8 @@ namespace config
             throw std::runtime_error("Require 0 < cfl_desired <= cfl_max <= 0.5");
         if (cfg.integrator_retry_max < 0)
             throw std::runtime_error("integrator_retry_max must be nonnegative");
+        if (cfg.lts_max_levels < 1 || cfg.lts_max_levels > 16)
+            throw std::runtime_error("lts_max_levels must be in [1, 16]");
 
         if (!std::isfinite(cfg.heating_rate) || cfg.heating_rate < 0.0)
             throw std::runtime_error("heating_rate must be finite and nonnegative");

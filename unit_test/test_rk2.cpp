@@ -201,14 +201,14 @@ int main(int argc, char** argv)
         {
             mesh = make_mesh();
             density_source = 0.5;
-            std::array<std::vector<double>, hd_core::NDIM> history;
-            auto with_history = [&](double limit) {
+            hydro::StarPressureCache star_pressure_cache;
+            auto with_cache = [&](double limit) {
                 return hd_time::advance_one_step(mesh, 0.0, limit, method, scheme,
-                    solver, sources, cfg, hooks, cfg.cfl, dt_next, nullptr, &history);
+                    solver, sources, cfg, hooks, cfg.cfl, dt_next, nullptr, &star_pressure_cache);
             };
             solver.hint_inputs.clear(); solver.hint_outputs.clear();
             dt_next = std::numeric_limits<double>::infinity();
-            CHECK(near(with_history(0.1), 0.1));
+            CHECK(near(with_cache(0.1), 0.1));
             std::size_t faces_per_axis = 3;
             for (int d = 1; d < hd_core::NDIM; ++d) faces_per_axis *= 2;
             const std::size_t faces = faces_per_axis * hd_core::NDIM;
@@ -220,22 +220,38 @@ int main(int argc, char** argv)
                     CHECK(solver.hint_inputs[faces + f] == solver.hint_outputs[f]);
             for (int d = 0; d < hd_core::NDIM; ++d)
             {
-                CHECK(history[d].size() == faces_per_axis);
+                CHECK(star_pressure_cache[d].size() == faces_per_axis);
                 for (std::size_t f = 0; f < faces_per_axis; ++f)
-                    CHECK(history[d][f] == solver.hint_outputs[(stages - 1) * faces + d * faces_per_axis + f]);
+                    CHECK(star_pressure_cache[d][f] == solver.hint_outputs[(stages - 1) * faces + d * faces_per_axis + f]);
             }
-            const auto accepted = history;
+            const auto accepted = star_pressure_cache;
             solver.hint_inputs.clear(); solver.hint_outputs.clear();
-            with_history(0.1);
+            with_cache(0.1);
             for (int d = 0; d < hd_core::NDIM; ++d)
                 for (std::size_t f = 0; f < faces_per_axis; ++f)
                     CHECK(solver.hint_inputs[d * faces_per_axis + f] == accepted[d][f]);
 
-            const auto saved_history = history;
+            // A changed face count invalidates only that direction's guesses.
+            const auto before_resize = star_pressure_cache;
+            star_pressure_cache[0].assign(faces_per_axis + 1, 123.0);
+            solver.hint_inputs.clear(); solver.hint_outputs.clear();
+            with_cache(0.1);
+            for (int d = 0; d < hd_core::NDIM; ++d)
+                for (std::size_t f = 0; f < faces_per_axis; ++f)
+                    CHECK(solver.hint_inputs[d * faces_per_axis + f] ==
+                          (d == 0 ? 0.0 : before_resize[d][f]));
+
+            // Explicit invalidation starts a new run cold even at the same size.
+            star_pressure_cache.clear();
+            solver.hint_inputs.clear(); solver.hint_outputs.clear();
+            with_cache(0.1);
+            for (std::size_t f = 0; f < faces; ++f) CHECK(solver.hint_inputs[f] == 0.0);
+
+            const auto saved_star_pressure_cache = star_pressure_cache;
             const auto saved_mesh = mesh;
             initial_source_limit = std::numeric_limits<double>::quiet_NaN();
-            expect_throw<std::invalid_argument>([&] { with_history(0.1); });
-            CHECK(history == saved_history);
+            expect_throw<std::invalid_argument>([&] { with_cache(0.1); });
+            CHECK(star_pressure_cache == saved_star_pressure_cache);
             same_cells(mesh, saved_mesh);
             mesh = make_mesh();
             const auto before_failure = mesh;
@@ -243,21 +259,21 @@ int main(int argc, char** argv)
             if (stages == 1)
             {
                 energy_source = -1e6;
-                expect_throw<std::invalid_argument>([&] { with_history(0.1); });
+                expect_throw<std::invalid_argument>([&] { with_cache(0.1); });
             }
             else
             {
                 density_source = 2.0;
                 cfg.integrator_retry_max = 0;
-                expect_throw<std::runtime_error>([&] { with_history(1.0); });
+                expect_throw<std::runtime_error>([&] { with_cache(1.0); });
             }
-            CHECK(history == saved_history);
+            CHECK(star_pressure_cache == saved_star_pressure_cache);
             same_cells(mesh, before_failure);
             cfg.integrator_retry_max = 20;
             if (stages == 2)
             {
                 solver.hint_inputs.clear(); solver.hint_outputs.clear();
-                CHECK(near(with_history(1.0), 0.4 / 1.8));
+                CHECK(near(with_cache(1.0), 0.4 / 1.8));
                 CHECK(solver.hint_inputs.size() == 3 * faces);
                 for (std::size_t f = 0; f < faces; ++f)
                 {

@@ -1,0 +1,17 @@
+{
+  "merged_source": "/home/u0190250/Research/FLARE/profile013_radius_fixed_merged/merged_profile.dat",
+  "merged_source_sha256": "4761f66acf535a82861c7bce8503efb128b8a5c7b6529e2f878712fb4318fbd3",
+  "source_rows": 3892,
+  "format_adapter_sha256": "dbe3abbe1fce7b82d80c75239e0d3c400e1950d48d5c7ace03f7507f3f74584e",
+  "adapter_origin": "/home/u0190250/Research/FLARE/tests/CCSN_MESA_day13/output_rk2_merged_10s_20261109T160153Z/merged_mesa_input.data",
+  "maximum_relative_format_conversion_errors": {
+    "r_outer_cm": 2.2135192632578322e-16,
+    "T_K": 2.013094212112272e-15,
+    "rho_g_cm3": 1.0691567608092147e-15,
+    "P_dyn_cm2": 4.088679511813566e-15,
+    "v_cm_s": 0.0,
+    "M_Msun": 0.0,
+    "dr_cm": 0.0
+  },
+  "note": "Verified all cells against current merged_profile.dat; format conversion only, no additional merging or interpolation."
+}

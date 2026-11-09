@@ -1,0 +1,438 @@
+{
+  "input": "/home/u0190250/Research/FLARE/profile013_radius_fixed.data",
+  "results": [
+    {
+      "initial_zones": 4147,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": false,
+      "cut": false,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 548,
+      "merges": 3599,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3147,
+          "merges": 1000,
+          "splits": 0
+        },
+        "2000": {
+          "zones": 2147,
+          "merges": 2000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": false,
+      "cut": false,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 548,
+      "merges": 3599,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3147,
+          "merges": 1000,
+          "splits": 0
+        },
+        "2000": {
+          "zones": 2147,
+          "merges": 2000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": true,
+      "cut": false,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 928,
+      "merges": 3599,
+      "splits": 380,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3751,
+          "merges": 698,
+          "splits": 302
+        },
+        "2000": {
+          "zones": 2751,
+          "merges": 1698,
+          "splits": 302
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": true,
+      "cut": false,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 928,
+      "merges": 3599,
+      "splits": 380,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3751,
+          "merges": 698,
+          "splits": 302
+        },
+        "2000": {
+          "zones": 2751,
+          "merges": 1698,
+          "splits": 302
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": false,
+      "cut": false,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 949,
+      "merges": 3198,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3147,
+          "merges": 1000,
+          "splits": 0
+        },
+        "2000": {
+          "zones": 2147,
+          "merges": 2000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": false,
+      "cut": false,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 949,
+      "merges": 3198,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3147,
+          "merges": 1000,
+          "splits": 0
+        },
+        "2000": {
+          "zones": 2147,
+          "merges": 2000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": true,
+      "cut": false,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 1614,
+      "merges": 3198,
+      "splits": 665,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3967,
+          "merges": 590,
+          "splits": 410
+        },
+        "2000": {
+          "zones": 2967,
+          "merges": 1590,
+          "splits": 410
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": true,
+      "cut": false,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 1614,
+      "merges": 3198,
+      "splits": 665,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3967,
+          "merges": 590,
+          "splits": 410
+        },
+        "2000": {
+          "zones": 2967,
+          "merges": 1590,
+          "splits": 410
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": false,
+      "cut": true,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 1032,
+      "merges": 1567,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1599,
+          "merges": 1000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": false,
+      "cut": true,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 1032,
+      "merges": 1567,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1599,
+          "merges": 1000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": true,
+      "cut": true,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 1248,
+      "merges": 1567,
+      "splits": 216,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1741,
+          "merges": 929,
+          "splits": 71
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": true,
+      "cut": true,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": true,
+      "final_zones": 1248,
+      "merges": 1567,
+      "splits": 216,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1741,
+          "merges": 929,
+          "splits": 71
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": false,
+      "cut": true,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 948,
+      "merges": 1651,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1599,
+          "merges": 1000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": false,
+      "cut": true,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 948,
+      "merges": 1651,
+      "splits": 0,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1599,
+          "merges": 1000,
+          "splits": 0
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": true,
+      "cut": true,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 1612,
+      "merges": 1651,
+      "splits": 664,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 2419,
+          "merges": 590,
+          "splits": 410
+        },
+        "2000": {
+          "zones": 1783,
+          "merges": 1408,
+          "splits": 592
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1600,
+      "logarithmic": false,
+      "full_amr": true,
+      "cut": true,
+      "sound_mode": "mass_weighted_cs2",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 1612,
+      "merges": 1651,
+      "splits": 664,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 2419,
+          "merges": 590,
+          "splits": 410
+        },
+        "2000": {
+          "zones": 1783,
+          "merges": 1408,
+          "splits": 592
+        }
+      }
+    },
+    {
+      "initial_zones": 4147,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": true,
+      "cut": false,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 744,
+      "merges": 3599,
+      "splits": 196,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 3385,
+          "merges": 881,
+          "splits": 119
+        },
+        "2000": {
+          "zones": 2385,
+          "merges": 1881,
+          "splits": 119
+        }
+      }
+    },
+    {
+      "initial_zones": 2599,
+      "nbase": 1200,
+      "logarithmic": true,
+      "full_amr": true,
+      "cut": true,
+      "sound_mode": "retain",
+      "velocity_limit": 0.1,
+      "split_center": false,
+      "final_zones": 1248,
+      "merges": 1567,
+      "splits": 216,
+      "converged": true,
+      "checkpoints": {
+        "1000": {
+          "zones": 1741,
+          "merges": 929,
+          "splits": 71
+        }
+      }
+    }
+  ]
+}

@@ -216,7 +216,7 @@ void pressure_hint_tests()
         solver.flux_with_pressure_hint(state(-1, 1), state(1, 1), 0, 1.4, 1.4, hint);
     });
     CHECK(hint == saved);
-    // Vacuum must clear history, including vacuum generated between two gases.
+    // Vacuum must clear the cache, including vacuum generated between two gases.
     for (const auto& states : {
             std::pair{state(0, 0), state(0, 0)}, std::pair{state(1, 1), state(0, 0)},
             std::pair{state(0, 0), state(1, 1)}, std::pair{state(1, 1, -10), state(1, 1, 10)}})

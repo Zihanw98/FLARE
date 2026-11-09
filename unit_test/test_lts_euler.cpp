@@ -6,6 +6,7 @@
 #include <limits>
 #include <iomanip>
 #include <sstream>
+#include <fstream>
 
 namespace
 {
@@ -53,13 +54,13 @@ public:
     {
         inputs.push_back(pressure);
         if (static_cast<int>(inputs.size()) == throw_on_call)
-            throw std::runtime_error("Injected failure after partial pressure-history update");
+            throw std::runtime_error("Injected failure after partial star-pressure cache update");
         return exact.flux_with_pressure_hint(L, R, d, gL, gR, pressure);
     }
 };
 
 MeshBlock make_mesh(bool nonuniform = true, int narrow = 7, bool spherical = false,
-                    int ghosts = 2, int active_cells = 20)
+                    int ghosts = 2, int active_cells = 20, double narrow_width = 0.01)
 {
     MeshBlock mesh;
     for (int d = 0; d < hd_core::NDIM; ++d)
@@ -75,7 +76,7 @@ MeshBlock make_mesh(bool nonuniform = true, int narrow = 7, bool spherical = fal
         const int n = mesh.nactive[0];
         faces[ghosts] = 1.0;
         for (int i = 0; i < n; ++i)
-            faces[ghosts + i + 1] = faces[ghosts + i] + (i == narrow ? 0.01 : 0.1);
+            faces[ghosts + i + 1] = faces[ghosts + i] + (i == narrow ? narrow_width : 0.1);
         for (int g = 1; g <= ghosts; ++g)
         {
             const int low = spherical ? ghosts + g - 1 : ghosts + n - g;
@@ -226,12 +227,13 @@ void conservation_and_cost_tests(const std::string& method)
     }
 }
 
-void source_and_geometry_tests(const std::string& method)
+void source_and_geometry_tests(const std::string& method, int levels = 2)
 {
     CountSolver solver;
     config::SimulationConfig cfg;
     cfg.reconstructor = method;
     cfg.limiter = "MC";
+    cfg.lts_max_levels = levels;
     auto mesh = make_mesh(true, 7, true);
     const auto original = mesh;
     // Spherical geometric source must cancel uniform pressure flux, even at
@@ -272,7 +274,7 @@ void source_and_geometry_tests(const std::string& method)
     CHECK(advance(mesh, solver, 0.0, 1.0, gravity, cfg) < 1e-8);
 }
 
-void retry_and_input_tests(const std::string& method)
+void retry_and_input_tests(const std::string& method, int levels = 2)
 {
     auto mesh = make_mesh();
     const auto before = mesh;
@@ -280,12 +282,13 @@ void retry_and_input_tests(const std::string& method)
     solver.initial_faces = mesh.nactive[0]; // Periodic seam solved only once.
     config::SimulationConfig cfg;
     cfg.reconstructor = method;
+    cfg.lts_max_levels = levels;
     cfg.integrator_retry_max = 0;
     expect_throw<std::runtime_error>([&] { advance(mesh, solver, 0.0, 1.0, {}, cfg); });
     same(mesh, before, 0.0);
 
     solver.calls = 0;
-    cfg.integrator_retry_max = 1;
+    cfg.integrator_retry_max = levels - 1;
     CHECK(near(advance(mesh, solver, 0.0, 1.0, {}, cfg), 0.002));
     same(mesh, before, 0.0);
 
@@ -307,7 +310,7 @@ void retry_and_input_tests(const std::string& method)
     same(mesh, before, 0.0);
 }
 
-void shock_test(const std::string& method)
+void shock_test(const std::string& method, int levels = 2)
 {
     CountSolver solver;
     auto mesh = make_mesh(true, 7, true);
@@ -327,6 +330,7 @@ void shock_test(const std::string& method)
     cfg.cfl = 0.2;
     cfg.reconstructor = method;
     cfg.limiter = "MC";
+    cfg.lts_max_levels = levels;
     double t = 0.0;
     hd_time::LTSEulerWorkspace workspace;
     while (t < 0.2)
@@ -335,7 +339,7 @@ void shock_test(const std::string& method)
         double ref = t;
         while (ref < t + H)
         {
-            const double h = hd_time::advance_euler(reference, ref, std::min(H / 2, t + H - ref),
+            const double h = hd_time::advance_euler(reference, ref, std::min(std::ldexp(H, 1-levels), t + H - ref),
                 hydro::SpatialScheme::Godunov, solver, {}, cfg, {}, cfg.cfl);
             ref += h;
             boundary::FillBoundary(reference, ref, {});
@@ -357,7 +361,7 @@ void shock_test(const std::string& method)
     CHECK(difference / mass < 0.02);
 }
 
-void midpoint_stencil_test(const std::string& method)
+void midpoint_stencil_test(const std::string& method, int levels = 2)
 {
     // Independent oracle: at the second substep, all stencil cells must agree
     // with a global Euler half-step, including slow neighbours and source terms.
@@ -381,6 +385,7 @@ void midpoint_stencil_test(const std::string& method)
     cfg.reconstructor = method;
     cfg.limiter = "MC";
     const hd_source::SourceList sources{hd_source::make_constant_heating(0.3)};
+    cfg.lts_max_levels = levels;
     double rate, source_limit;
     auto [h, rhs] = hd_time::evaluate_RHS(midpoint, 0.0, hydro::SpatialScheme::Godunov,
         sources, reference_solver, cfg, cfg.cfl, rate, source_limit);
@@ -394,8 +399,9 @@ void midpoint_stencil_test(const std::string& method)
     boundary::FillBoundary(stale, h, {});
 
     const double H = advance(mesh, recorded, 0.0, 1.0, sources, cfg);
-    CHECK(near(H, 2 * h));
-    CHECK(recorded.states.size() == 26); // 20 unique initial + six fine faces.
+    CHECK(near(H, std::ldexp(h, levels - 1)));
+    CHECK(recorded.states.size() >= 26); // Initial faces + first finest half-step.
+    if (levels == 2) CHECK(recorded.states.size() == 26);
     double stale_difference = 0.0;
     for (int f = 5; f <= 10; ++f)
     {
@@ -436,6 +442,7 @@ void workspace_tests()
         }
         auto fresh = reused;
         cfg.reconstructor = pass % 3 == 0 ? "PCM" : pass % 3 == 1 ? "PLM" : "PLM_corrected";
+        cfg.lts_max_levels = 1 + pass;
         const auto sources = spherical
             ? hd_source::SourceList{hd_source::make_geometric_source(), hd_source::make_constant_heating(0.2)}
             : hd_source::SourceList{hd_source::make_constant_heating(0.2)};
@@ -464,7 +471,7 @@ void workspace_tests()
     same(trial, reference, 0.0);
 }
 
-void pressure_history_test()
+void star_pressure_cache_test(int levels = 2)
 {
     auto mesh = make_mesh();
     contact(mesh);
@@ -473,6 +480,7 @@ void pressure_history_test()
     hd_time::LTSEulerWorkspace workspace, reference_workspace;
     config::SimulationConfig cfg;
     cfg.reconstructor = "PLM";
+    cfg.lts_max_levels = levels;
     const int faces = mesh.nactive[0]; // Periodic seam is solved only once.
     double t = advance(mesh, solver, 0.0, 1.0, {}, cfg, &workspace);
     CHECK(t == advance(reference, solver.exact, 0.0, 1.0, {}, cfg, &reference_workspace));
@@ -521,7 +529,7 @@ void global_read_boundary(MeshBlock& mesh, double time, int, boundary::BoundaryS
     for (int g = 0; g < ng; ++g) mesh.cells[g] = mesh.cells[ng];
 }
 
-void custom_boundary_prediction_test()
+void custom_boundary_prediction_test(int levels = 2)
 {
     auto mesh = make_mesh(true, 0);
     contact(mesh);
@@ -535,6 +543,7 @@ void custom_boundary_prediction_test()
     config::SimulationConfig cfg;
     cfg.reconstructor = "PLM";
     cfg.cfl = 0.2;
+    cfg.lts_max_levels = levels;
     CountSolver solver;
     double rate, source_limit;
     auto [h, rhs] = hd_time::evaluate_RHS(mesh, 0.0, hydro::SpatialScheme::Godunov,
@@ -547,14 +556,114 @@ void custom_boundary_prediction_test()
     double next = infinity;
     const double H = hd_time::advance_one_step(mesh, 0.0, 1.0, hd_time::TimeIntegrator::LTSEuler,
         hydro::SpatialScheme::Godunov, solver, {}, cfg, hooks, cfg.cfl, next, &workspace);
-    CHECK(H == 2 * h);
+    CHECK(H == std::ldexp(h, levels - 1));
     CHECK(boundary_half_calls == 1);
+}
+
+void multilevel_conservation_and_cost(const std::string& method)
+{
+    // A 100:1 width jump leaves genuinely coarse cells even after level buffers.
+    // Exercise an interior thin cell and both sides of the periodic seam.
+    for (int narrow : {0, 31, 63})
+    {
+        auto mesh = make_mesh(true, narrow, false, 2, 64, 0.001);
+        contact(mesh);
+        auto reference = mesh;
+        const auto initial = integral(mesh);
+        config::SimulationConfig cfg;
+        cfg.cfl = 0.2;
+        cfg.reconstructor = method;
+        cfg.limiter = "MC";
+        cfg.lts_max_levels = 5;
+        CountSolver solver, reference_solver;
+        double rate, source_limit;
+        const auto [h0, rhs] = hd_time::evaluate_RHS(reference, 0.0, hydro::SpatialScheme::Godunov,
+            {}, reference_solver, cfg, cfg.cfl, rate, source_limit);
+        hd_time::LTSEulerWorkspace workspace;
+        double t = 0.0;
+        int reference_calls = 0;
+        for (int step = 0; step < 20; ++step)
+        {
+            const int before = solver.calls;
+            const double H = advance(mesh, solver, t, 1.0, {}, cfg, &workspace);
+            if (step == 0) CHECK(near(H, 16 * h0, 1e-13));
+            CHECK(solver.calls - before < 8 * mesh.nactive[0]);
+            double ref = t;
+            while (ref < t + H)
+            {
+                const int before_ref = reference_solver.calls;
+                const double h = hd_time::advance_euler(reference, ref, std::min(H/16, t+H-ref),
+                    hydro::SpatialScheme::Godunov, reference_solver, {}, cfg, {}, cfg.cfl);
+                reference_calls += reference_solver.calls - before_ref;
+                ref += h;
+                boundary::FillBoundary(reference, ref, {});
+            }
+            t += H;
+        }
+        CHECK(solver.calls < reference_calls / 2);
+        const auto final = integral(mesh);
+        for (int v = 0; v < hd_core::NVAR; ++v) CHECK(near(final[v], initial[v], 2e-12));
+        same(mesh, reference, 3e-3);
+        std::cout << "  levels=5, narrow=" << narrow << ", face solves LTS/global="
+                  << solver.calls << '/' << reference_calls << '\n';
+    }
+
+    // One level is global Euler; uniform cells at five levels take 16 Euler steps.
+    for (int levels : {1, 5})
+    {
+        auto mesh = make_mesh(false);
+        auto reference = mesh;
+        CountSolver solver;
+        config::SimulationConfig cfg;
+        cfg.cfl = 0.2;
+        cfg.reconstructor = method;
+        cfg.lts_max_levels = levels;
+        const int count = 1 << (levels - 1);
+        const double H = advance(mesh, solver, 0.0, 1.0, {}, cfg);
+        for (int j = 0; j < count; ++j)
+        {
+            const double h = hd_time::advance_euler(reference, j*(H/count), H/count,
+                hydro::SpatialScheme::Godunov, solver, {}, cfg, {}, cfg.cfl);
+            CHECK(near(h, H/count));
+            boundary::FillBoundary(reference, (j+1)*(H/count), {});
+        }
+        same(mesh, reference);
+    }
+    for (int invalid : {0, 17})
+    {
+        auto mesh = make_mesh();
+        const auto before = mesh;
+        CountSolver solver;
+        config::SimulationConfig cfg;
+        cfg.lts_max_levels = invalid;
+        expect_throw<std::invalid_argument>([&] { advance(mesh, solver, 0., 1., {}, cfg); });
+        same(mesh, before, 0.0);
+    }
 }
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    return run_test("two-level LTS Euler conservation, synchronization and rollback", [] {
+    return run_test("multilevel LTS Euler conservation, synchronization and rollback", [&] {
+        CHECK(argc > 1);
+        const auto read_levels = [&](const std::string& settings) {
+            const std::string path = std::string(argv[1]) + ".txt";
+            std::ofstream out(path);
+            const char* axes[] = {"x", "y", "z"};
+            for (int d = 0; d < hd_core::NDIM; ++d)
+                out << "n" << axes[d] << "a=4\nn" << axes[d] << "g=2\n"
+                    << axes[d] << "_lower=0\n" << axes[d] << "_upper=1\n";
+            out << "time_integrator=lts_euler\n" << settings;
+            out.close();
+            return config::ReadParameters(path).lts_max_levels;
+        };
+        CHECK(read_levels("") == 2);
+        for (int levels : {1, 8, 16})
+            CHECK(read_levels("lts_max_levels=" + std::to_string(levels) + "\n") == levels);
+        for (int invalid : {0, 17})
+            expect_throw<std::runtime_error>([&] {
+                read_levels("lts_max_levels=" + std::to_string(invalid) + "\n");
+            });
         CHECK(hd_time::parse_time_integrator("LTS_EULER") == hd_time::TimeIntegrator::LTSEuler);
         if (hd_core::NDIM != 1)
         {
@@ -574,10 +683,18 @@ int main()
             {
                 std::cout << method << ": Same-time reconstruction stencil\n";
                 midpoint_stencil_test(method);
+                midpoint_stencil_test(method, 4);
             }
+            std::cout << method << ": Multilevel conservation and cost\n";
+            multilevel_conservation_and_cost(method);
+            source_and_geometry_tests(method, 5);
+            retry_and_input_tests(method, 5);
+            shock_test(method, 4);
         }
         workspace_tests();
-        pressure_history_test();
+        star_pressure_cache_test();
+        star_pressure_cache_test(5);
         custom_boundary_prediction_test();
+        custom_boundary_prediction_test(4);
     });
 }

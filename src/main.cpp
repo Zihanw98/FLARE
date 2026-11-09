@@ -2,6 +2,7 @@
 #include "hydro/riemann/factory.h"
 #include "hydro/spatial.h"
 #include "time/integrator.h"
+#include "time/implicit.h"
 #include "user/user_api.h"
 #include "boundary/boundary.h"
 #include "source/source.h"
@@ -128,8 +129,11 @@ int main(int argc, char* argv[])
         boundary::FillBoundary(mesh,t_current,hooks);
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         auto source_list = hd_source::make_sources(cfg,mesh,hooks);
+        std::unique_ptr<hd_implicit::Integrator> implicit_workspace;
+        if (integrator == hd_time::TimeIntegrator::Implicit)
+            implicit_workspace = std::make_unique<hd_implicit::Integrator>(mesh, cfg);
         double dt_next = std::numeric_limits<double>::infinity();
-        std::array<std::vector<double>, hd_core::NDIM> pressure_history;
+        hydro::StarPressureCache star_pressure_cache;
         std::unique_ptr<hd_time::LTSEulerWorkspace> lts_workspace;
         if (integrator == hd_time::TimeIntegrator::LTSEuler)
             lts_workspace = std::make_unique<hd_time::LTSEulerWorkspace>();
@@ -159,7 +163,8 @@ int main(int argc, char* argv[])
                 cfg.cfl,
                 dt_next,
                 lts_workspace.get(),
-                &pressure_history
+                &star_pressure_cache,
+                implicit_workspace.get()
             );
             if (!std::isfinite(dt) || dt <= 0.0 ||
                 dt > remaining || t_current + dt <= t_current)
