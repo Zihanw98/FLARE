@@ -134,7 +134,7 @@ U_i^{\rm new}=U_i^0+
 ## 验证
 
 ```sh
-make -C unit_test -j4 TESTS='lts_rk2 lts_euler rk2 integrator source optimization implicit_standalone' DIMENSIONS='1 2 3'
+make -C unit_test -j4 TESTS='lts_rk2 lts_euler rk2 integrator source optimization' DIMENSIONS='1 2 3'
 ```
 
 `unit_test/test_lts_rk2.cpp` 包括：单层/全细层与全局 RK2 的等价性；

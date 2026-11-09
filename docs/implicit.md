@@ -79,7 +79,3 @@ Newton 坐标为 `d(log rho), dv/c_ref, d(log p)`；行尺度分别为局部密�
 以上代码文件均直接位于 `src/time/`，没有单独的 `implicit/` 子目录。
 `main.cpp` 只通过通用 `-par` 入口读取参数文件、创建所选积分器的工作区；
 没有 `--implicit-*` 参数解析。文件整理不改变求解算法、容差或自适应规则。
-
-回归测试：`make -C unit_test -j4 TESTS=implicit_standalone`。
-覆盖解析非局部冷却、`1e-18` 密度、失败回滚、非局部用户边界、Cartesian
-1/2/3D 和球坐标自引力，并独立重算已接受状态的守恒残差。
