@@ -25,6 +25,7 @@
 #include "utils.h"
 #include "utils/performance.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -80,7 +81,8 @@ bool physical(const Conserved& U, double gamma)
 // Independent estimate per source: do not hide large terms by cancellation.
 // Bound density change, momentum relative to rho*(|v|+cs), and internal-energy
 // change. The acoustic momentum scale also bounds acceleration starting at v=0.
-double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& S)
+double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& S,
+                          std::vector<std::array<double, 5>>& scales, bool& cache_ready)
 {
     double limit = infinity;
     auto bound = [&](double scale, double rate) {
@@ -94,9 +96,25 @@ double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& 
         for (double x : s.data)
             if (!std::isfinite(x))
                 throw std::runtime_error("LTS received a non-finite source rate");
-        const auto& cell = mesh.cells[k];
-        const auto W = cell.U.to_Primtivies(cell.gamma);
-        const double rho = W[hd_core::RHO];
+        // rho, velocity, half velocity squared, momentum scale, internal energy.
+        // Without sources the existing single zero-rate scan needs no storage.
+        std::array<double, 5> uncached{};
+        auto& cached = scales.empty() ? uncached : scales[i];
+        if (!cache_ready || scales.empty())
+        {
+            const auto& cell = mesh.cells[k];
+            const auto W = cell.U.to_Primtivies(cell.gamma);
+            const double rho = W[hd_core::RHO];
+            cached = {rho, 0.0, 0.0, 0.0, 0.0};
+            if (rho != 0.0)
+            {
+                const double v = W[hd_core::VEL(0)];
+                const double cs = std::sqrt(cell.gamma * W[hd_core::PRE] / rho);
+                cached = {rho, v, 0.5 * v * v, rho * (std::abs(v) + cs),
+                          W[hd_core::PRE] / (cell.gamma - 1.0)};
+            }
+        }
+        const auto [rho, v, half_v2, momentum, internal] = cached;
         if (rho == 0.0)
         {
             for (double x : s.data)
@@ -104,14 +122,12 @@ double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& 
                     throw std::invalid_argument("LTS does not support sources creating gas in vacuum");
             continue;
         }
-        const double v = W[hd_core::VEL(0)];
-        const double cs = std::sqrt(cell.gamma * W[hd_core::PRE] / rho);
-        const double internal = W[hd_core::PRE] / (cell.gamma - 1.0);
         bound(rho, s[hd_core::RHO]);
-        bound(rho * (std::abs(v) + cs), s[hd_core::MOMDEN(0)]);
+        bound(momentum, s[hd_core::MOMDEN(0)]);
         bound(internal, s[hd_core::ENERGY] - v * s[hd_core::MOMDEN(0)]
-                       + 0.5 * v * v * s[hd_core::RHO]);
+                       + half_v2 * s[hd_core::RHO]);
     }
+    cache_ready = true;
     return limit;
 }
 }
@@ -125,6 +141,8 @@ struct LTSEulerWorkspace::Impl
     hydro::StarPressureCache star_pressure_cache, initial_pressure, trial_pressure;
     std::vector<FaceResult> initial, stage;
     std::vector<Conserved> source, contribution, pending_flux, step_start;
+    // Reuse storage across macro steps; values belong only to their start state.
+    std::vector<std::array<double, 5>> source_scales;
     std::vector<int> level, face_level;
     std::vector<unsigned char> predicted, lower_ghosts, upper_ghosts;
     std::vector<std::vector<int>> level_cells, level_faces, prediction_cells;
@@ -235,6 +253,10 @@ double advance_lts_euler(
     auto& source = scratch.source;
     std::fill(source.begin(), source.end(), Conserved{});
     double source_limit = infinity;
+    scratch.source_scales.resize(source_list.empty() ? 0 : n);
+    // Refresh on every macro step, including after failures or workspace reuse.
+    // Retries keep the same start state and already computed frozen source rates.
+    bool source_cache_ready = false;
     for (const auto& term : source_list)
     {
         if (!term.func) throw std::invalid_argument("Missing LTS source function");
@@ -246,10 +268,12 @@ double advance_lts_euler(
             throw std::logic_error("Source changed LTS RHS storage size");
         if (std::isnan(limit) || limit <= 0.0)
             throw std::invalid_argument("Invalid LTS source timestep limit");
-        source_limit = std::min({source_limit, limit, source_change_limit(start, contribution)});
+        source_limit = std::min({source_limit, limit,
+            source_change_limit(start, contribution, scratch.source_scales, source_cache_ready)});
         for (int i = 0; i < n; ++i) source[ng + i] += contribution[ng + i];
     }
-    source_limit = std::min(source_limit, source_change_limit(start, source));
+    source_limit = std::min(source_limit,
+        source_change_limit(start, source, scratch.source_scales, source_cache_ready));
 
     const int max_depth = cfg.lts_max_levels - 1;
     double H = std::min({dt_limit, std::ldexp(min_dt, max_depth), source_limit});

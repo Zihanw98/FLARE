@@ -7,13 +7,13 @@
   "integrator": "lts_rk2",
   "max_levels": 8,
   "cfl": 0.2,
-  "physical_time_seconds": 114.31099500379248,
-  "step": 8894,
-  "updated_utc": "2026-11-09T21:18:19.017379+00:00",
-  "elapsed_wall_seconds": 622.00775010098,
+  "physical_time_seconds": 409.24312720344216,
+  "step": 41004,
+  "updated_utc": "2026-11-09T21:55:35.901492+00:00",
+  "elapsed_wall_seconds": 2858.891881003976,
   "solver_pid": 1233806,
-  "last_macro_step_seconds": 0.0035817462223248723,
-  "last_diagnostic": "step = 8894, time = 0.07176469063, dt = 2.248628048e-06, active_cells = 2673, rho = [1.693402119e-16, 0.02962791142], p = [1.190454943e-19, 0.4124595421], mass = 8.21586008, energy = 415.8905366",
-  "mean_physical_seconds_per_wall_second": 0.1837774756363525,
-  "estimated_remaining_wall_seconds_at_mean_rate": 53791.624739461535
+  "last_macro_step_seconds": 0.015993132219255593,
+  "last_diagnostic": "step = 41004, time = 0.256923723, dt = 1.00405231e-05, active_cells = 2673, rho = [1.693402076e-16, 0.0008770721181], p = [1.190454894e-19, 0.003976281252], mass = 8.21586008, energy = 413.7970882",
+  "mean_physical_seconds_per_wall_second": 0.1431474732307126,
+  "estimated_remaining_wall_seconds_at_mean_rate": 66999.13492247964
 }

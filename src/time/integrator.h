@@ -19,6 +19,13 @@ namespace hd_implicit { class Integrator; }
 
 namespace hd_time
 {
+    namespace detail
+    {
+        // Internal LTS RK2 predicate, defined in lts_rk2.cpp and exposed here
+        // for numerical boundary tests. H must be finite/positive; twice_H=2*H
+        // and allowance is the original rounded 0.1*scale.
+        bool source_change_exceeds(double H, double twice_H, double allowance, double rate);
+    }
     /** Reusable scratch storage for a serial LTS evolution. Own one per caller;
      * never share concurrently. Geometry changes invalidate its mesh views. */
     struct LTSEulerWorkspace

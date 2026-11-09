@@ -274,6 +274,64 @@ void source_and_geometry_tests(const std::string& method, int levels = 2)
     CHECK(advance(mesh, solver, 0.0, 1.0, gravity, cfg) < 1e-8);
 }
 
+void source_cache_tests()
+{
+    CountSolver solver;
+    config::SimulationConfig cfg;
+    cfg.lts_max_levels = 8;
+    hd_time::LTSEulerWorkspace workspace;
+    auto mesh = make_mesh(false);
+    const auto initial = mesh;
+    auto heating = [](double rate) -> hd_source::SourceTerm {
+        return {"cache test", hd_source::SourceKind::Thermal,
+            [rate](const MeshBlock& state, double, const config::SimulationConfig&,
+                   std::vector<Conserved>& rhs, double&) {
+                for (std::size_t k = 0; k < state.cells.size(); ++k)
+                    if (state.is_active(k)) rhs[k][hd_core::ENERGY] += rate;
+            }};
+    };
+    const hd_source::SourceList cooling{heating(0.0), heating(-1.0)};
+    // A zero source primes the cache. Cooling still limits H independently;
+    // the next macro step must refresh the scales despite workspace reuse.
+    const double h0 = advance(mesh, solver, 0.0, 1.0, cooling, cfg, &workspace);
+    CHECK(near(h0, 0.25));
+    const double h1 = advance(mesh, solver, h0, 1.0, cooling, cfg, &workspace);
+    CHECK(near(h1, 0.225));
+    for (int i = 0; i < mesh.nactive[0]; ++i)
+        CHECK(near(mesh.cells[i+2].U[hd_core::ENERGY],
+                   initial.cells[i+2].U[hd_core::ENERGY] - h0 - h1));
+
+    mesh = initial;
+    CHECK(near(advance(mesh, solver, 0.0, 1.0,
+        {heating(1.0), heating(-1.0)}, cfg, &workspace), 0.25));
+    same(mesh, initial);
+    expect_throw<std::runtime_error>([&] {
+        advance(mesh, solver, 0.0, 1.0,
+            {heating(0.0), heating(std::numeric_limits<double>::quiet_NaN())}, cfg, &workspace);
+    });
+    same(mesh, initial, 0.0);
+
+    // Reuse the same storage for a changed mesh/state after an exception.
+    mesh = make_mesh(false, 7, false, 2, 12);
+    for (auto& cell : mesh.cells)
+    {
+        hd_core::Primitives w{};
+        w[hd_core::RHO] = 2.0; w[hd_core::PRE] = 0.4; w[hd_core::VEL(0)] = -0.3;
+        cell = hd_core::Cell(w, 5.0/3.0);
+    }
+    CHECK(near(advance(mesh, solver, 0.0, 1.0, cooling, cfg, &workspace), 0.06));
+
+    for (auto& cell : mesh.cells) cell.U = Conserved{};
+    const auto vacuum = mesh;
+    CHECK(advance(mesh, solver, 0.0, 0.01, {}, cfg, &workspace) == 0.01);
+    CHECK(advance(mesh, solver, 0.0, 0.01, {heating(0.0)}, cfg, &workspace) == 0.01);
+    same(mesh, vacuum, 0.0);
+    expect_throw<std::invalid_argument>([&] {
+        advance(mesh, solver, 0.0, 0.01, {heating(0.0), heating(1.0)}, cfg, &workspace);
+    });
+    same(mesh, vacuum, 0.0);
+}
+
 void retry_and_input_tests(const std::string& method, int levels = 2)
 {
     auto mesh = make_mesh();
@@ -691,6 +749,7 @@ int main(int argc, char** argv)
             retry_and_input_tests(method, 5);
             shock_test(method, 4);
         }
+        source_cache_tests();
         workspace_tests();
         star_pressure_cache_test();
         star_pressure_cache_test(5);

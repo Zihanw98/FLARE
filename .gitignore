@@ -34,6 +34,7 @@ CMakeCache.txt
 cmake_install.cmake
 
 # Test outputs, visualizations and run logs
+/runs/
 /output/
 /output_*/
 /animations/
@@ -51,6 +52,11 @@ cmake_install.cmake
 /unit_test/**/*.log
 /old_version/output/
 /old_version/output_*/
+
+# Generated MESA mesh/CFL estimates; retain scripts and input profiles
+/profile013_radius_fixed_merged/mesa_amr_estimate/*.csv
+/profile013_radius_fixed_merged/mesa_amr_estimate/*.json
+/profile013_radius_fixed_merged/mesa_amr_estimate/*.pdf
 
 # Python caches
 __pycache__/

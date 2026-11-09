@@ -7,6 +7,10 @@
 #include <iomanip>
 #include <sstream>
 #include <fstream>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <random>
 namespace {
 using hd_core::MeshBlock;
 using hd_core::Conserved;
@@ -294,6 +298,122 @@ void retries_and_sources()
         CHECK(near(mesh.cells[i+2].U[hd_core::ENERGY] - before.cells[i+2].U[hd_core::ENERGY], 0.0002, 2e-13));
 }
 
+void source_change_predicate_tests()
+{
+    auto check = [](double H, double scale, double rate) {
+        const bool reference = rate != 0.0 && H > 0.1 * scale / std::abs(rate);
+        CHECK(hd_time::detail::source_change_exceeds(H, 2.0*H, 0.1*scale, rate) == reference);
+    };
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    const std::array<double, 14> values{0.0, tiny, 2*tiny, 10*tiny,
+        std::numeric_limits<double>::min(), 1e-200, 1e-20, 0.1, 1.0, 1e20, 1e200,
+        std::numeric_limits<double>::max(), infinity, std::numeric_limits<double>::quiet_NaN()};
+    for (double H : values)
+        if (H > 0.0 && std::isfinite(H))
+            for (double scale : values)
+                for (double rate : values) { check(H, scale, rate); check(H, scale, -rate); }
+
+    // Check the original rounded limit and its adjacent floating-point values,
+    // along with the fast-path threshold, across the full double exponent range.
+    std::mt19937_64 random(20261109);
+    auto number = [&] {
+        const std::uint64_t bits = random() & UINT64_C(0x7fffffffffffffff);
+        double value;
+        static_assert(sizeof(value) == sizeof(bits));
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    };
+    for (int k = 0; k < 50000; ++k)
+    {
+        const double scale = number(), rate = number(), H = number();
+        if (H > 0.0 && std::isfinite(H)) check(H, scale, rate);
+        if (rate == 0.0) continue;
+        const double cap = 0.1 * scale / rate;
+        for (double threshold : {cap, 0.5*cap})
+            for (double trial : {std::nextafter(threshold, 0.0), threshold,
+                                  std::nextafter(threshold, infinity)})
+                if (trial > 0.0 && std::isfinite(trial)) check(trial, scale, rate);
+    }
+}
+
+void source_cache_stage_tests()
+{
+    Transport solver; solver.zero_flux = true;
+    config::SimulationConfig cfg; cfg.cfl = 0.2; cfg.lts_max_levels = 5;
+    auto mesh = make_mesh(false);
+    const auto before = mesh;
+    auto energy_source = [](double rate) -> hd_source::SourceTerm {
+        return {"constant energy rate", hd_source::SourceKind::Thermal,
+            [rate](const MeshBlock& m, double, const config::SimulationConfig&,
+                   std::vector<Conserved>& rhs, double&) {
+                for (std::size_t k = 0; k < m.cells.size(); ++k)
+                    if (m.is_active(k)) rhs[k][hd_core::ENERGY] += rate;
+            }};
+    };
+    // The zero source fills the cache; the second source must still be checked.
+    // Initially internal energy is 2.5 and the cooling cap is 0.25. The first
+    // evolved stage has a smaller cap and must reject H=0.25. Reusing the old
+    // stage's thermodynamics would incorrectly accept it. The retry must refill
+    // the cache again and accept H=0.125.
+    const double h = step(mesh, solver, cfg, 0.0, 0.25,
+                          {energy_source(0.0), energy_source(-1.0)});
+    CHECK(h == 0.125);
+    for (int i = 0; i < mesh.nactive[0]; ++i)
+        CHECK(near(mesh.cells[i+2].U[hd_core::ENERGY], before.cells[i+2].U[hd_core::ENERGY] - h, 2e-13));
+
+    // Equal/opposite sources cannot hide their independent 0.25 limits.
+    mesh = before;
+    CHECK(near(step(mesh, solver, cfg, 0.0, 1.0,
+        {energy_source(1.0), energy_source(-1.0)}), 0.25, 2e-13));
+    same(mesh, before);
+
+    // Cached thermodynamics do not bypass per-source validity/vacuum checks.
+    mesh = before;
+    expect_throw<std::runtime_error>([&] {
+        step(mesh, solver, cfg, 0.0, 1.0,
+             {energy_source(0.0), energy_source(std::numeric_limits<double>::quiet_NaN())});
+    });
+    same(mesh, before, 0.0);
+    for (auto& cell : mesh.cells) cell.U = Conserved{};
+    const auto vacuum = mesh;
+    CHECK(step(mesh, solver, cfg, 0.0, 0.01, {energy_source(0.0)}) == 0.01);
+    same(mesh, vacuum, 0.0);
+    expect_throw<std::invalid_argument>([&] {
+        step(mesh, solver, cfg, 0.0, 1.0, {energy_source(0.0), energy_source(1.0)});
+    });
+    same(mesh, vacuum, 0.0);
+}
+
+void source_stage_failure_checks()
+{
+    Transport solver; solver.zero_flux = true;
+    config::SimulationConfig cfg; cfg.cfl = 0.2; cfg.lts_max_levels = 5;
+    auto mesh = make_mesh(false);
+    const auto initial = mesh;
+    const hd_source::SourceTerm excess{"stage excess", hd_source::SourceKind::Thermal,
+        [](const MeshBlock& m, double t, const config::SimulationConfig&,
+           std::vector<Conserved>& rhs, double&) {
+            if (t > 0.0) rhs[m.nghost[0]][hd_core::ENERGY] = 1e5;
+        }};
+    const hd_source::SourceTerm bad{"later invalid stage rate", hd_source::SourceKind::Thermal,
+        [](const MeshBlock& m, double t, const config::SimulationConfig&,
+           std::vector<Conserved>& rhs, double&) {
+            if (t > 0.0) rhs[m.nghost[0]+m.nactive[0]-1][hd_core::ENERGY] =
+                std::numeric_limits<double>::quiet_NaN();
+        }};
+    // An earlier limit failure must not hide exceptions in later callbacks.
+    expect_throw<std::runtime_error>([&] { step(mesh, solver, cfg, 0.0, 0.01, {excess, bad}); });
+    same(mesh, initial, 0.0);
+    auto combined = excess;
+    combined.func = [excess, bad](const MeshBlock& m, double t, const config::SimulationConfig& c,
+                                  std::vector<Conserved>& rhs, double& cap) {
+        excess.func(m, t, c, rhs, cap); bad.func(m, t, c, rhs, cap);
+    };
+    // Nor may it hide a bad later cell within the same source scan.
+    expect_throw<std::runtime_error>([&] { step(mesh, solver, cfg, 0.0, 0.01, {combined}); });
+    same(mesh, initial, 0.0);
+}
+
 void shock(const std::string& reconstruction)
 {
     hydro::ExactSolver solver(1e-10, 200);
@@ -363,6 +483,7 @@ void boundaries_and_inputs()
 int main(int argc, char** argv)
 {
     return run_test("multilevel conservative RK2", [&] {
+        source_change_predicate_tests();
         CHECK(hd_time::parse_time_integrator("LTS_RK2") == hd_time::TimeIntegrator::LTSRK2);
         if (argc > 1)
         {
@@ -391,6 +512,8 @@ int main(int argc, char** argv)
             shock(method);
         }
         retries_and_sources();
+        source_cache_stage_tests();
+        source_stage_failure_checks();
         boundaries_and_inputs();
     });
 }

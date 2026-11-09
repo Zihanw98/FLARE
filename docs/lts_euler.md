@@ -66,6 +66,29 @@ inside a step. Custom source callbacks must report any additional hard timestep
 limit, particularly for prescribed time-dependent forcing. Gas creation from
 exact vacuum by a source is unsupported.
 
+The source-change checks cache five thermodynamic scales per active cell:
+density, velocity, half velocity squared, acoustic momentum scale, and internal
+energy. The first independent source fills them; later sources and the summed
+rate reuse them. With two sources this reduces primitive conversion and sound
+speed evaluation from three times to once per cell per macro step. Storage is
+kept in the existing `LTSEulerWorkspace::Impl::source_scales`; no new class is
+introduced. Values are refreshed at every macro step, including workspace reuse
+after an exception or a mesh/state change. Retry trials use the same frozen
+start-state rates and limits. The no-source zero-rate check retains its existing
+validation behavior without allocating cache elements. Independent limits,
+finite-rate/vacuum checks, and the 10-percent threshold are unchanged.
+
+This optimization also exists in LTS RK2, where the cache must instead refresh
+at every source stage evaluation. Global Euler and RK2 share `evaluate_RHS`,
+which uses the source callbacks' reported limits and has no generic 10-percent
+source-change scan. Adding such a scan there would change timestep semantics,
+so those algorithms are not modified by this cache optimization. Optimizations
+to shared source or reconstruction routines can benefit all four integrators.
+
+`source_cache_tests` covers consecutive cooling steps with a reused workspace,
+independent limits for cancelling sources, later-source NaNs, changed mesh/state
+after an exception, and zero/nonzero sources in vacuum.
+
 Mass and flux contributions cancel across interior faces; boundary fluxes and
 sources still change domain totals. Refluxing does not by itself conserve
 self-gravitating gas-plus-potential energy, or radial momentum in spherical
