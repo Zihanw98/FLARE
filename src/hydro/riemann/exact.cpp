@@ -569,7 +569,7 @@ namespace hydro
             if (!converged)
                 throw std::runtime_error("ExactSolver: star pressure did not converge");
             const double pre_star = (high + low) / 2;
-            const double f_left = wave_condition(pre_star, rho_L, pre_L, gamma_L);
+            const double f_left = (pre_star, rho_L, pre_L, gamma_L);
             const double f_right = wave_condition(pre_star, rho_R, pre_R, gamma_R);
             const double v_nstar = (v_nL - f_left + v_nR + f_right) / 2;
             record.failed = false;
