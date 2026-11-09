@@ -30,6 +30,8 @@ def parameters(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parameters", type=Path, default=ROOT / "parameters.txt")
+    parser.add_argument("--expect-steps", type=int,
+                        help="Validate a requested step-limited run instead of reaching t_end")
     args = parser.parse_args()
     cfg = parameters(args.parameters)
     output = ROOT / cfg["output_directory"]
@@ -102,7 +104,11 @@ def main():
         maximum_mass_error = max(maximum_mass_error, abs(mass / initial_mass - 1))
         maximum_speed = max(maximum_speed, max(abs(r["vx"]) for r in rows) * info["velocity_unit_cm_s"])
     assert maximum_mass_error < 1e-9, maximum_mass_error
-    assert math.isclose(float(meta["time"]), float(cfg["t_end"]), rel_tol=2e-14)
+    if args.expect_steps is None:
+        assert math.isclose(float(meta["time"]), float(cfg["t_end"]), rel_tol=2e-14)
+    else:
+        assert int(meta["step"]) == args.expect_steps
+        assert 0 < float(meta["time"]) <= float(cfg["t_end"])
     assert max(r["vx"] for r in rows[:30]) > 0.1  # Outgoing motion from the inner thermal bomb.
     report = {
         "profile": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),

@@ -82,3 +82,13 @@ MESA total pressure is converted using the configured gamma=5/3; MESA `gamma1`,
 specific internal energy, composition and radiation EOS are not evolved. The
 single-shell injection is very concentrated (~0.00778 M_sun), so any high speeds
 must be interpreted within those model limitations.
+
+`parameters_million.txt` selects a separate run with CFL=0.4, RK2, a cap of
+1,000,000 steps and snapshots every 1,000 steps in `output_million_cfl04/`.
+It starts from the original initial state. Its distant `t_end=1` ceiling is in
+code units (about 1592.86 physical seconds), so the intended endpoint is the
+step cap. The framework saves the final snapshot and then reports
+`Maximum number of steps reached before t_end` with exit code 1; for this run,
+that specific termination is expected only if step 1,000,000 was saved.
+Validate its outputs with
+`python3 check.py --parameters parameters_million.txt --expect-steps 1000000`.
