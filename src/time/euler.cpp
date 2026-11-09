@@ -44,7 +44,6 @@ namespace hd_time
             cfl,
             hydro_inverse_dt,
             source_dt_limit,
-            true,
             pressure_history ? &trial_pressure : nullptr
         );
 

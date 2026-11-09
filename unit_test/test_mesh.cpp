@@ -22,7 +22,6 @@ int main()
         mesh.allocate();
         CHECK(mesh.cells.size() == count);
         const auto& const_mesh = mesh;
-        std::vector<std::size_t> expected_active_flats;
         for (std::size_t flat = 0; flat < count; ++flat)
         {
             const auto storage = mesh.coordinates(flat);
@@ -43,13 +42,11 @@ int main()
             CHECK(expected == flat); // Axis 0 has unit stride.
             if (active)
             {
-                expected_active_flats.push_back(flat);
                 CHECK(mesh.flat_index(local, true) == flat);
                 CHECK(&mesh.at_active(local) == &mesh.cells[flat]);
                 CHECK(&const_mesh.at_active(local) == &mesh.cells[flat]);
             }
         }
-        CHECK(const_mesh.get_all_active_flats() == expected_active_flats);
         // Along an axis widths may vary; the other coordinates do not enter.
         mesh.face[0][1] = mesh.face[0][0] + 0.25;
         CHECK(near(mesh.cell_width(0, 0), 0.25));

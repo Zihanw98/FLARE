@@ -23,7 +23,6 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `reconstruction` | PLM_corrected 在非均匀网格上的密度/压力正性、共享斜率系数、阈值连续性、低密度、各方向缓存/直接接口一致及未受限状态逐位兼容 |
 | `state` | 原始量/守恒量转换、动能与压力、算术运算、真空、非法状态、各方向物理通量 |
 | `lts_euler` | PCM/PLM/PLM_corrected 两级子循环、同一子步时刻的 PLM 邻域预测、快慢界面与周期边界守恒、Euler 等价性、界面压力历史与异常回滚、减少界面求解、球对称几何源项、源项限制、激波跨界、重试回滚及维度限制 |
-| `backward_euler` | 残差 Jacobian、周期边界耦合、真实流体方向导数、低压扰动、线性求解的换行和奇异情形，以及隐式冷却的解析解、缩步和回滚 |
 | `mesh` | flat/Index、active/ghost 偏移、const 访问、非均匀间距、越界与损坏的几何 |
 | `facefield` | 各方向面数量、flat/Index、const 访问、清零、错误分配和越界 |
 | `godunov` | 每个面的左右单元和 gamma、ghost 偏移、散度负号、非均匀网格宽度、面波速归约 |

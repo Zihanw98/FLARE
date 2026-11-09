@@ -93,11 +93,6 @@ namespace config
             {"t_end", [&cfg](const std::string& v) {
                 cfg.t_end = parse_value<double>(v);
             }},
-            {"dt_implicit", [&cfg](const std::string& v) {
-                cfg.dt_implicit = parse_value<double>(v);
-                if (!std::isfinite(cfg.dt_implicit) || cfg.dt_implicit <= 0.0)
-                    throw std::runtime_error("dt_implicit must be finite and positive");
-            }},
             {"cfl", [&cfg](const std::string& v) {
                 cfg.cfl = parse_value<double>(v);
             }},

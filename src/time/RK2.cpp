@@ -106,7 +106,7 @@ namespace hd_time
         if (pressure_history) initial_pressure = *pressure_history;
         double rate0, source_limit0;
         auto [dt_rhs_0, rhs_0] = evaluate_RHS(mesh,time,spatial_scheme,source_list,solver,cfg,
-                                             cfl,rate0,source_limit0,true,
+                                             cfl,rate0,source_limit0,
                                              pressure_history ? &initial_pressure : nullptr);
         // 使用目标 CFL 选步长，同时遵守当前源项上限、上一步建议和外部时间上限。
         double dt = std::min({dt_limit, dt_next, dt_rhs_0});
@@ -132,7 +132,7 @@ namespace hd_time
             // Every retry starts from stage 0, never the rejected stage's roots.
             if (pressure_history) trial_pressure = initial_pressure;
             auto [dt_rhs_1, rhs_1] = evaluate_RHS(mesh_trial,time+dt,spatial_scheme,source_list,solver,cfg,
-                                                 cfl,rate1,source_limit1,true,
+                                                 cfl,rate1,source_limit1,
                                                  pressure_history ? &trial_pressure : nullptr);
             const double inverse_dt = std::max(rate0, rate1);
             const double actual_cfl = dt * inverse_dt;

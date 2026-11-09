@@ -34,13 +34,12 @@ namespace hd_time
     {
         Euler, ///< One-stage forward Euler update.
         LTSEuler, ///< Experimental 1D Euler with two-level conservative subcycling.
-        RK2, ///< Two-stage SSP-RK2 update with timestep retries.
-        BackwardEuler ///< Fully implicit update with damped Newton and a dense linear solve.
+        RK2 ///< Two-stage SSP-RK2 update with timestep retries.
     };
 
     /**
      * @brief Parse a case-insensitive time-integrator name.
-     * @param[in] name euler, lts_euler, rk2 or backward_euler.
+     * @param[in] name euler, lts_euler or rk2.
      * @return The corresponding TimeIntegrator enum.
      * @throws std::invalid_argument If the method is unknown or unavailable.
      */
@@ -66,13 +65,6 @@ namespace hd_time
         hydro::SpatialScheme spatial_scheme, const hydro::RiemannSolver& solver,
         const hd_source::SourceList& source_list, const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks, double cfl, LTSEulerWorkspace* workspace = nullptr);
-
-    /** @brief Try dt_limit for a fully implicit step and return the accepted dt after any retries. */
-    double advance_backward_euler(
-        hd_core::MeshBlock& mesh, double time, double dt_limit,
-        hydro::SpatialScheme spatial_scheme, const hydro::RiemannSolver& solver,
-        const hd_source::SourceList& source_list, const config::SimulationConfig& cfg,
-        const hd_user::UserHooks& hooks, double cfl);
 
     // 对活跃单元执行 U += dt * rhs，并逐个校验候选状态。
     // rhs 与 mesh.cells 等长；dt 必须有限，零表示不更新。
@@ -118,8 +110,8 @@ namespace hd_time
      * @pre Active states and ghost states at time are initialized and consistent.
      * @throws std::invalid_argument If timestep/CFL settings or a required state are invalid.
      * @throws std::runtime_error If the timestep cannot advance time or RK2 exhausts its retries.
-     * @note Euler/RK2 commit before the final boundary fill. LTS and backward Euler
-     * commit a boundary-filled candidate.
+     * @note Euler/RK2 commit before the final boundary fill. LTS commits a
+     * boundary-filled candidate.
      */
     double advance_one_step(
         hd_core::MeshBlock& mesh,
@@ -213,12 +205,11 @@ namespace hd_time
      * @param[in] cfg Reconstruction, limiter, and source settings.
      * @param[in] cfl Finite positive target CFL coefficient.
      * @param[out] hydro_inverse_dt Largest cell inverse timescale measured from interface waves.
-     * @param[out] source_dt_limit Minimum independent source limit, or infinity when unrestricted or ignored.
-     * @param[in] use_source_limits Apply reported timestep limits for explicit source updates.
+     * @param[out] source_dt_limit Minimum independent source limit, or infinity if unrestricted.
      * @param[in,out] pressure_hints Optional stage-local pressure guesses, updated
      * while solving faces. Integrators pass trial arrays to preserve rollback.
-     * @return Pair {target timestep, RHS}. Only the hydro estimate enters the target when use_source_limits is false.
-     * @pre Each source callback adds rates independently of the limit and reports a positive limit or infinity when use_source_limits is true.
+     * @return Pair {target timestep, RHS}, where the timestep is the minimum hydrodynamic and source limit and may be infinity.
+     * @pre Each source callback is valid, returns a positive limit or infinity, and does not make its rate depend on the incoming limit.
      * @throws std::invalid_argument If CFL, recorded wave rate, callback, or source limit is invalid.
      * @throws std::logic_error If a source changes the RHS array size.
      * @note Each source receives a fresh infinity limit. Updates the shared hydro::wave_timestep record; source exceptions propagate.
@@ -233,7 +224,6 @@ namespace hd_time
         double cfl,
         double& hydro_inverse_dt,
         double& source_dt_limit,
-        bool use_source_limits = true,
         std::array<std::vector<double>, hd_core::NDIM>* pressure_hints = nullptr
     );
 }

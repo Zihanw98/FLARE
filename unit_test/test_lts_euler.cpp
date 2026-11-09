@@ -120,7 +120,8 @@ double advance(MeshBlock& mesh, const hydro::RiemannSolver& solver,
 Conserved integral(const MeshBlock& mesh)
 {
     Conserved result{};
-    for (auto k : mesh.get_all_active_flats()) result += mesh.cells[k].U * mesh.volume_cell[k];
+    for (std::size_t k = 0; k < mesh.cells.size(); ++k)
+        if (mesh.is_active(k)) result += mesh.cells[k].U * mesh.volume_cell[k];
     return result;
 }
 
@@ -216,7 +217,8 @@ void conservation_and_cost_tests(const std::string& method)
                 boundary::FillBoundary(reference, ref_time, {});
             }
             time += H;
-            for (auto k : mesh.get_all_active_flats()) mesh.cells[k].U.validate(mesh.cells[k].gamma);
+            for (std::size_t k = 0; k < mesh.cells.size(); ++k)
+                if (mesh.is_active(k)) mesh.cells[k].U.validate(mesh.cells[k].gamma);
         }
         const auto final = integral(mesh);
         for (int v = 0; v < hd_core::NVAR; ++v) CHECK(near(final[v], initial[v], 1e-12));
@@ -247,7 +249,8 @@ void source_and_geometry_tests(const std::string& method)
             std::vector<Conserved>& rhs, double& limit) {
             ++source_calls;
             CHECK(time == 0.0); // Never use asynchronous states to call a source.
-            for (auto k : state.get_all_active_flats()) rhs[k][hd_core::ENERGY] = 3.0;
+            for (std::size_t k = 0; k < state.cells.size(); ++k)
+                if (state.is_active(k)) rhs[k][hd_core::ENERGY] = 3.0;
             limit = 1.0;
         }}};
     const double H = advance(mesh, solver, 0.0, 1.0, heating, cfg);
@@ -343,8 +346,9 @@ void shock_test(const std::string& method)
     CHECK(near(final[hd_core::RHO], initial[hd_core::RHO], 1e-12));
     CHECK(near(final[hd_core::ENERGY], initial[hd_core::ENERGY], 1e-12));
     double difference = 0.0, mass = 0.0;
-    for (auto k : mesh.get_all_active_flats())
+    for (std::size_t k = 0; k < mesh.cells.size(); ++k)
     {
+        if (!mesh.is_active(k)) continue;
         mesh.cells[k].U.validate(mesh.cells[k].gamma);
         difference += mesh.volume_cell[k] * std::abs(mesh.cells[k].U[hd_core::RHO]
                                                     - reference.cells[k].U[hd_core::RHO]);

@@ -14,7 +14,7 @@ This experimental implementation supports **1D Godunov only**, Cartesian or
 spherical geometry, and fixed spatial meshes. Select `PCM`, `PLM`, or
 `PLM_corrected`; both PLM variants need at least two ghost cells. Unknown
 reconstruction names and multiple dimensions are rejected explicitly. Existing
-Euler, RK2 and backward Euler algorithms are unchanged. **Time accuracy remains
+Euler and RK2 algorithms are unchanged. **Time accuracy remains
 first order**: PLM supplies linear spatial reconstruction, not RK2 time stepping.
 
 ## One synchronized macro step

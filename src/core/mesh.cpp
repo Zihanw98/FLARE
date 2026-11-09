@@ -663,15 +663,4 @@ namespace
         }
         return active;
     }
-
-    std::vector<std::size_t> MeshBlock::get_all_active_flats() const
-    {
-        std::vector<std::size_t> active;
-        for (std::size_t flat = 0; flat < cells.size(); ++flat)
-        {
-            if (is_active(flat))
-                active.push_back(flat);
-        }
-        return active;
-    }
 }

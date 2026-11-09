@@ -111,7 +111,8 @@ void cache_and_unchanged()
                         Limiter::van_Leer, Limiter::MCbeta, Limiter::superbee})
     {
         hydro::ReconstructionCache cache(mesh, Reconstructor::PLM_corrected, limiter, 1.7);
-        for (auto flat : mesh.get_all_active_flats())
+        for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
+        if (mesh.is_active(flat))
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
             auto index = mesh.coordinates(flat);

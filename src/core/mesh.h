@@ -330,8 +330,6 @@ namespace hd_core
 
         bool is_active(size_t flat) const;
 
-        /** @brief Return active cell indices in ascending flat storage order. */
-        std::vector<std::size_t> get_all_active_flats() const;
 
     };
     Geometry parse_geometry(const std::string& name);
