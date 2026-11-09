@@ -35,7 +35,7 @@ namespace config
         std::string riemann_solver = "exact";
         std::string spatial_scheme = "godunov";
         std::string time_integrator = "euler";
-        std::string reconstructor = "PCM";
+        std::string reconstructor = "PCM"; // PCM, PLM, or PLM_corrected.
         // Slope limiter for PLM; PCM does not use a limiter.
         std::string limiter = "minmod";
         double limiter_beta = 1.5; // Used by mcbeta only; valid range [1, 2].

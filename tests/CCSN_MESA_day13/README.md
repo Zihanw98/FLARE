@@ -83,6 +83,32 @@ specific internal energy, composition and radiation EOS are not evolved. The
 single-shell injection is very concentrated (~0.00778 M_sun), so any high speeds
 must be interpreted within those model limitations.
 
+`parameters_lts.txt` selects the separate experimental `lts_euler` integrator
+with PCM, CFL=0.2 and output in `output_lts_euler/`. It preserves the native
+mesh and advances the same 0.1 physical seconds. It uses two time levels only
+(macro step at most twice the minimum hydro step), integrated interface flux
+correction and whole-step retries. All source rates, including self-gravity,
+are frozen over each macro step with additional source-change limits. This is
+a first-order method; compare against Euler/PCM at smaller CFL, not just the
+default RK2/PLM run. See `../../docs/lts_euler.md` for scope and validation.
+
+```sh
+make -j4
+./flare -par parameters_lts.txt
+python3 check.py --parameters parameters_lts.txt
+```
+
+`parameters_lts_plm.txt` uses the same two-level integrator with PLM/MC and two
+ghost layers, writing to `output_lts_plm/`. Slow stencil states are predicted to
+the fine-stage time before PLM slopes are reconstructed. Time integration and
+the frozen-source treatment remain first order. `reconstructor=PLM_corrected`
+is also supported, using the existing shared positivity slope correction.
+
+```sh
+./flare -par parameters_lts_plm.txt
+python3 check.py --parameters parameters_lts_plm.txt
+```
+
 `parameters_million.txt` selects a separate run with CFL=0.4, RK2, a cap of
 1,000,000 steps and snapshots every 1,000 steps in `output_million_cfl04/`.
 It starts from the original initial state. Its distant `t_end=1` ceiling is in

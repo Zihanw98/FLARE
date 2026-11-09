@@ -1,0 +1,24 @@
+# Standard 400-cell Sod problem with backward Euler instead of forward Euler.
+nxa = 400
+nxg = 2
+x_lower = 0.0
+x_upper = 1.0
+gamma = 1.4
+t_end = 0.2
+cfl = 0.4
+maxsteps = 1000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PCM
+time_integrator = backward_euler
+dt_implicit = 0.002
+# Require the requested step to converge; do not silently halve it.
+integrator_retry_max = 0
+boundary_x_lower = user
+boundary_x_upper = user
+# Consecutive snapshots allow independent conservative-residual checks.
+output_step_every = 1
+output_directory = output_implicit_validation
+output_suffix = sod_implicit

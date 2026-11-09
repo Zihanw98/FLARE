@@ -5,6 +5,7 @@
 #pragma once
 #include "core.h"
 #include "mesh.h"
+#include <cstdint>
 #include "limiter.h"
 #include <array>
 #include <vector>
@@ -16,9 +17,10 @@ namespace hydro
     {
         PCM, ///< Use cell-centered primitive states.
         PLM, ///< Linearly reconstruct primitive states with optional slope limiting.
+        PLM_corrected, ///< PLM with a shared positive density/pressure slope factor.
     };
-    /** Per-RHS lazy primitive/slope cache. The mesh must remain unchanged during
-     * its lifetime; construct a fresh cache after every boundary fill/stage/retry.
+    /** Per-stage lazy primitive/slope cache. The mesh must remain unchanged
+     * between reset() calls; reset after every boundary fill/stage/retry.
      * Only stencil cells are converted (unused multidimensional ghost corners
      * need not contain valid states). Direct reconstruction APIs remain available.
      */
@@ -27,28 +29,34 @@ namespace hydro
     public:
         ReconstructionCache(const hd_core::MeshBlock& mesh, Reconstructor method,
                             Limiter limiter, double beta);
+        ReconstructionCache(const ReconstructionCache&) = delete;
+        ReconstructionCache& operator=(const ReconstructionCache&) = delete;
+        /** Rebind a new immutable stage while retaining allocation capacity. */
+        void reset(const hd_core::MeshBlock& mesh, Reconstructor method,
+                   Limiter limiter, double beta);
         std::pair<hd_core::Primitives, hd_core::Primitives> face(
             int direction, const hd_core::Index& right_index);
     private:
         // cell_flat indexes mesh.cells; axis_index is the storage coordinate along direction.
         const hd_core::Primitives& primitive(std::size_t cell_flat);
         const hd_core::Primitives& slope(int direction, std::size_t cell_flat, int axis_index);
-        const hd_core::MeshBlock& mesh_;
+        const hd_core::MeshBlock* mesh_;
         Reconstructor method_;
         Limiter limiter_;
         double beta_;
         std::vector<hd_core::Primitives> primitives_;
-        std::vector<unsigned char> primitive_ready_;
+        std::vector<std::uint64_t> primitive_epoch_;
         std::array<std::vector<hd_core::Primitives>, hd_core::NDIM> slopes_;
-        std::array<std::vector<unsigned char>, hd_core::NDIM> slope_ready_;
+        std::array<std::vector<std::uint64_t>, hd_core::NDIM> slope_epoch_;
+        std::uint64_t epoch_ = 0;
         std::array<std::vector<double>, hd_core::NDIM> centers_, widths_;
         // Change in the flattened storage offset when moving one cell along each axis.
         std::array<std::size_t, hd_core::NDIM> strides_{};
     };
     /**
-     * @brief Select PLM by name, otherwise fall back to PCM.
-     * @param[in] name Reconstruction name compared to PLM without case sensitivity.
-     * @return Reconstructor::PLM for PLM; Reconstructor::PCM for every other string.
+     * @brief Select PLM or PLM_corrected by name, otherwise fall back to PCM.
+     * @param[in] name Reconstruction name compared without case sensitivity.
+     * @return Matching PLM variant, or PCM for every other string.
      * @note Unknown names are not rejected by the current implementation.
      */
     Reconstructor parse_reconstructor(const std::string& name);
@@ -92,4 +100,11 @@ namespace hydro
      * @throws std::runtime_error If the selected reconstruction is invalid or PLM has fewer than two ghost layers.
      */
     std::pair<hd_core::Primitives,hd_core::Primitives> Reconstruct_PLM(const hd_core::MeshBlock& mesh, int direction, const hd_core::Index& right_index, const Limiter& limiter,double limiter_beta=1.5);
+    /** @brief PLM with one slope factor per cell and direction shared by all
+     * hydrodynamic primitives and both faces. For positive cell centers, density
+     * and pressure retain at least 1e-10 of their center value (up to roundoff).
+     * This constrains face states, not the positivity of a subsequent time step.
+     * Validation fallback remains a safeguard for vacuum/numerical exceptions.
+     */
+    std::pair<hd_core::Primitives,hd_core::Primitives> Reconstruct_PLM_corrected(const hd_core::MeshBlock& mesh, int direction, const hd_core::Index& right_index, const Limiter& limiter,double limiter_beta=1.5);
 }

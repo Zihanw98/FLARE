@@ -53,8 +53,19 @@ namespace hydro
                 double gamma_L,
                 double gamma_R
             ) const override;
+
+            /** Same exact solve, optionally starting Newton from the previous
+             * star pressure on this face. Invalid/out-of-bracket hints fall back
+             * to the ordinary initial guess. Bisection ignores the input hint.
+             * The hint is updated only on success; vacuum writes zero. */
+            hd_core::Conserved flux_with_pressure_hint(
+                const hd_core::Primitives& left, const hd_core::Primitives& right,
+                int direction, double gamma_L, double gamma_R, double& pressure_hint) const override;
     
         private:
+        hd_core::Conserved flux_impl(
+            const hd_core::Primitives& left, const hd_core::Primitives& right,
+            int direction, double gamma_L, double gamma_R, double* pressure_hint) const;
         double tolerance_;
         int max_iterations_;
         ExactPressureMethod method_;

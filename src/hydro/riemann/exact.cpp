@@ -133,7 +133,7 @@ namespace hydro
         std::optional<std::pair<double, double>> solve_star(
             const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
             double gamma_L, double gamma_R, double tolerance,
-            int max_iterations, int direction, ExactPressureMethod method);
+            int max_iterations, int direction, ExactPressureMethod method, double pressure_hint);
         /**
          * @brief Sample a rarefaction wave at the stationary interface.
          * @param[in] K Original non-vacuum primitive state on the chosen side.
@@ -425,7 +425,7 @@ namespace hydro
         std::optional<std::pair<double, double>> solve_star_newton(
             const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
             double gamma_L, double gamma_R, double tolerance,
-            int max_iterations, int direction)
+            int max_iterations, int direction, double pressure_hint)
         {
             RootSolveRecord record;
             const double rho_L = W_L[hd_core::RHO], rho_R = W_R[hd_core::RHO];
@@ -452,6 +452,11 @@ namespace hydro
                     throw std::runtime_error("ExactSolver: pressure bracket overflow");
             }
             double p = (low + high) / 2;
+            // A history value is only an initial iterate: bracket construction,
+            // exact residuals, convergence certification and fallback are unchanged.
+            if (std::isfinite(pressure_hint) && pressure_hint > low && pressure_hint <= high)
+                p = pressure_hint;
+            else
             {
                 // Acoustic (PVRS) estimate is inexpensive and accurate for smooth flow.
                 // It is only a starting guess; all iterates still use the exact equation.
@@ -569,7 +574,7 @@ namespace hydro
             if (!converged)
                 throw std::runtime_error("ExactSolver: star pressure did not converge");
             const double pre_star = (high + low) / 2;
-            const double f_left = (pre_star, rho_L, pre_L, gamma_L);
+            const double f_left = wave_condition(pre_star, rho_L, pre_L, gamma_L);
             const double f_right = wave_condition(pre_star, rho_R, pre_R, gamma_R);
             const double v_nstar = (v_nL - f_left + v_nR + f_right) / 2;
             record.failed = false;
@@ -579,13 +584,13 @@ namespace hydro
         std::optional<std::pair<double, double>> solve_star(
             const hd_core::Primitives& W_L, const hd_core::Primitives& W_R,
             double gamma_L, double gamma_R, double tolerance,
-            int max_iterations, int direction, ExactPressureMethod method)
+            int max_iterations, int direction, ExactPressureMethod method, double pressure_hint)
         {
             if (method == ExactPressureMethod::Bisection)
                 return solve_star_bisection(W_L, W_R, gamma_L, gamma_R,
                                             tolerance, max_iterations, direction);
             return solve_star_newton(W_L, W_R, gamma_L, gamma_R,
-                                     tolerance, max_iterations, direction);
+                                     tolerance, max_iterations, direction, pressure_hint);
         }
 
         /**
@@ -671,12 +676,27 @@ namespace hydro
             );
         }
     }
-        hd_core::Conserved ExactSolver::flux(
+    hd_core::Conserved ExactSolver::flux(
+        const hd_core::Primitives& WL, const hd_core::Primitives& WR,
+        int direction, double gamma_L, double gamma_R) const
+    {
+        return flux_impl(WL, WR, direction, gamma_L, gamma_R, nullptr);
+    }
+
+    hd_core::Conserved ExactSolver::flux_with_pressure_hint(
+        const hd_core::Primitives& WL, const hd_core::Primitives& WR,
+        int direction, double gamma_L, double gamma_R, double& pressure_hint) const
+    {
+        return flux_impl(WL, WR, direction, gamma_L, gamma_R, &pressure_hint);
+    }
+
+        hd_core::Conserved ExactSolver::flux_impl(
             const hd_core::Primitives& WL,
             const hd_core::Primitives& WR,
             int direction,
             double gamma_L,
-            double gamma_R
+            double gamma_R,
+            double* pressure_hint
         ) const
         {
             if (direction < 0 || direction >= hd_core::NDIM)
@@ -693,8 +713,10 @@ namespace hydro
             if (vacuum_L && vacuum_R)
             {
                 wave_timestep.face_speed = 0.0;
+                if (pressure_hint) *pressure_hint = 0.0;
                 return hd_core::Conserved{};
             }
+            double solved_pressure = 0.0;
             double min_wave_speed = 0.0;
             double max_wave_speed = 0.0;
             InterfaceState interfaceState;
@@ -719,10 +741,12 @@ namespace hydro
             else
             {
 
-                auto star = solve_star(WL,WR,gamma_L,gamma_R,tolerance_,max_iterations_,direction,method_);
+                auto star = solve_star(WL,WR,gamma_L,gamma_R,tolerance_,max_iterations_,direction,method_,
+                                       pressure_hint ? *pressure_hint : 0.0);
                 if(star.has_value())
                 {
                     auto [p_star, vn_star] = *star;
+                    solved_pressure = p_star;
 
                     // 无论界面采样在哪一侧，都计算左右两侧波速。
                     min_wave_speed = outer_wave_speed(WL, gamma_L, p_star, Side::Left, direction);
@@ -753,8 +777,9 @@ namespace hydro
 
             // 即使界面通量为零，也把本次最大传播速度交给网格循环。
             wave_timestep.face_speed = std::max(std::abs(min_wave_speed), std::abs(max_wave_speed));
-            if (interfaceState.W[hd_core::RHO] == 0.0)
-                return hd_core::Conserved{};
-            return physical_flux(interfaceState.W, direction, interfaceState.gamma);
+            const auto result = interfaceState.W[hd_core::RHO] == 0.0 ? hd_core::Conserved{}
+                : physical_flux(interfaceState.W, direction, interfaceState.gamma);
+            if (pressure_hint) *pressure_hint = solved_pressure;
+            return result;
         }
 }

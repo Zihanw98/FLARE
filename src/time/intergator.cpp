@@ -64,7 +64,8 @@ namespace hd_time
         double cfl,
         double& hydro_inverse_dt,
         double& source_dt_limit,
-        bool use_source_limits
+        bool use_source_limits,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_hints
     )
     {
         performance::Scope timer(performance::Section::RHS);
@@ -73,7 +74,7 @@ namespace hd_time
         std::vector<hd_core::Conserved> rhs;
         hydro::Limiter limiter = hydro::parse_limiter(cfg.limiter);
         hydro::Reconstructor reconstructor = hydro::parse_reconstructor(cfg.reconstructor);
-        hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta);
+        hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta,pressure_hints);
         const double inverse_dt = hydro::wave_timestep.max_inverse_dt;
         if (!std::isfinite(inverse_dt) || inverse_dt < 0.0)
             throw std::invalid_argument("RHS requires a finite nonnegative CFL rate");
@@ -104,6 +105,8 @@ namespace hd_time
     {
         if (utils::iequals(name,"euler"))
             return TimeIntegrator::Euler;
+        if (utils::iequals(name,"lts_euler"))
+            return TimeIntegrator::LTSEuler;
         if(utils::iequals(name,"rk2"))
             return TimeIntegrator::RK2;
         if (utils::iequals(name, "backward_euler"))
@@ -122,7 +125,9 @@ namespace hd_time
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
         double cfl,
-        double& dt_next
+        double& dt_next,
+        LTSEulerWorkspace* lts_workspace,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_history
     )
     {
         performance::Scope timer(performance::Section::Advance);
@@ -130,12 +135,17 @@ namespace hd_time
         switch (integrator)
         {
             case TimeIntegrator::Euler:
-                dt =  advance_euler(mesh, time, dt_limit, spatial_scheme, solver, source_list, cfg, hooks,cfl);
+                dt =  advance_euler(mesh, time, dt_limit, spatial_scheme, solver, source_list, cfg, hooks,cfl,pressure_history);
                 dt_next = std::numeric_limits<double>::infinity(); // Euler 每步重新估计，无跨步建议。
                 break;
             case TimeIntegrator::RK2:
-                dt = advance_rk2(mesh,time,dt_limit,spatial_scheme,solver,source_list,cfg,hooks,cfl,dt_next);
+                dt = advance_rk2(mesh,time,dt_limit,spatial_scheme,solver,source_list,cfg,hooks,cfl,dt_next,pressure_history);
                 break;
+            case TimeIntegrator::LTSEuler:
+                dt = advance_lts_euler(mesh, time, dt_limit, spatial_scheme, solver,
+                                       source_list, cfg, hooks, cfl, lts_workspace);
+                dt_next = std::numeric_limits<double>::infinity();
+                return dt; // LTS commits only after the synchronized boundary fill.
             case TimeIntegrator::BackwardEuler:
                 dt = advance_backward_euler(mesh, time, dt_limit, spatial_scheme, solver,
                                             source_list, cfg, hooks, cfl);

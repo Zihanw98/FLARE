@@ -31,7 +31,8 @@ void compute_hydro_rhs(
     std::vector<hd_core::Conserved>& rhs,
     const Reconstructor& reconstructor,
     const Limiter& limiter,
-    const double limiter_beta
+    const double limiter_beta,
+    std::array<std::vector<double>, hd_core::NDIM>* pressure_hints
 )
 {
     performance::Scope timer(performance::Section::Hydro);
@@ -44,7 +45,7 @@ void compute_hydro_rhs(
     switch (scheme)
     {
         case SpatialScheme::Godunov:
-            compute_godunov_rhs(mesh, solver, rhs,reconstructor,limiter,limiter_beta);
+            compute_godunov_rhs(mesh, solver, rhs,reconstructor,limiter,limiter_beta,pressure_hints);
             return;
     }
 

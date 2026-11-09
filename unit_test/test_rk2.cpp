@@ -14,12 +14,23 @@ class TestSolver : public hydro::RiemannSolver
 {
 public:
     bool zero_speed = false;
+    mutable std::vector<double> hint_inputs, hint_outputs;
     hd_core::Conserved flux(const hd_core::Primitives& left,
                            const hd_core::Primitives& right, int, double, double) const override
     {
         hydro::wave_timestep.face_speed = zero_speed ? 0.0
             : std::max(left[hd_core::RHO], right[hd_core::RHO]) / (2.0 * hd_core::NDIM);
         return {};
+    }
+    hd_core::Conserved flux_with_pressure_hint(const hd_core::Primitives& left,
+                           const hd_core::Primitives& right, int d, double gl, double gr,
+                           double& pressure) const override
+    {
+        hint_inputs.push_back(pressure);
+        const auto result = flux(left, right, d, gl, gr);
+        pressure = 10 * (d + 1) + left[hd_core::RHO];
+        hint_outputs.push_back(pressure);
+        return result;
     }
 };
 
@@ -182,6 +193,79 @@ int main(int argc, char** argv)
         CHECK(std::isinf(dt_next));
         initial_source_limit = std::numeric_limits<double>::quiet_NaN();
         expect_throw<std::invalid_argument>([&] { advance(mesh, dt_next); });
+
+        // Pressure initial guesses follow each directional face, survive accepted
+        // steps, and never leak from failed source/update/retry paths.
+        solver.zero_speed = false;
+        for (auto method : {hd_time::TimeIntegrator::Euler, hd_time::TimeIntegrator::RK2})
+        {
+            mesh = make_mesh();
+            density_source = 0.5;
+            std::array<std::vector<double>, hd_core::NDIM> history;
+            auto with_history = [&](double limit) {
+                return hd_time::advance_one_step(mesh, 0.0, limit, method, scheme,
+                    solver, sources, cfg, hooks, cfg.cfl, dt_next, nullptr, &history);
+            };
+            solver.hint_inputs.clear(); solver.hint_outputs.clear();
+            dt_next = std::numeric_limits<double>::infinity();
+            CHECK(near(with_history(0.1), 0.1));
+            std::size_t faces_per_axis = 3;
+            for (int d = 1; d < hd_core::NDIM; ++d) faces_per_axis *= 2;
+            const std::size_t faces = faces_per_axis * hd_core::NDIM;
+            const int stages = method == hd_time::TimeIntegrator::RK2 ? 2 : 1;
+            CHECK(solver.hint_inputs.size() == stages * faces);
+            for (std::size_t f = 0; f < faces; ++f) CHECK(solver.hint_inputs[f] == 0.0);
+            if (stages == 2)
+                for (std::size_t f = 0; f < faces; ++f)
+                    CHECK(solver.hint_inputs[faces + f] == solver.hint_outputs[f]);
+            for (int d = 0; d < hd_core::NDIM; ++d)
+            {
+                CHECK(history[d].size() == faces_per_axis);
+                for (std::size_t f = 0; f < faces_per_axis; ++f)
+                    CHECK(history[d][f] == solver.hint_outputs[(stages - 1) * faces + d * faces_per_axis + f]);
+            }
+            const auto accepted = history;
+            solver.hint_inputs.clear(); solver.hint_outputs.clear();
+            with_history(0.1);
+            for (int d = 0; d < hd_core::NDIM; ++d)
+                for (std::size_t f = 0; f < faces_per_axis; ++f)
+                    CHECK(solver.hint_inputs[d * faces_per_axis + f] == accepted[d][f]);
+
+            const auto saved_history = history;
+            const auto saved_mesh = mesh;
+            initial_source_limit = std::numeric_limits<double>::quiet_NaN();
+            expect_throw<std::invalid_argument>([&] { with_history(0.1); });
+            CHECK(history == saved_history);
+            same_cells(mesh, saved_mesh);
+            mesh = make_mesh();
+            const auto before_failure = mesh;
+            dt_next = std::numeric_limits<double>::infinity();
+            if (stages == 1)
+            {
+                energy_source = -1e6;
+                expect_throw<std::invalid_argument>([&] { with_history(0.1); });
+            }
+            else
+            {
+                density_source = 2.0;
+                cfg.integrator_retry_max = 0;
+                expect_throw<std::runtime_error>([&] { with_history(1.0); });
+            }
+            CHECK(history == saved_history);
+            same_cells(mesh, before_failure);
+            cfg.integrator_retry_max = 20;
+            if (stages == 2)
+            {
+                solver.hint_inputs.clear(); solver.hint_outputs.clear();
+                CHECK(near(with_history(1.0), 0.4 / 1.8));
+                CHECK(solver.hint_inputs.size() == 3 * faces);
+                for (std::size_t f = 0; f < faces; ++f)
+                {
+                    CHECK(solver.hint_inputs[faces + f] == solver.hint_outputs[f]);
+                    CHECK(solver.hint_inputs[2 * faces + f] == solver.hint_outputs[f]);
+                }
+            }
+        }
 
         // Parse new names and old input alias, with validation independent of case.
         CHECK(argc > 1);

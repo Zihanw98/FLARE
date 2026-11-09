@@ -4,6 +4,8 @@
  */
 #pragma once
 #include "core.h"
+#include <array>
+#include <vector>
 namespace hydro
 {
     /** @brief Polymorphic interface for numerical fluxes and interface wave-speed reporting. */
@@ -36,5 +38,17 @@ namespace hydro
                 double gamma_R
                 //later, we will add an EoS parameter here to support different EoS
             ) const = 0;
+
+            /** Optional per-face pressure guess, owned by the caller. On success
+             * replace it with the solved star pressure (zero if unavailable).
+             * Other solvers retain their ordinary flux implementation. */
+            virtual hd_core::Conserved flux_with_pressure_hint(
+                const hd_core::Primitives& left, const hd_core::Primitives& right,
+                int direction, double gamma_L, double gamma_R, double& pressure_hint) const
+            {
+                const auto result = flux(left, right, direction, gamma_L, gamma_R);
+                pressure_hint = 0.0;
+                return result;
+            }
     };
 }

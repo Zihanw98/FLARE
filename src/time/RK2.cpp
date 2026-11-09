@@ -87,7 +87,8 @@ namespace hd_time
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
         double cfl,
-        double& dt_next
+        double& dt_next,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_history
     )
     {
         if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0)
@@ -101,9 +102,12 @@ namespace hd_time
         if (std::isnan(dt_next) || dt_next <= 0.0)
             throw std::invalid_argument("RK2 next timestep must be positive (infinity allowed)");
         mesh.validate_active();
+        std::array<std::vector<double>, hd_core::NDIM> initial_pressure, trial_pressure;
+        if (pressure_history) initial_pressure = *pressure_history;
         double rate0, source_limit0;
         auto [dt_rhs_0, rhs_0] = evaluate_RHS(mesh,time,spatial_scheme,source_list,solver,cfg,
-                                             cfl,rate0,source_limit0);
+                                             cfl,rate0,source_limit0,true,
+                                             pressure_history ? &initial_pressure : nullptr);
         // 使用目标 CFL 选步长，同时遵守当前源项上限、上一步建议和外部时间上限。
         double dt = std::min({dt_limit, dt_next, dt_rhs_0});
 
@@ -125,8 +129,11 @@ namespace hd_time
             boundary::FillBoundary(mesh_trial,time+dt,hooks);
 
             double rate1, source_limit1;
+            // Every retry starts from stage 0, never the rejected stage's roots.
+            if (pressure_history) trial_pressure = initial_pressure;
             auto [dt_rhs_1, rhs_1] = evaluate_RHS(mesh_trial,time+dt,spatial_scheme,source_list,solver,cfg,
-                                                 cfl,rate1,source_limit1);
+                                                 cfl,rate1,source_limit1,true,
+                                                 pressure_history ? &trial_pressure : nullptr);
             const double inverse_dt = std::max(rate0, rate1);
             const double actual_cfl = dt * inverse_dt;
             const double source_limit = std::min(source_limit0, source_limit1);
@@ -148,6 +155,7 @@ namespace hd_time
             try {
                 auto candidate = combine_rk2(mesh, mesh_trial, rhs_1, dt);
                 mesh.cells.swap(candidate.cells);
+                if (pressure_history) pressure_history->swap(trial_pressure);
                 // 建议值不受本步 dt_limit 截断，避免碰到输出/终止时刻后一直使用小步长。
                 dt_next = std::min(cfl_step(cfl, inverse_dt), source_limit);
                 return dt;

@@ -130,6 +130,10 @@ int main(int argc, char* argv[])
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
         auto source_list = hd_source::make_sources(cfg,mesh,hooks);
         double dt_next = std::numeric_limits<double>::infinity();
+        std::array<std::vector<double>, hd_core::NDIM> pressure_history;
+        std::unique_ptr<hd_time::LTSEulerWorkspace> lts_workspace;
+        if (integrator == hd_time::TimeIntegrator::LTSEuler)
+            lts_workspace = std::make_unique<hd_time::LTSEulerWorkspace>();
         std::uint64_t active_cells = 1;
         for (int d = 0; d < hd_core::NDIM; ++d)
             active_cells *= mesh.nactive[d];
@@ -156,7 +160,9 @@ int main(int argc, char* argv[])
                 cfg,
                 hooks,
                 cfg.cfl,
-                dt_next
+                dt_next,
+                lts_workspace.get(),
+                &pressure_history
             );
             if (!std::isfinite(dt) || dt <= 0.0 ||
                 dt > dt_limit || t_current + dt <= t_current)

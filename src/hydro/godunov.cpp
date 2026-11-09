@@ -20,7 +20,8 @@ namespace hydro
         std::vector<hd_core::Conserved>& rhs,
         const Reconstructor& reconstructor,
         const Limiter& limiter,
-        const double limiter_beta
+        const double limiter_beta,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_hints
     )
     {
         // 每次 RHS 都重新统计，避免沿用上一个时间步的限制。
@@ -39,6 +40,8 @@ namespace hydro
             shape[n]++;
             flux[n].allocate(shape);
             face_speed[n].resize(flux[n].faces.size());
+            if (pressure_hints && (*pressure_hints)[n].size() != flux[n].faces.size())
+                (*pressure_hints)[n].assign(flux[n].faces.size(), 0.0);
         }
         performance::Scope face_timer(performance::Section::Faces);
         // A fresh cache per RHS keeps RK stages and retries independent.
@@ -74,7 +77,9 @@ namespace hydro
                 // 哨兵值：求解器若忘记写入当前面波速，就报错而不沿用旧值。
                 wave_timestep.face_speed = -1.0;
                 field.faces[i] = performance::measure(performance::Section::Riemann, [&] {
-                    return solver.flux(WL, WR, n, gamma_L, gamma_R);
+                    return pressure_hints
+                        ? solver.flux_with_pressure_hint(WL, WR, n, gamma_L, gamma_R, (*pressure_hints)[n][i])
+                        : solver.flux(WL, WR, n, gamma_L, gamma_R);
                 }, true);
                 if (!std::isfinite(wave_timestep.face_speed) || wave_timestep.face_speed < 0.0)
                     throw std::runtime_error("Invalid Riemann wave speed");

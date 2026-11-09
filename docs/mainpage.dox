@@ -146,6 +146,18 @@ limiters and independent positivity fallbacks retain their previous arithmetic.
 PLM cache storage is approximately `(NDIM+1)*(sizeof(Primitives)+1)` bytes per
 stored cell plus small per-axis geometry arrays; it is released with that RHS.
 
+Select `reconstructor = PLM_corrected` to enable positive face reconstruction;
+`limiter = MC` (or any existing limiter) still controls the initial slopes.
+After limiting, a common factor in [0,1] scales all hydrodynamic primitive slopes
+for each cell and direction so both faces retain at least 1e-10 of the center
+density and pressure, up to roundoff. Corrected slopes are cached once per RHS.
+Unconstrained slopes are unchanged. PCM/PLM and their defaults are unchanged.
+The existing validation fallback remains for vacuum/numerical exceptions.
+This is a spatial discretization change at constrained faces, not a guarantee
+of positive cell averages after time integration or of Newton convergence.
+It introduces no new runtime parameter besides the reconstruction name.
+Run `make -C unit_test -j4 TESTS=reconstruction` for 1D/2D/3D checks.
+
 `riemann_solver = exact` now uses analytic-derivative Newton iteration with a
 positive pressure bracket. Side coefficients are cached per face. A bounded acoustic
 initial guess speeds smooth flow; out-of-bracket/nonfinite proposals and every eighth

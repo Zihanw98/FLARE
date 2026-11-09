@@ -20,7 +20,8 @@ namespace hd_time
         const hd_source::SourceList& source_list,
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
-        double cfl
+        double cfl,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_history
     )
     {
         if (!std::isfinite(time) || !std::isfinite(dt_limit) || dt_limit <= 0.0)
@@ -30,6 +31,9 @@ namespace hd_time
             throw std::invalid_argument("Euler requires 0 < CFL <= 0.5");
         double hydro_inverse_dt;
         double source_dt_limit;
+        // Keep caller history unchanged if the RHS or state validation fails.
+        std::array<std::vector<double>, hd_core::NDIM> trial_pressure;
+        if (pressure_history) trial_pressure = *pressure_history;
         auto [dt_rhs, rhs] = evaluate_RHS(
             mesh,
             time,
@@ -39,7 +43,9 @@ namespace hd_time
             cfg,
             cfl,
             hydro_inverse_dt,
-            source_dt_limit
+            source_dt_limit,
+            true,
+            pressure_history ? &trial_pressure : nullptr
         );
 
         const double dt = std::min(dt_limit,dt_rhs);
@@ -48,6 +54,7 @@ namespace hd_time
             throw std::runtime_error("Euler time step cannot advance time");
 
         add_scaled_rhs(mesh, rhs, dt);
+        if (pressure_history) pressure_history->swap(trial_pressure);
         return dt;
     }
 }

@@ -1,0 +1,33 @@
+# Experimental two-level explicit LTS; macro step ratio is at most two.
+# Keep the native radius-fixed profile013 shells; no remeshing or polytrope.
+# Length = 6.957e10 cm, mass = GM_sun/G, time = sqrt(R_sun^3/GM_sun).
+init_from_mesa_profile = true
+init_mesa_profile_name = ../../../mesa_snec_profiles/mesa_detailed/profile013_radius_fixed.data
+# A native shell face with enclosed MESA mass 4.001260592007234 M_sun.
+# The reader converts MESA logR with its documented solar_radius_cm=6.96e10.
+mesa_radius_inner = 0.20711213012337312
+# Native surface is 1568.8650288090414 code lengths; add 100 outer cells.
+mesa_radius_outer = 1800.0
+geometry = spherical
+nxg = 2
+gamma = 1.6666666666666667
+spherical_gravity_enabled = true
+spherical_self_gravity_enabled = true
+spherical_gravity_central_mass = 4.001260592007234
+constant_gravity_enabled = false
+constant_heating_enabled = false
+boundary_x_lower = reflective
+boundary_x_upper = user
+# 0.1 physical seconds. Native surface shells are only ~70 cm wide.
+t_end = 0.000062780216922807006
+cfl = 0.2
+maxsteps = 200000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+reconstructor = PCM
+limiter = MC
+time_integrator = lts_euler
+output_step_every = 2000
+output_directory = output_lts_euler
+output_suffix = ccsn_mesa

@@ -6,6 +6,7 @@
 #include "core.h"
 #include "reconstruction.h"
 #include "limiter.h"
+#include "riemann/riemann.h"
 #include <vector>
 
 namespace hd_core
@@ -36,6 +37,7 @@ namespace hydro
         std::vector<hd_core::Conserved>& rhs,
         const Reconstructor& reconstructor = Reconstructor::PCM,
         const Limiter& limiter = Limiter::none,
-        const double limiter_beta = 1.5
+        const double limiter_beta = 1.5,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_hints = nullptr
     );
 }

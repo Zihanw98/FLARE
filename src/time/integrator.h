@@ -10,6 +10,7 @@
 #include <array>
 #include <vector>
 #include <utility>
+#include <memory>
 namespace hd_core
 {
     struct MeshBlock;
@@ -17,21 +18,54 @@ namespace hd_core
 
 namespace hd_time
 {
+    /** Reusable scratch storage for a serial LTS evolution. Own one per caller;
+     * never share concurrently. Geometry changes invalidate its mesh views. */
+    struct LTSEulerWorkspace
+    {
+        struct Impl;
+        std::unique_ptr<Impl> impl;
+        LTSEulerWorkspace();
+        ~LTSEulerWorkspace();
+        LTSEulerWorkspace(const LTSEulerWorkspace&) = delete;
+        LTSEulerWorkspace& operator=(const LTSEulerWorkspace&) = delete;
+    };
     /** @brief Available time integration methods. */
     enum class TimeIntegrator
     {
         Euler, ///< One-stage forward Euler update.
+        LTSEuler, ///< Experimental 1D Euler with two-level conservative subcycling.
         RK2, ///< Two-stage SSP-RK2 update with timestep retries.
         BackwardEuler ///< Fully implicit update with damped Newton and a dense linear solve.
     };
 
     /**
      * @brief Parse a case-insensitive time-integrator name.
-     * @param[in] name euler, rk2 or backward_euler.
+     * @param[in] name euler, lts_euler, rk2 or backward_euler.
      * @return The corresponding TimeIntegrator enum.
      * @throws std::invalid_argument If the method is unknown or unavailable.
      */
     TimeIntegrator parse_time_integrator(const std::string& name);
+
+    /**
+     * @brief Advance one synchronized macro step using two-level explicit subcycling.
+     * @details Restricted to 1D Godunov with PCM, PLM or PLM_corrected.
+     * Slow cells take H and fast cells two
+     * H/2 steps. Fine integrated face fluxes replace coarse fluxes at interfaces.
+     * PLM variants require two ghost cells and predict slow stencil states to
+     * the half-step time before reconstruction; time accuracy remains first order.
+     * Source rates (including self-gravity) are frozen at the synchronized start;
+     * source limits and a 10-percent source-change estimate cap H. This is a
+     * first-order experimental method, not a general asynchronous RK scheme.
+     * @return Accepted macro step, at most twice the initial minimum hydro step.
+     * @post All cells and ghosts are synchronized. Failures leave mesh unchanged.
+     * @throws std::invalid_argument For unsupported dimensions/reconstruction or inputs.
+     * @throws std::runtime_error If retries are exhausted or time cannot advance.
+     */
+    double advance_lts_euler(
+        hd_core::MeshBlock& mesh, double time, double dt_limit,
+        hydro::SpatialScheme spatial_scheme, const hydro::RiemannSolver& solver,
+        const hd_source::SourceList& source_list, const config::SimulationConfig& cfg,
+        const hd_user::UserHooks& hooks, double cfl, LTSEulerWorkspace* workspace = nullptr);
 
     /** @brief Try dt_limit for a fully implicit step and return the accepted dt after any retries. */
     double advance_backward_euler(
@@ -78,11 +112,14 @@ namespace hd_time
      * @param[in] cfl Finite positive target CFL; Euler requires at most 0.5, RK2 requires cfl <= cfg.cfl_max <= 0.5.
      * @param[in,out] dt_next RK2 timestep suggestion (initially infinity). Both Euler methods
      * ignore the incoming value and reset it to infinity after acceptance.
+     * @param[in,out] pressure_history Optional ordinary face arrays for Euler/RK2
+     * initial guesses; commit with accepted states. LTS uses its own workspace.
      * @return The finite positive timestep actually used; the caller advances time by this value.
      * @pre Active states and ghost states at time are initialized and consistent.
      * @throws std::invalid_argument If timestep/CFL settings or a required state are invalid.
      * @throws std::runtime_error If the timestep cannot advance time or RK2 exhausts its retries.
-     * @note Explicit methods commit before the final boundary fill. Backward Euler commits a boundary-filled candidate.
+     * @note Euler/RK2 commit before the final boundary fill. LTS and backward Euler
+     * commit a boundary-filled candidate.
      */
     double advance_one_step(
         hd_core::MeshBlock& mesh,
@@ -95,7 +132,9 @@ namespace hd_time
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
         double cfl,
-        double& dt_next
+        double& dt_next,
+        LTSEulerWorkspace* lts_workspace = nullptr,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_history = nullptr
     );
 
     // 同一次计算获取 RHS 和波速，先限制 dt，再更新活跃单元。
@@ -126,7 +165,8 @@ namespace hd_time
         const hd_source::SourceList& source_list,
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
-        double cfl = 0.4
+        double cfl = 0.4,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_history = nullptr
     );
 
     // cfl 用于选步长；cfg.cfl_max 用于接受/拒绝。两个阶段共用同一 dt。
@@ -159,7 +199,8 @@ namespace hd_time
         const config::SimulationConfig& cfg,
         const hd_user::UserHooks& hooks,
         double cfl,
-        double& dt_next
+        double& dt_next,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_history = nullptr
     );
     // 保留 {目标步长, RHS} 返回形式；引用输出用于分别检查 CFL 和源项硬限制。
     /**
@@ -174,6 +215,8 @@ namespace hd_time
      * @param[out] hydro_inverse_dt Largest cell inverse timescale measured from interface waves.
      * @param[out] source_dt_limit Minimum independent source limit, or infinity when unrestricted or ignored.
      * @param[in] use_source_limits Apply reported timestep limits for explicit source updates.
+     * @param[in,out] pressure_hints Optional stage-local pressure guesses, updated
+     * while solving faces. Integrators pass trial arrays to preserve rollback.
      * @return Pair {target timestep, RHS}. Only the hydro estimate enters the target when use_source_limits is false.
      * @pre Each source callback adds rates independently of the limit and reports a positive limit or infinity when use_source_limits is true.
      * @throws std::invalid_argument If CFL, recorded wave rate, callback, or source limit is invalid.
@@ -190,6 +233,7 @@ namespace hd_time
         double cfl,
         double& hydro_inverse_dt,
         double& source_dt_limit,
-        bool use_source_limits = true
+        bool use_source_limits = true,
+        std::array<std::vector<double>, hd_core::NDIM>* pressure_hints = nullptr
     );
 }
