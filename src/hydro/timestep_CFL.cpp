@@ -12,17 +12,17 @@
 #include <limits>
 namespace hydro
 {
-    WaveTimestep wave_timestep{};
+    double max_inverse_dt = 0.0;
 
     double compute_cfl_dt(double cfl)
     {
         if (!std::isfinite(cfl) || cfl <= 0.0)
             throw std::invalid_argument("CFL must be finite and positive");
-        if (!std::isfinite(wave_timestep.max_inverse_dt) || wave_timestep.max_inverse_dt < 0.0)
+        if (!std::isfinite(max_inverse_dt) || max_inverse_dt < 0.0)
             throw std::invalid_argument("CFL rate must be finite and nonnegative");
-        if (wave_timestep.max_inverse_dt == 0.0)
+        if (max_inverse_dt == 0.0)
             return std::numeric_limits<double>::infinity();
-        return cfl / wave_timestep.max_inverse_dt;
+        return cfl / max_inverse_dt;
     }
 
     double compute_cfl_dt(
@@ -32,7 +32,7 @@ namespace hydro
     {
         if (!std::isfinite(cfl) || cfl <= 0.0)
             throw std::invalid_argument("CFL must be finite and positive");
-        double max_inverse_dt = 0.0;
+        double local_max_inverse_dt = 0.0;
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {
 
@@ -66,10 +66,10 @@ namespace hydro
             }  
             if (!std::isfinite(inverse_dt))
                 throw std::runtime_error("Non-finite CFL rate");
-            max_inverse_dt = std::max(max_inverse_dt,inverse_dt);
+            local_max_inverse_dt = std::max(local_max_inverse_dt,inverse_dt);
         }
-        if (max_inverse_dt <= 0.0)
+        if (local_max_inverse_dt <= 0.0)
             throw std::runtime_error("No positive CFL rate found");
-        return cfl / max_inverse_dt;
+        return cfl / local_max_inverse_dt;
     }
 }

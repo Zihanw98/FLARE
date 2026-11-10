@@ -90,6 +90,8 @@ void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
     const auto first = mesh.flat_index({0}, true);
     mesh.cells[first].U[hd_core::ENERGY] +=
         injection_energy_erg / units.unit_energy / mesh.volume_cell[first];
+    mesh.cells[first].U[hd_core::INTERNAL_ENERGY] +=
+        injection_energy_erg / units.unit_energy / mesh.volume_cell[first];
     mesh.validate_active();
     if (mesh.face != original_faces)
         throw std::logic_error("Thermal bomb changed the MESA grid");

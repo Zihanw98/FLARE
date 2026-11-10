@@ -4,20 +4,21 @@
 #include "config/config.h"
 #include <algorithm>
 #include <stdexcept>
-#include <math.h>
-#include "constants/constants.h"
 static_assert(hd_core::NDIM == 2, "This test-suite requires 2D setting");
 
 namespace
 {
     /**
-     * @brief Initialize the active cells of the standard Sod shock tube.
-     * @param[in,out] mesh Allocated one-dimensional mesh; ghosts are filled by userbc.
-     * @param[in] cfg Supplies the gas gamma; the discontinuity is at x=0.5.
+     * @brief Initialize a denser, higher-pressure patch in the central third of each axis.
+     * @param[in,out] mesh Allocated two-dimensional mesh; ghosts are filled by userbc.
+     * @param[in] cfg Supplies the gas gamma.
      */
-    const double A = 0.01;
     void initialize_expansion_2D(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
     {
+        const double x_lower = mesh.face[0][mesh.nghost[0]];
+        const double y_lower = mesh.face[1][mesh.nghost[1]];
+        const double x_length = mesh.active_length(0);
+        const double y_length = mesh.active_length(1);
         for(int y=0; y < mesh.nactive[1]; y++)
         {
             for (int x=0; x < mesh.nactive[0]; x++)
@@ -25,7 +26,8 @@ namespace
                 const hd_core::Index index{x+mesh.nghost[0], y+mesh.nghost[1]};
                 const double x_c = mesh.cell_center(0,index);
                 const double y_c = mesh.cell_center(1,index);
-                const bool middle = ( y_c > mesh.active_length(1) * 1/3.0 && y_c < mesh.active_length(1) * 2/3.0 && x_c > mesh.active_length(0) * 1/3.0 && x_c < mesh.active_length(1) * 2/3.0);
+                const bool middle = y_c > y_lower + y_length / 3.0 && y_c < y_lower + 2.0 * y_length / 3.0
+                                 && x_c > x_lower + x_length / 3.0 && x_c < x_lower + 2.0 * x_length / 3.0;
                 hd_core::Primitives W{};
                 W[hd_core::RHO] = middle? 2.0 : 1.0;
                 W[hd_core::VEL(0)] = 0;

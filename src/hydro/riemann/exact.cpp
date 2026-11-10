@@ -4,7 +4,6 @@
  */
 #include "exact.h"
 #include "utils/performance.h"
-#include "hydro/wave_timestep.h"
 #include "core.h"
 #include "flux.h"
 #include <algorithm>
@@ -678,16 +677,16 @@ namespace hydro
     }
     hd_core::Conserved ExactSolver::flux(
         const hd_core::Primitives& WL, const hd_core::Primitives& WR,
-        int direction, double gamma_L, double gamma_R) const
+        int direction, double gamma_L, double gamma_R, double& face_speed, double& face_velocity) const
     {
-        return flux_impl(WL, WR, direction, gamma_L, gamma_R, nullptr);
+        return flux_impl(WL, WR, direction, gamma_L, gamma_R, nullptr, face_speed, face_velocity);
     }
 
     hd_core::Conserved ExactSolver::flux_with_pressure_hint(
         const hd_core::Primitives& WL, const hd_core::Primitives& WR,
-        int direction, double gamma_L, double gamma_R, double& pressure_hint) const
+        int direction, double gamma_L, double gamma_R, double& pressure_hint, double& face_speed, double& face_velocity) const
     {
-        return flux_impl(WL, WR, direction, gamma_L, gamma_R, &pressure_hint);
+        return flux_impl(WL, WR, direction, gamma_L, gamma_R, &pressure_hint, face_speed, face_velocity);
     }
 
         hd_core::Conserved ExactSolver::flux_impl(
@@ -696,7 +695,8 @@ namespace hydro
             int direction,
             double gamma_L,
             double gamma_R,
-            double* pressure_hint
+            double* pressure_hint,
+            double& face_speed, double& face_velocity
         ) const
         {
             if (direction < 0 || direction >= hd_core::NDIM)
@@ -712,7 +712,8 @@ namespace hydro
             const bool vacuum_R = (WR[hd_core::RHO] == 0.0);
             if (vacuum_L && vacuum_R)
             {
-                wave_timestep.face_speed = 0.0;
+                face_speed = 0.0;
+                face_velocity = 0.0;
                 if (pressure_hint) *pressure_hint = 0.0;
                 return hd_core::Conserved{};
             }
@@ -776,7 +777,9 @@ namespace hydro
                 throw std::runtime_error("ExactSolver: invalid wave-speed bounds");
 
             // 即使界面通量为零，也把本次最大传播速度交给网格循环。
-            wave_timestep.face_speed = std::max(std::abs(min_wave_speed), std::abs(max_wave_speed));
+            interfaceState.W.update_internal_energy(interfaceState.gamma);
+            face_velocity = interfaceState.W[hd_core::VEL(direction)];
+            face_speed = std::max(std::abs(min_wave_speed), std::abs(max_wave_speed));
             const auto result = interfaceState.W[hd_core::RHO] == 0.0 ? hd_core::Conserved{}
                 : physical_flux(interfaceState.W, direction, interfaceState.gamma);
             if (pressure_hint) *pressure_hint = solved_pressure;

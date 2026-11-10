@@ -6,7 +6,6 @@
 #include "implicit.h"
 #include "core/mesh.h"
 #include "utils.h"
-#include "timestep_CFL.h"
 #include "limiter.h"
 #include "reconstruction.h"
 #include "wave_timestep.h"
@@ -75,19 +74,23 @@ namespace hd_time
         hydro::Limiter limiter = hydro::parse_limiter(cfg.limiter);
         hydro::Reconstructor reconstructor = hydro::parse_reconstructor(cfg.reconstructor);
         hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta,star_pressure_cache);
-        const double inverse_dt = hydro::wave_timestep.max_inverse_dt;
+        const double inverse_dt = hydro::max_inverse_dt;
         if (!std::isfinite(inverse_dt) || inverse_dt < 0.0)
             throw std::invalid_argument("RHS requires a finite nonnegative CFL rate");
         const double hydro_limit = inverse_dt == 0.0
             ? std::numeric_limits<double>::infinity() : cfl / inverse_dt;
         double source_limit_all = std::numeric_limits<double>::infinity();
         performance::Scope source_timer(performance::Section::Sources);
+        std::vector<hd_core::Conserved> contribution(source_list.empty() ? 0 : mesh.cells.size());
         for (const auto& source : source_list)
         {
             if (!source.func)
                 throw std::invalid_argument("Missing source function");
             double source_limit = std::numeric_limits<double>::infinity();
-            source.func(mesh, time, cfg, rhs, source_limit);
+            std::fill(contribution.begin(), contribution.end(), hd_core::Conserved{});
+            source.func(mesh, time, cfg, contribution, source_limit);
+            hd_source::complete_internal_source(mesh, source, contribution);
+            for (std::size_t i = 0; i < rhs.size(); ++i) rhs[i] += contribution[i];
             if (std::isnan(source_limit) || source_limit <= 0.0)
                 throw std::invalid_argument("Source timestep must be positive (infinity allowed)");
             source_limit_all = std::min(source_limit_all, source_limit);

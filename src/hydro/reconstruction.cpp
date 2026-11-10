@@ -26,7 +26,7 @@ namespace hydro
                     theta = std::min(theta, allowed / change);
             }
             if (theta < 1.0)
-                for (int k = 0; k < hd_core::NHYDRO; ++k)
+                for (int k = 0; k < hd_core::INTERNAL_ENERGY; ++k)
                     slope[k] *= theta;
         }
 
@@ -103,7 +103,8 @@ namespace hydro
             const auto& right_state = primitive(cell_flat + strides_[direction]);
             const double left_spacing = centers_[direction][axis_index] - centers_[direction][axis_index - 1];
             const double right_spacing = centers_[direction][axis_index + 1] - centers_[direction][axis_index];
-            for (int k = 0; k < hd_core::NHYDRO; ++k)
+            // Only independent rho,v,p have slopes; e/rho is derived at the face.
+            for (int k = 0; k < hd_core::INTERNAL_ENERGY; ++k)
                 slopes_[direction][cell_flat][k] = limited_slope((center_state[k]-left_state[k])/left_spacing,
                     (right_state[k]-center_state[k])/right_spacing, limiter_, beta_);
             if (method_ == Reconstructor::PLM_corrected)
@@ -131,12 +132,14 @@ namespace hydro
             throw std::out_of_range("Invalid PLM stencil");
         const auto& left_slope = slope(direction, left_flat, right_index[direction] - 1);
         const auto& right_slope = slope(direction, right_flat, right_index[direction]);
-        for (int k = 0; k < hd_core::NHYDRO; ++k)
+        for (int k = 0; k < hd_core::INTERNAL_ENERGY; ++k)
         {
             // Preserve the original multiply/divide order for byte compatibility.
             left_state[k] += left_slope[k] * widths_[direction][right_index[direction] - 1] / 2;
             right_state[k] -= right_slope[k] * widths_[direction][right_index[direction]] / 2;
         }
+        left_state.update_internal_energy(mesh_->cells[left_flat].gamma);
+        right_state.update_internal_energy(mesh_->cells[right_flat].gamma);
         try { left_state.validate(mesh_->cells[left_flat].gamma); }
         catch (const std::invalid_argument&) { left_state = primitive(left_flat); }
         try { right_state.validate(mesh_->cells[right_flat].gamma); }
@@ -167,7 +170,7 @@ namespace hydro
 
         }
     }
-    std::pair<hd_core::Primitives,hd_core::Primitives> Reconstruct_PCM(const hd_core::MeshBlock& mesh, int direction, const hd_core::Index& right_index, const Limiter& limiter,double limiter_beta)
+    std::pair<hd_core::Primitives,hd_core::Primitives> Reconstruct_PCM(const hd_core::MeshBlock& mesh, int direction, const hd_core::Index& right_index, const Limiter& /*limiter*/,double /*limiter_beta*/)
     {
         hd_core::Index left_index = right_index;
         left_index[direction]--;
@@ -218,7 +221,7 @@ namespace hydro
         const double dx_l = mesh.cell_center(direction,left_index) - mesh.cell_center(direction,left_left_index);
         const double dx_m = mesh.cell_center(direction,right_index) - mesh.cell_center(direction,left_index);
         const double dx_r = mesh.cell_center(direction,right_right_index) - mesh.cell_center(direction,right_index);
-        for(int i=0 ; i<hd_core::NHYDRO; i++)
+        for(int i=0 ; i<hd_core::INTERNAL_ENERGY; i++)
         {
             slope_left[i] = limited_slope((q_l[i]-q_ll[i])/dx_l,(q_r[i]-q_l[i])/dx_m,limiter,limiter_beta);
             slope_right[i] = limited_slope((q_r[i]-q_l[i])/dx_m,(q_rr[i]-q_r[i])/dx_r,limiter,limiter_beta);
@@ -228,11 +231,13 @@ namespace hydro
             correct_positive_slope(q_l, slope_left, mesh.cell_width(direction,left_index));
             correct_positive_slope(q_r, slope_right, mesh.cell_width(direction,right_index));
         }
-        for(int i=0 ; i<hd_core::NHYDRO; i++)
+        for(int i=0 ; i<hd_core::INTERNAL_ENERGY; i++)
         {
             WL[i] += slope_left[i] * mesh.cell_width(direction,left_index)/2;
             WR[i] -= slope_right[i] * mesh.cell_width(direction,right_index)/2;
         }
+        WL.update_internal_energy(gamma_L);
+        WR.update_internal_energy(gamma_R);
         try
         {
             WL.validate(gamma_L);

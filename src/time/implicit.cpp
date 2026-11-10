@@ -313,6 +313,8 @@ double Integrator::advance(hd_core::MeshBlock& mesh, double time, double remaini
         }
         if (accepted)
         {
+            p.trial.synchronize_dual_energy();
+            boundary::FillBoundary(p.trial, time + dt, hooks);
             mesh.cells.swap(p.trial.cells);
             p.next_dt = std::min(p.settings.dt_implicit, dt*(p.newton <= 8 ? 1.5 : 1.0));
             return dt;

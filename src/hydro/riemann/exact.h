@@ -38,10 +38,12 @@ namespace hydro
              * @param[in] direction Face-normal axis in [0, hd_core::NDIM).
              * @param[in] gamma_L Left ideal-gas adiabatic index greater than one.
              * @param[in] gamma_R Right ideal-gas adiabatic index greater than one.
+             * @param[out] face_speed Maximum absolute outer wave speed, for CFL control.
+             * @param[out] face_velocity Signed sampled normal fluid velocity, for pressure work.
              * @return Conserved flux in the positive axis direction; the exact solver returns zero when the sampled interface is vacuum.
              * @pre Each input is a valid gas or vacuum state for its adiabatic index.
-             * @post Every successful call updates wave_timestep.face_speed, including zero-flux cases.
-             * @note The shared wave-speed record is not thread-safe. The exact implementation leaves extra-component fluxes zero.
+             * @post Every successful call writes face_speed and face_velocity, including zero-flux cases.
+             * @note Output references must refer to distinct caller-owned values.
              * @throws std::out_of_range If direction is invalid.
              * @throws std::invalid_argument If an input state or adiabatic index is invalid.
              * @throws std::runtime_error If star pressure fails to converge or wave-speed bounds are invalid.
@@ -51,7 +53,9 @@ namespace hydro
                 const hd_core::Primitives& right,
                 int direction,
                 double gamma_L,
-                double gamma_R
+                double gamma_R,
+                double& face_speed,
+                double& face_velocity
             ) const override;
 
             /** Same exact solve, optionally starting Newton from the previous
@@ -60,12 +64,14 @@ namespace hydro
              * The hint is updated only on success; vacuum writes zero. */
             hd_core::Conserved flux_with_pressure_hint(
                 const hd_core::Primitives& left, const hd_core::Primitives& right,
-                int direction, double gamma_L, double gamma_R, double& pressure_hint) const override;
+                int direction, double gamma_L, double gamma_R, double& pressure_hint,
+                double& face_speed, double& face_velocity) const override;
     
         private:
         hd_core::Conserved flux_impl(
             const hd_core::Primitives& left, const hd_core::Primitives& right,
-            int direction, double gamma_L, double gamma_R, double* pressure_hint) const;
+            int direction, double gamma_L, double gamma_R, double* pressure_hint,
+            double& face_speed, double& face_velocity) const;
         double tolerance_;
         int max_iterations_;
         ExactPressureMethod method_;

@@ -32,12 +32,12 @@ enum class SpatialScheme
  * @throws std::invalid_argument If the name is unknown or unavailable.
  */
 SpatialScheme parse_spatial_scheme(const std::string& name);
-// 填充 rhs，同时通过 wave_timestep 更新本次波速限制。
+// 填充 rhs，同时通过 max_inverse_dt 更新本次波速限制。
 /**
  * @brief Initialize the RHS and apply the selected hydrodynamic spatial operator.
  * @param[in] mesh Allocated mesh with valid geometry and ghost states for this stage.
  * @param[in] scheme Spatial discretization to dispatch; currently Godunov.
- * @param[in] solver Riemann solver that writes wave_timestep.face_speed on every face.
+ * @param[in] solver Riemann solver that returns face speed and velocity through output references on every face.
  * @param[out] rhs Resized and zeroed array; active entries receive the flux divergence.
  * @param[in] reconstructor PCM or PLM face reconstruction.
  * @param[in] limiter Slope limiter used by PLM; ignored by PCM.
@@ -45,7 +45,7 @@ SpatialScheme parse_spatial_scheme(const std::string& name);
  * @pre Ghost states are filled at the current stage time; PCM needs at least one ghost layer and PLM at least two.
  * @throws std::invalid_argument If mesh/storage or a scheme argument is invalid.
  * @throws std::runtime_error If the solver reports invalid wave speeds or reconstruction fails.
- * @note Resets and updates the shared wave_timestep record. This shared state is intended for serial mesh evaluation; solver and geometry exceptions propagate.
+ * @note Resets and updates the shared max_inverse_dt. This shared state is intended for serial mesh evaluation; solver and geometry exceptions propagate.
  */
 void compute_hydro_rhs(
     const hd_core::MeshBlock& mesh,

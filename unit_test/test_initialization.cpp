@@ -161,7 +161,8 @@ void mesa(const std::filesystem::path& directory)
         auto states = hydro::Reconstruct_PLM(mesh, 0, wall, hydro::Limiter::MC);
         CHECK(near(states.first[hd_core::VEL(0)], -states.second[hd_core::VEL(0)], 1e-14));
         auto solver = hydro::make_riemann_solver("exact", 1e-10, 200);
-        auto flux = solver->flux(states.first, states.second, 0, cfg.gamma, cfg.gamma);
+        double face_speed = -1.0, face_velocity = 0.0;
+        auto flux = solver->flux(states.first, states.second, 0, cfg.gamma, cfg.gamma, face_speed, face_velocity);
         CHECK(std::abs(flux[hd_core::RHO]) < 1e-13);
         CHECK(std::abs(flux[hd_core::ENERGY]) < 1e-13);
     }

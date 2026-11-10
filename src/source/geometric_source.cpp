@@ -4,15 +4,15 @@ namespace hd_source
 {
     SourceTerm make_geometric_source()
     {
-        return {"geometric", SourceKind::General, geometric_source};
+        return {"geometric", SourceKind::General, geometric_source, true};
     }
 
     void geometric_source(
         const hd_core::MeshBlock& mesh,
-        double time,
-        const config::SimulationConfig& cfg,
+        double /*time*/,
+        const config::SimulationConfig& /*cfg*/,
         std::vector<hd_core::Conserved>& rhs,
-        double& dt_limit
+        double& /*dt_limit*/
     )
     {
         performance::Scope timer(performance::Section::Geometry);

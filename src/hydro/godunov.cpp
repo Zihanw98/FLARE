@@ -25,7 +25,7 @@ namespace hydro
     )
     {
         // 每次 RHS 都重新统计，避免沿用上一个时间步的限制。
-        wave_timestep = {};
+        max_inverse_dt = 0.0;
         if (mesh.cells.empty() || rhs.size() != mesh.cells.size())
             throw std::invalid_argument("Godunov requires allocated mesh and matching RHS storage");
         mesh.validate_geometry();
@@ -33,13 +33,14 @@ namespace hydro
         auto nghost = mesh.nghost;
         std::array<FaceFlux, hd_core::NDIM> flux;
         // 与面通量使用相同的 flat 下标，避免重新求解 Riemann 问题。
-        std::array<std::vector<double>, hd_core::NDIM> face_speed;
+        std::array<std::vector<double>, hd_core::NDIM> face_speed, face_velocity;
         for(int n=0;n<hd_core::NDIM;n++)
         {
             auto shape = nactive;
             shape[n]++;
             flux[n].allocate(shape);
             face_speed[n].resize(flux[n].faces.size());
+            face_velocity[n].resize(flux[n].faces.size());
             if (star_pressure_cache)
                 star_pressure_cache->ensure_size(n, flux[n].faces.size());
         }
@@ -75,15 +76,16 @@ namespace hydro
                     return reconstruction.face(n, right_index);
                 }, true);
                 // 哨兵值：求解器若忘记写入当前面波速，就报错而不沿用旧值。
-                wave_timestep.face_speed = -1.0;
+                double speed = -1.0, velocity = 0.0;
                 field.faces[i] = performance::measure(performance::Section::Riemann, [&] {
                     return star_pressure_cache
-                        ? solver.flux_with_pressure_hint(WL, WR, n, gamma_L, gamma_R, (*star_pressure_cache)[n][i])
-                        : solver.flux(WL, WR, n, gamma_L, gamma_R);
+                        ? solver.flux_with_pressure_hint(WL, WR, n, gamma_L, gamma_R, (*star_pressure_cache)[n][i], speed, velocity)
+                        : solver.flux(WL, WR, n, gamma_L, gamma_R, speed, velocity);
                 }, true);
-                if (!std::isfinite(wave_timestep.face_speed) || wave_timestep.face_speed < 0.0)
+                if (!std::isfinite(speed) || speed < 0.0)
                     throw std::runtime_error("Invalid Riemann wave speed");
-                face_speed[n][i] = wave_timestep.face_speed;
+                face_speed[n][i] = speed;
+                face_velocity[n][i] = velocity;
             }
         }
         face_timer.stop();
@@ -108,6 +110,7 @@ namespace hydro
 
             rhs[flat] = {{}};
             double inverse_dt = 0.0;
+            const double pressure = mesh.cells[flat].U.internal_energy() * (mesh.cells[flat].gamma - 1.0);
             auto face_left_index = index;
             auto area_left_index = hd_core::Index_add_offset(face_left_index,mesh.nghost);
             auto V = mesh.volume_cell[flat];
@@ -124,12 +127,14 @@ namespace hydro
                 rhs[flat] += -(F_nR*A_R-F_nL*A_L) / V;
                 const auto left_flat = flux[n].flat_index(face_left_index);
                 const auto right_flat = flux[n].flat_index(face_right_index);
+                rhs[flat][hd_core::INTERNAL_ENERGY] -= pressure *
+                    (A_R * face_velocity[n][right_flat] - A_L * face_velocity[n][left_flat]) / V;
                 inverse_dt += std::max(face_speed[n][left_flat],
                                        face_speed[n][right_flat]) / ds_n;
             }
             if (!std::isfinite(inverse_dt))
                 throw std::runtime_error("Non-finite Godunov CFL rate");
-            wave_timestep.max_inverse_dt = std::max(wave_timestep.max_inverse_dt, inverse_dt);
+            max_inverse_dt = std::max(max_inverse_dt, inverse_dt);
         }
     }
 }

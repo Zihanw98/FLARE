@@ -17,7 +17,11 @@ int main()
             w[hd_core::VEL(d)] = v;
             speed_squared += v * v;
         }
+        w.update_internal_energy(gamma);
         const auto u = w.to_Conserved(gamma);
+        CHECK(hd_core::INTERNAL_ENERGY + 1 == hd_core::NHYDRO);
+        CHECK(hd_core::COMP_BEGIN == hd_core::NHYDRO);
+        CHECK(near(u[hd_core::INTERNAL_ENERGY], 7.5));
         CHECK(u[hd_core::RHO] == 2.0);
         CHECK(near(u[hd_core::ENERGY], 7.5 + speed_squared));
         const auto roundtrip = u.to_Primtivies(gamma);
@@ -70,7 +74,26 @@ int main()
         expect_throw<std::invalid_argument>([&] { w.validate(1.0); });
         auto bad_energy = u;
         bad_energy[hd_core::ENERGY] = speed_squared;
+        bad_energy.validate(gamma); // E-K=0 is now recoverable from independent internal energy.
+        bad_energy[hd_core::INTERNAL_ENERGY] = 0.0;
         expect_throw<std::invalid_argument>([&] { bad_energy.validate(gamma); });
+        auto cold = w;
+        cold[hd_core::VEL(0)] = 1.e8;
+        cold[hd_core::PRE] = 1.e-8;
+        hd_core::Cell cell(cold, gamma);
+        CHECK(near(cell.U.to_Primtivies(gamma)[hd_core::PRE], 1.e-8, 1.e-14));
+        cell.U[hd_core::ENERGY] = std::nextafter(cell.U[hd_core::ENERGY], 0.0);
+        const double energy_before = cell.U[hd_core::ENERGY];
+        cell.synchronize_dual_energy();
+        CHECK(cell.dual_energy_correction == cell.U[hd_core::ENERGY] - energy_before);
+        CHECK(near(cell.U.to_Primtivies(gamma)[hd_core::PRE], 1.e-8, 1.e-14));
+        cell.U[hd_core::INTERNAL_ENERGY] = -1.0;
+        expect_throw<std::invalid_argument>([&] { cell.synchronize_dual_energy(); });
+        hd_core::Cell hot(w, gamma);
+        hot.U[hd_core::INTERNAL_ENERGY] = -1.0;
+        hot.synchronize_dual_energy();
+        CHECK(near(hot.U[hd_core::INTERNAL_ENERGY], 7.5));
+        CHECK(hot.dual_energy_correction == 0.0);
         expect_throw<std::out_of_range>([&] { hydro::physical_flux(w, hd_core::NDIM, gamma); });
     });
 }

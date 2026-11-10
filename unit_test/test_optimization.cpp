@@ -2,7 +2,6 @@
 #include "core/mesh.h"
 #include "hydro/reconstruction.h"
 #include "hydro/riemann/exact.h"
-#include "hydro/wave_timestep.h"
 #include "utils/performance.h"
 #include <cstdlib>
 #include <new>
@@ -45,7 +44,7 @@ void conversions()
         CHECK(allocations == 0);
         // Original vector formulas provide an independent byte-level reference.
         CHECK(u[hd_core::ENERGY] == w[hd_core::PRE] / (gamma - 1) + 0.5 * w[hd_core::RHO] * w.Velocity().squared_norm());
-        CHECK(recovered[hd_core::PRE] == (gamma - 1) * (u[hd_core::ENERGY] - 0.5 * u[hd_core::RHO] * u.Velocity().squared_norm()));
+        CHECK(near(recovered[hd_core::PRE], (gamma - 1) * (u[hd_core::ENERGY] - 0.5 * u[hd_core::RHO] * u.Velocity().squared_norm()), 1.e-12));
     }
 }
 
@@ -101,6 +100,7 @@ void reconstruction()
 
 void roots()
 {
+    double face_speed = -1.0, face_velocity = 0.0;
     using hydro::ExactPressureMethod;
     hydro::ExactSolver solver(1e-12, 512), reference(1e-12, 512, ExactPressureMethod::Bisection);
     // Independent analytic check: identical stationary gas has pressure-only
@@ -110,7 +110,7 @@ void roots()
     {
         hydro::ExactSolver uniform_solver(1e-12, 512, method);
         const auto uniform = state(1.0, 1.0);
-        const auto flux = uniform_solver.flux(uniform, uniform, d, 1.4, 1.4);
+        const auto flux = uniform_solver.flux(uniform, uniform, d, 1.4, 1.4, face_speed, face_velocity);
         for (int k = 0; k < hd_core::NHYDRO; ++k)
             CHECK(near(flux[k], k == hd_core::MOMDEN(d) ? 1.0 : 0.0, 2e-12));
     }
@@ -132,26 +132,26 @@ void roots()
         for (int t = 0; t < hd_core::NDIM; ++t) if (t != d)
         { l[hd_core::VEL(t)] = 0.3 * cl; r[hd_core::VEL(t)] = -0.7 * cr; }
         performance::configure(performance::Mode::Summary);
-        const auto a = solver.flux(l, r, d, gl, gr);
-        const auto speed_a = hydro::wave_timestep.face_speed;
+        const auto a = solver.flux(l, r, d, gl, gr, face_speed, face_velocity);
+        const auto speed_a = face_speed;
         const auto stats = performance::exact_roots;
         CHECK(stats.solves == 1 && stats.failures == 0);
         CHECK(stats.initial_guesses + stats.newton_steps + stats.bisection_steps == stats.iterations);
         CHECK(std::accumulate(stats.histogram.begin(), stats.histogram.end(), std::uint64_t{0}) == 1);
         newton_iterations += stats.iterations;
         performance::configure(performance::Mode::Summary);
-        const auto b = reference.flux(l, r, d, gl, gr);
+        const auto b = reference.flux(l, r, d, gl, gr, face_speed, face_velocity);
         old_iterations += performance::exact_roots.iterations;
-        CHECK(near(speed_a, hydro::wave_timestep.face_speed, 2e-10));
+        CHECK(near(speed_a, face_speed, 2e-10));
         // Reuse a deliberately unrelated previous problem's pressure; occasionally
         // inject invalid guesses to exercise the original-initial-guess fallback.
         if (i % 11 == 0) previous_pressure = std::numeric_limits<double>::quiet_NaN();
         if (i % 11 == 1) previous_pressure = -1.0;
         if (i % 11 == 2) previous_pressure = std::numeric_limits<double>::infinity();
         if (i % 11 == 3) previous_pressure = 1e300;
-        const auto warm = solver.flux_with_pressure_hint(l, r, d, gl, gr, previous_pressure);
+        const auto warm = solver.flux_with_pressure_hint(l, r, d, gl, gr, previous_pressure, face_speed, face_velocity);
         CHECK(std::isfinite(previous_pressure) && previous_pressure >= 0.0);
-        CHECK(near(speed_a, hydro::wave_timestep.face_speed, 2e-10));
+        CHECK(near(speed_a, face_speed, 2e-10));
         // Flux components can nearly cancel (especially contact/energy flux).
         // Scale error by the physical flux scale, not by that tiny difference.
         const double speed = std::max(std::abs(l[hd_core::VEL(d)]) + cl, std::abs(r[hd_core::VEL(d)]) + cr);
@@ -161,7 +161,7 @@ void roots()
             r.to_Conserved(gr)[hd_core::ENERGY] + r[hd_core::PRE]) * speed;
         for (int k = 0; k < hd_core::NHYDRO; ++k)
         {
-            const double scale = k == hd_core::RHO ? mass_scale : k == hd_core::ENERGY ? energy_scale : momentum_scale;
+            const double scale = k == hd_core::RHO ? mass_scale : (k == hd_core::ENERGY || k == hd_core::INTERNAL_ENERGY) ? energy_scale : momentum_scale;
             const double error = std::abs(a[k] - b[k]) / scale;
             max_error = std::max(error, max_error);
             CHECK(error < 2e-10);
@@ -174,16 +174,16 @@ void roots()
     {
         const double velocity = fraction * 2 * std::sqrt(1.4) / 0.4;
         const auto l = state(1, 1, -velocity), r = state(1, 1, velocity);
-        const auto a = solver.flux(l, r, 0, 1.4, 1.4);
-        const auto b = reference.flux(l, r, 0, 1.4, 1.4);
+        const auto a = solver.flux(l, r, 0, 1.4, 1.4, face_speed, face_velocity);
+        const auto b = reference.flux(l, r, 0, 1.4, 1.4, face_speed, face_velocity);
         for (int k = 0; k < hd_core::NHYDRO; ++k) CHECK(near(a[k], b[k], 1e-10));
     }
     performance::configure(performance::Mode::Summary);
     hydro::ExactSolver fail(1e-12, 1);
-    expect_throw<std::runtime_error>([&] { fail.flux(state(1, 1000), state(1, 0.01), 0, 1.4, 1.4); });
+    expect_throw<std::runtime_error>([&] { fail.flux(state(1, 1000), state(1, 0.01), 0, 1.4, 1.4, face_speed, face_velocity); });
     CHECK(performance::exact_roots.failures == 1);
     performance::configure(performance::Mode::Off);
-    solver.flux(state(1, 1), state(1, 1), 0, 1.4, 1.4);
+    solver.flux(state(1, 1), state(1, 1), 0, 1.4, 1.4, face_speed, face_velocity);
     CHECK(performance::exact_roots.solves == 0);
     std::cout << "Random roots: Newton iterations=" << newton_iterations << ", bisection="
               << old_iterations << ", max scaled flux error=" << max_error << '\n';
@@ -191,6 +191,7 @@ void roots()
 
 void pressure_hint_tests()
 {
+    double face_speed = -1.0, face_velocity = 0.0;
     hydro::ExactSolver solver(1e-12, 512);
     double hint = 0.0;
     std::uint64_t cold_iterations = 0, warm_iterations = 0;
@@ -198,10 +199,12 @@ void pressure_hint_tests()
     {
         const auto l = state(1.0, 1.0 + step * 1e-8), r = state(0.125, 0.1);
         performance::configure(performance::Mode::Summary);
-        const auto cold = solver.flux(l, r, 0, 1.4, 1.4);
+        const auto cold = solver.flux(l, r, 0, 1.4, 1.4, face_speed, face_velocity);
+        const double cold_velocity = face_velocity;
         cold_iterations += performance::exact_roots.iterations;
         performance::configure(performance::Mode::Summary);
-        const auto warm = solver.flux_with_pressure_hint(l, r, 0, 1.4, 1.4, hint);
+        const auto warm = solver.flux_with_pressure_hint(l, r, 0, 1.4, 1.4, hint, face_speed, face_velocity);
+        CHECK(near(face_velocity, cold_velocity, 2e-11));
         warm_iterations += performance::exact_roots.iterations;
         for (int k = 0; k < hd_core::NHYDRO; ++k) CHECK(near(cold[k], warm[k], 2e-11));
     }
@@ -209,11 +212,11 @@ void pressure_hint_tests()
     const double saved = hint;
     hydro::ExactSolver failing(1e-12, 1);
     expect_throw<std::runtime_error>([&] {
-        failing.flux_with_pressure_hint(state(1, 1000), state(1, 0.01), 0, 1.4, 1.4, hint);
+        failing.flux_with_pressure_hint(state(1, 1000), state(1, 0.01), 0, 1.4, 1.4, hint, face_speed, face_velocity);
     });
     CHECK(hint == saved);
     expect_throw<std::invalid_argument>([&] {
-        solver.flux_with_pressure_hint(state(-1, 1), state(1, 1), 0, 1.4, 1.4, hint);
+        solver.flux_with_pressure_hint(state(-1, 1), state(1, 1), 0, 1.4, 1.4, hint, face_speed, face_velocity);
     });
     CHECK(hint == saved);
     // Vacuum must clear the cache, including vacuum generated between two gases.
@@ -222,14 +225,14 @@ void pressure_hint_tests()
             std::pair{state(0, 0), state(1, 1)}, std::pair{state(1, 1, -10), state(1, 1, 10)}})
     {
         hint = saved;
-        solver.flux_with_pressure_hint(states.first, states.second, 0, 1.4, 1.4, hint);
+        solver.flux_with_pressure_hint(states.first, states.second, 0, 1.4, 1.4, hint, face_speed, face_velocity);
         CHECK(hint == 0.0);
     }
     hydro::ExactSolver reference(1e-12, 512, hydro::ExactPressureMethod::Bisection);
     const auto l = state(1, 1), r = state(0.125, 0.1);
     hint = 1e300;
-    CHECK(reference.flux(l, r, 0, 1.4, 1.4).data ==
-          reference.flux_with_pressure_hint(l, r, 0, 1.4, 1.4, hint).data);
+    CHECK(reference.flux(l, r, 0, 1.4, 1.4, face_speed, face_velocity).data ==
+          reference.flux_with_pressure_hint(l, r, 0, 1.4, 1.4, hint, face_speed, face_velocity).data);
     CHECK(hint > 0.0 && hint < 1.0);
     performance::configure(performance::Mode::Off);
 }

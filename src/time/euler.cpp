@@ -4,7 +4,6 @@
  */
 #include "integrator.h"
 #include "core/mesh.h"
-#include "hydro/timestep_CFL.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -19,7 +18,7 @@ namespace hd_time
         const hydro::RiemannSolver& solver,
         const hd_source::SourceList& source_list,
         const config::SimulationConfig& cfg,
-        const hd_user::UserHooks& hooks,
+        const hd_user::UserHooks& /*hooks*/,
         double cfl,
         hydro::StarPressureCache* star_pressure_cache
     )
@@ -53,6 +52,7 @@ namespace hd_time
             throw std::runtime_error("Euler time step cannot advance time");
 
         add_scaled_rhs(mesh, rhs, dt);
+        mesh.synchronize_dual_energy();
         if (star_pressure_cache) star_pressure_cache->swap(trial_pressure);
         return dt;
     }

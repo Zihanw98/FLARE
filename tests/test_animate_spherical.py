@@ -35,6 +35,26 @@ class SphericalProjectionTests(unittest.TestCase):
         self.assertEqual(velocity[8, 15], -3.)
         self.assertEqual(velocity[8, 1], -3.)
 
+    def test_radius_limit_resamples_inner_shells(self):
+        snapshot = self.snapshot([.25, .75])
+        projection = spherical_projection(snapshot, pixels=9, rmax=.4)
+        np.testing.assert_allclose(projection[0][[0, -1]], [-.4, .4])
+        density = spherical_values(snapshot.values[0], projection)
+        self.assertTrue(np.all(density.compressed() == 10.))
+        self.assertEqual(density[4, 0], 10.)
+        self.assertTrue(density.mask[0, 0])
+        # A view wider than the domain must preserve the exterior mask.
+        wide = spherical_values(snapshot.values[0],
+                                spherical_projection(snapshot, pixels=9, rmax=2.))
+        self.assertTrue(wide.mask[4, 0])
+        self.assertEqual(wide[4, 2], 20.)
+
+    def test_radius_limit_rejects_empty_cavity_and_nonfinite_range(self):
+        snapshot = self.snapshot([1.25, 1.75])
+        for rmax in [0., 1., -1., np.nan, np.inf]:
+            with self.subTest(rmax=rmax), self.assertRaisesRegex(ValueError, "--rmax"):
+                spherical_projection(snapshot, rmax=rmax)
+
     def test_reject_ambiguous_or_nonradial_coordinates(self):
         snapshot = self.snapshot([.25, .75])
         snapshot.y = np.array([0., 1.])

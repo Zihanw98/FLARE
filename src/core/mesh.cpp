@@ -98,7 +98,7 @@ namespace
             {
                 auto axis_name = axis[d];
                 auto active_faces = table.column(axis_name);
-                if(active_faces.size() - 1 != nactive[d])
+                if(active_faces.size() != static_cast<std::size_t>(nactive[d]) + 1)
                 {
                     throw std::runtime_error("Mesh Initializing File Error: Axis" + std::to_string(d) + ", Number of faces incosistent with nactive in config file");
                 }
@@ -364,10 +364,10 @@ namespace
         {
             return cell_center(direction,axis_index);
         }
-    if (geometry != Geometry::Spherical || NDIM != 1)
-        throw std::invalid_argument(
-            "cell_volume_center supports Cartesian and spherical 1D"
-        );
+        if (geometry != Geometry::Spherical || NDIM != 1)
+            throw std::invalid_argument(
+                "cell_volume_center supports Cartesian and spherical 1D"
+            );
 
         // validate
         (void)cell_width(direction, axis_index);
@@ -470,6 +470,18 @@ namespace
             }
             if (active)
                 cells[flat].U.validate(cells[flat].gamma);
+        }
+    }
+
+    void MeshBlock::synchronize_dual_energy()
+    {
+        for (std::size_t flat = 0; flat < cells.size(); ++flat)
+        {
+            const auto index = coordinates_active(flat);
+            bool active = true;
+            for (int d = 0; d < NDIM; ++d)
+                active &= index[d] >= 0 && index[d] < nactive[d];
+            if (active) cells[flat].synchronize_dual_energy();
         }
     }
 

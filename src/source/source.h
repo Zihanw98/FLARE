@@ -43,10 +43,13 @@ namespace hd_source
         std::string name;
         SourceKind kind;
         SourceFunction func;
+        bool supplies_internal_energy = false; // legacy callbacks: derive thermal rate from E,m,rho
     };
 
     /** @brief Ordered collection of source terms evaluated for each RHS. */
     using SourceList = std::vector<SourceTerm>;
+    void complete_internal_source(const hd_core::MeshBlock& mesh, const SourceTerm& term,
+                                  std::vector<hd_core::Conserved>& rates);
 
     /**
      * @brief Assemble enabled built-in sources, then invoke the optional user registration hook.

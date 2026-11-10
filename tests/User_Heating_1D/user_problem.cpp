@@ -93,6 +93,7 @@ void heating(const hd_core::MeshBlock& mesh, const HeatingParams& params,
         const double internal_energy = primitive[hd_core::PRE] / (cell.gamma - 1.0);
         const double energy_rate = cell.U[hd_core::RHO] * params.specific_heating_rate;
         rhs[flat][hd_core::ENERGY] += energy_rate; // A rate: do not multiply by dt.
+        rhs[flat][hd_core::INTERNAL_ENERGY] += energy_rate;
         dt_limit = std::min(dt_limit,
             params.max_fractional_energy_change * internal_energy / energy_rate);
     }
@@ -105,7 +106,7 @@ hd_source::SourceTerm make_heating(HeatingParams params)
                  const config::SimulationConfig& /*cfg*/,
                  std::vector<hd_core::Conserved>& rhs, double& dt_limit) {
             heating(mesh, params, rhs, dt_limit);
-        }};
+        }, true};
 }
 
 void register_sources(const config::SimulationConfig&, const hd_core::MeshBlock&,

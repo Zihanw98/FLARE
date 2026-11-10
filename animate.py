@@ -10,6 +10,7 @@ Examples (run from the project root):
   python3 animate.py tests/KH_2D/output mesh_sod --stride 100 --plotly --slice-x 0.25
   python3 animate.py tests/sod_tube/output mesh_sod --output figures/sod.html
   python3 animate.py tests/Spherical_Sod_1D/output spherical_sod --plot spherical
+  python3 animate.py tests/CCSN_MESA_day13/output ccsn_mesa --plot spherical --cgs --log --rmax 1.4e13
 
 Requires numpy, matplotlib, Pillow (ffmpeg additionally for MP4).
 Interactive HTML requires numpy and plotly: python3 -m pip install plotly
@@ -22,6 +23,9 @@ because physical coordinates are not stored in those files.
 --plot spherical: interpret 1D CSV x as radius and vx as radial velocity;
 show spherical symmetry slices and radial profiles. A nonzero inner radius
 is shown as a masked cavity. GIF, MP4 and HTML use the same radial mapping.
+--rmax sets the displayed outer radius for spherical maps and profiles, in cm
+with --cgs, otherwise in code length units. Maps are sampled at this radius
+range; color scales and profile y limits still use all cells and selected frames.
 2D: rho/vx/vy/pressure maps, with x profiles at the nearest --slice-y row
 (default: domain midpoint), or y profiles at the nearest --slice-x column.
 These options are mutually exclusive. A dashed line marks the cut on each map.
@@ -221,7 +225,7 @@ def edges(centers):
                  centers[-1] + (centers[-1] - centers[-2]) / 2]
 
 
-def spherical_projection(snapshot, pixels=241):
+def spherical_projection(snapshot, pixels=241, rmax=None):
     """Map a 1D radial grid onto a symmetry plane without interpolating states.
 
     CSV stores centers, so shell edges are inferred as in the Cartesian plots.
@@ -236,10 +240,13 @@ def spherical_projection(snapshot, pixels=241):
     if snapshot.x[0] < 0 or radial_edges[0] < -tolerance:
         raise ValueError("--plot spherical requires nonnegative active radii and shell edges")
     radial_edges[0] = max(0.0, radial_edges[0])
-    axis = np.linspace(-radial_edges[-1], radial_edges[-1], pixels)
+    outer = radial_edges[-1] if rmax is None else rmax
+    if not np.isfinite(outer) or outer <= radial_edges[0]:
+        raise ValueError("--rmax must be finite and greater than the inner shell edge")
+    axis = np.linspace(-outer, outer, pixels)
     radius = np.hypot(axis[:, None], axis[None, :])
     indices = np.searchsorted(radial_edges, radius, side="right") - 1
-    outside = (radius < radial_edges[0]) | (radius > radial_edges[-1])
+    outside = (radius < radial_edges[0]) | (radius > min(outer, radial_edges[-1]))
     return axis, np.clip(indices, 0, len(snapshot.x) - 1), outside
 
 
@@ -371,8 +378,10 @@ def animate(reference, records, lower, upper, args):
 
     is_2d, along_y, fixed_axis, cut_index, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
-    projection = spherical_projection(reference) if spherical else None
+    projection = spherical_projection(reference, rmax=args.rmax) if spherical else None
     profile_edges = edges(profile_axis)
+    if spherical and args.rmax is not None:
+        profile_edges[-1] = args.rmax
 
     def profile_values(snapshot, k):
         return snapshot.values[k, :, cut_index] if along_y else snapshot.values[k, cut_index, :]
@@ -410,7 +419,7 @@ def animate(reference, records, lower, upper, args):
         left.set(title=label + (" (spherical slice)" if spherical else ""),
                  xlabel=coordinate_label("x" if spherical else reference.xlabel, reference.cgs))
         if spherical:
-            outer = edges(reference.x)[-1]
+            outer = projection[0][-1]
             left.set(ylabel=coordinate_label("z", reference.cgs), aspect="equal", xlim=(-outer, outer), ylim=(-outer, outer))
         elif is_2d:
             left.set(ylabel=coordinate_label("y", reference.cgs), aspect="equal")
@@ -614,7 +623,7 @@ def save_plotly(reference, records, lower, upper, args):
 
     is_2d, along_y, fixed_axis, cut, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
-    projection = spherical_projection(reference) if spherical else None
+    projection = spherical_projection(reference, rmax=args.rmax) if spherical else None
     titles = []
     for name, label, _ in reference.fields:
         label = display_label(name, label, spherical, reference.cgs)
@@ -625,6 +634,8 @@ def save_plotly(reference, records, lower, upper, args):
     xedges = edges(projection[0]).tolist() if spherical else edges(reference.x).tolist()
     yedges = xedges if spherical else (edges(reference.y).tolist() if is_2d else [0, 0.5, 1])
     profile_edges = edges(profile_axis)
+    if spherical and args.rmax is not None:
+        profile_edges[-1] = args.rmax
     for k, (name, label, cmap) in enumerate(reference.fields):
         label = display_label(name, label, spherical, reference.cgs)
         row = k + 1
@@ -664,6 +675,10 @@ def save_plotly(reference, records, lower, upper, args):
                          autorange=False, row=row, col=1)
         fig.update_yaxes(title_text=coordinate_label("z" if spherical else "y", reference.cgs) if (spherical or is_2d) else "repeated 1D", range=[yedges[0], yedges[-1]],
                          autorange=False, showticklabels=is_2d or spherical, row=row, col=1)
+        if spherical:
+            outer = float(projection[0][-1])
+            fig.update_xaxes(range=[-outer, outer], row=row, col=1)
+            fig.update_yaxes(range=[-outer, outer], row=row, col=1)
         if is_2d or spherical:
             fig.update_yaxes(scaleanchor=f"x{axis_suffix}", scaleratio=1, constrain="domain", row=row, col=1)
         if is_2d:
@@ -750,6 +765,8 @@ def main():
     parser.add_argument("--dpi", type=int, default=100)
     parser.add_argument("--plot", choices=("cartesian", "spherical"), default="cartesian",
                         help="Map style: Cartesian strips/maps (default), or 1D spherical symmetry slices")
+    parser.add_argument("--rmax", type=float,
+                        help="Spherical map/profile outer radius (cm with --cgs, otherwise code units)")
     parser.add_argument("--cgs", action="store_true",
                         help="Convert plots to CGS using CSV unit metadata; slice coordinates are then in cm")
     parser.add_argument("--log", action="store_true",
@@ -766,6 +783,11 @@ def main():
     args = parser.parse_args()
     if args.stride < 1 or args.dpi < 1 or not np.isfinite(args.fps) or args.fps <= 0:
         parser.error("Require stride >= 1, dpi >= 1 and finite fps > 0")
+    if args.rmax is not None:
+        if args.plot != "spherical":
+            parser.error("--rmax requires --plot spherical")
+        if not np.isfinite(args.rmax) or args.rmax <= 0:
+            parser.error("--rmax must be finite and positive")
     if not args.prefix.rstrip("_") or Path(args.prefix).name != args.prefix:
         parser.error("prefix must be a filename prefix without directory components")
     if any(value is not None and not np.isfinite(value) for value in (args.slice_x, args.slice_y)):

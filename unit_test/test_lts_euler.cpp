@@ -1,7 +1,6 @@
 #include "test_support.h"
 #include "time/integrator.h"
 #include "hydro/riemann/exact.h"
-#include "hydro/wave_timestep.h"
 #include "user/user_api.h"
 #include <limits>
 #include <iomanip>
@@ -20,10 +19,10 @@ public:
     mutable int calls = 0;
     hydro::ExactSolver exact{1e-10, 200};
     Conserved flux(const hd_core::Primitives& L, const hd_core::Primitives& R,
-                   int d, double gL, double gR) const override
+                   int d, double gL, double gR, double& face_speed, double& face_velocity) const override
     {
         ++calls;
-        return exact.flux(L, R, d, gL, gR);
+        return exact.flux(L, R, d, gL, gR, face_speed, face_velocity);
     }
 };
 
@@ -33,9 +32,10 @@ public:
     mutable int calls = 0;
     int initial_faces = 0;
     Conserved flux(const hd_core::Primitives&, const hd_core::Primitives&,
-                   int, double, double) const override
+                   int, double, double, double& face_speed, double& face_velocity) const override
     {
-        hydro::wave_timestep.face_speed = ++calls <= initial_faces ? 1.0 : 100.0;
+        face_velocity = 0.0;
+        face_speed = ++calls <= initial_faces ? 1.0 : 100.0;
         return {};
     }
 };
@@ -47,15 +47,15 @@ public:
     mutable std::vector<double> inputs;
     int throw_on_call = -1;
     Conserved flux(const hd_core::Primitives& L, const hd_core::Primitives& R,
-                   int d, double gL, double gR) const override
-    { return exact.flux(L, R, d, gL, gR); }
+                   int d, double gL, double gR, double& face_speed, double& face_velocity) const override
+    { return exact.flux(L, R, d, gL, gR, face_speed, face_velocity); }
     Conserved flux_with_pressure_hint(const hd_core::Primitives& L, const hd_core::Primitives& R,
-                   int d, double gL, double gR, double& pressure) const override
+                   int d, double gL, double gR, double& pressure, double& face_speed, double& face_velocity) const override
     {
         inputs.push_back(pressure);
         if (static_cast<int>(inputs.size()) == throw_on_call)
             throw std::runtime_error("Injected failure after partial star-pressure cache update");
-        return exact.flux_with_pressure_hint(L, R, d, gL, gR, pressure);
+        return exact.flux_with_pressure_hint(L, R, d, gL, gR, pressure, face_speed, face_velocity);
     }
 };
 
@@ -428,10 +428,10 @@ void midpoint_stencil_test(const std::string& method, int levels = 2)
     public:
         mutable std::vector<std::pair<hd_core::Primitives, hd_core::Primitives>> states;
         Conserved flux(const hd_core::Primitives& L, const hd_core::Primitives& R,
-                       int d, double gL, double gR) const override
+                       int d, double gL, double gR, double& face_speed, double& face_velocity) const override
         {
             states.emplace_back(L, R);
-            return CountSolver::flux(L, R, d, gL, gR);
+            return CountSolver::flux(L, R, d, gL, gR, face_speed, face_velocity);
         }
     } recorded;
     CountSolver reference_solver;

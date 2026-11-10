@@ -27,6 +27,6 @@ riemann_max_iterations = 200
 reconstructor = PLM
 limiter = MC
 time_integrator = rk2
-output_step_every = 2000
+output_step_every = 100
 output_directory = output
 output_suffix = ccsn_mesa

@@ -1,7 +1,6 @@
 #include "test_support.h"
 #include "time/integrator.h"
 #include "hydro/riemann/exact.h"
-#include "hydro/wave_timestep.h"
 #include "user/user_api.h"
 #include <limits>
 #include <iomanip>
@@ -108,18 +107,19 @@ public:
     int fail_at = -1;
     int jump_after = -1;
     Conserved flux(const hd_core::Primitives& L, const hd_core::Primitives&,
-                   int, double gamma, double) const override
+                   int, double gamma, double, double& face_speed, double& face_velocity) const override
     {
         ++calls;
         if (calls == fail_at) throw std::runtime_error("injected flux failure");
-        hydro::wave_timestep.face_speed = jump_after >= 0 && calls > jump_after ? 4.0 : 1.0;
+        face_velocity = 0.0;
+        face_speed = jump_after >= 0 && calls > jump_after ? 4.0 : 1.0;
         return zero_flux ? Conserved{} : L.to_Conserved(gamma);
     }
     Conserved flux_with_pressure_hint(const hd_core::Primitives& L, const hd_core::Primitives& R,
-                   int d, double gL, double gR, double& hint) const override
+                   int d, double gL, double gR, double& hint, double& face_speed, double& face_velocity) const override
     {
         hint += 1.0;
-        return flux(L, R, d, gL, gR);
+        return flux(L, R, d, gL, gR, face_speed, face_velocity);
     }
 };
 

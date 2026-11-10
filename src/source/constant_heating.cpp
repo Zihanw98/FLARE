@@ -23,7 +23,7 @@ namespace hd_source
     //         // 可以直接用 heating_rate 写计算，也可以传给已有的计算函数。
     //         constant_heating(mesh, time, cfg, heating_rate, rhs, dt_limit);
     //     };
-    // sources.push_back({"constant_heating", SourceKind::Thermal, source});
+    // sources.push_back({"constant_heating", SourceKind::Thermal, source, true});
     //
     // [heating_rate] 在创建 lambda 时保存值的副本；之后修改外面的变量不会改变它。
     // 此写法与调用 make_constant_heating(0.5) 二选一，避免重复注册同一份加热。
@@ -36,7 +36,7 @@ namespace hd_source
                            const config::SimulationConfig& cfg,
                            std::vector<hd_core::Conserved>& rhs, double& dt_limit) {
                 constant_heating(mesh, time, cfg, heating_rate, rhs, dt_limit);
-            }};
+            }, true};
     }
 
     void constant_heating(
@@ -70,6 +70,7 @@ namespace hd_source
             const double internal_energy = primitive[hd_core::PRE] / (cell.gamma - 1.0);
             const double energy_rate = rho * heating_rate;
             rhs[flat][hd_core::ENERGY] += energy_rate;
+            rhs[flat][hd_core::INTERNAL_ENERGY] += energy_rate;
             dt_limit = std::min(dt_limit, timescale_fraction * internal_energy / energy_rate);
         }
     }

@@ -29,6 +29,7 @@ namespace hydro
         {
             F[hd_core::MOMDEN(d)] = U[hd_core::MOMDEN(d)] * v_n + (d==direction? p : 0 ); 
         }
+        F[hd_core::INTERNAL_ENERGY] = U[hd_core::INTERNAL_ENERGY] * v_n;
         F[hd_core::ENERGY] = (U[hd_core::ENERGY] + p) * v_n;
         return F;
     }

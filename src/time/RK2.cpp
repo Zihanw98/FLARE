@@ -72,7 +72,7 @@ namespace hd_time
                     0.5 * mesh.cells[flat].U
                     + 0.5 * (stage.cells[flat].U + dt * rhs[flat]);
             }
-            candidate.validate_active();
+            candidate.synchronize_dual_energy();
             return candidate;
         }
     }
@@ -131,9 +131,9 @@ namespace hd_time
             double rate1, source_limit1;
             // Every retry starts from stage 0, never the rejected stage's roots.
             if (star_pressure_cache) trial_pressure = initial_pressure;
-            auto [dt_rhs_1, rhs_1] = evaluate_RHS(mesh_trial,time+dt,spatial_scheme,source_list,solver,cfg,
+            auto rhs_1 = evaluate_RHS(mesh_trial,time+dt,spatial_scheme,source_list,solver,cfg,
                                                  cfl,rate1,source_limit1,
-                                                 star_pressure_cache ? &trial_pressure : nullptr);
+                                                 star_pressure_cache ? &trial_pressure : nullptr).second;
             const double inverse_dt = std::max(rate0, rate1);
             const double actual_cfl = dt * inverse_dt;
             const double source_limit = std::min(source_limit0, source_limit1);

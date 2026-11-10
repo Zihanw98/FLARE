@@ -239,7 +239,7 @@ namespace hd_time
      * @pre Each source callback is valid, returns a positive limit or infinity, and does not make its rate depend on the incoming limit.
      * @throws std::invalid_argument If CFL, recorded wave rate, callback, or source limit is invalid.
      * @throws std::logic_error If a source changes the RHS array size.
-     * @note Each source receives a fresh infinity limit. Updates the shared hydro::wave_timestep record; source exceptions propagate.
+     * @note Each source receives a fresh infinity limit. Updates the shared hydro::max_inverse_dt; source exceptions propagate.
      */
     std::pair<double, std::vector<hd_core::Conserved>> evaluate_RHS(
         const hd_core::MeshBlock& mesh,

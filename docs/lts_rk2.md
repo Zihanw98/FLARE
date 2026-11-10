@@ -114,9 +114,10 @@ U_i^{\rm new}=U_i^0+
 这些限制保守地约束整个 \(H\)，而不只是当前细步。刚性源项依然会限制显式方法。
 非零源项从真空创造气体暂不支持。
 
-源项变化检查使用阶段缓存（`source_rho`、`source_velocity`、`source_half_v2`、
-`source_density_allowance`、`source_momentum_allowance`、`source_internal_allowance`），
-缓存密度、速度、半速度平方及三个尺度的 10% 额度。六个普通数组每个大步分配一次，
+源项变化检查使用阶段缓存（`source_rho`、`source_density_allowance`、
+`source_momentum_allowance`、`source_internal_allowance`），
+缓存密度及三个尺度的 10% 额度。双能量版本直接检查 `S[INTERNAL_ENERGY]`，
+不再从总能量/动量源项相减求内能变化率。四个普通数组每个大步分配一次，
 在其子步之间复用内存；额度沿用原式的运算顺序和舍入值。
 每次 `evaluate_sources` 都先令 `source_cache_ready=false`，由第一个源项的
 `change_limit` 在原有检查循环内填充；同阶段的其他独立源项及合计检查直接复用。
@@ -125,7 +126,7 @@ U_i^{\rm new}=U_i^0+
 
 缓存只在一次源项阶段求值内有效。下一 RK 阶段、下一子步及重试中的阶段求值均重新填充，
 不能因 `stage` 对象地址相同而沿用旧值。每个源项的非有限值、真空及独立变化限制检查仍保留；
-10% 阈值、限制公式、源项累加次序和对大步长 H 的约束均未调整。
+10% 阈值、源项累加次序和对大步长 H 的约束保留；内能变化率改用显式内能源项。
 
 初始同步状态仍计算精确的源项步长上限，用于选择大步 `H`。
 后续 RK 阶段已知道当前尝试的 `H`，因此只检查它是否超过 10% 变化限制，
@@ -255,3 +256,56 @@ Riemann 求解统计也一致。源项阶段的总耗时下降约 18%–21%，�
 `runs/lts_rk2_source_predicate_20261109T223912Z/final/`。
 该测量使用辅助函数合并前的文件布局；之后只将函数定义并入现有 LTS RK2 文件，
 算法保持相同，合并后的回归和浮点边界测试另行运行。
+
+
+## 独立内能与双能量同步（2026-11-10）
+
+沿用 `Conserved`、`Primitives`、`Cell`，不引入新类型。两种状态均使用
+`NVAR=NDIM+3+NCOMP+NUSER`、`NHYDRO=NDIM+3`。
+`INTERNAL_ENERGY=ENERGY+1`：守恒态存内能密度 e，原始态同槽存比内能 ε=e/ρ。
+组分、用户量下标整体顺延一位。原始态的压力是主变量；转换、面重构、Riemann
+采样后从 p、ρ 派生 ε，不独立限制/重构这个冗余量。直接构造原始态时只填原来的
+ρ、v、p 仍有效；转换到守恒态始终从压力初始化 e。
+
+内能方程为 `∂t e + div(e v) = -p div(v) + S_e`。
+内能通量为采样 Riemann 态的 `e_face * v_face`；压力功使用同一面速度和几何面积，
+`Q_i=-p_i*(A_R*v_R-A_L*v_L)/V_i`。Euler 用起点值，RK2 用两阶段值。
+LTS RK2 的预测斜率加 Q0，局部最终更新加 `h*(Q0+Q1)/2`；内能输运仍使用原有
+细层负责、两侧共用的通量积分。压力功是单元项，按该单元局部步的端点计算，
+不作为守恒面通量累计。LTS Euler 在各局部步起点求压力功，物理源项仍按原算法冻结。
+
+令 `K=Σ m_d²/(2ρ)`。当 `E-K > 1e-3*max(abs(E),K)` 时压力取总能量所得内能；
+否则使用独立内能。每个接受的全局步或局部子步同步：热区 `e←E-K`，
+冷区 `E←K+e`。RK 预测阶段不改写 E；LTS 子步改动只发生在试算副本，拒步可整体回滚。
+热区从总能量同步保留激波的耗散加热。这个固定阈值是当前实现的选择，不是普适误差保证；
+高速弱激波仍需要专门验证。未新增压力下限或保正重构。
+
+`Cell::dual_energy_correction` 累计冷区同步的 `E_after-E_before`（能量密度），
+全域乘体积求和后输出。双能量同步并非严格总能量守恒，因此必须同时查看这个修正。
+CSV 在原有列末尾附加 `internal_energy,total_energy,dual_energy_correction`。
+真空保持两种能量均为零；冷区独立内能不正时仍拒步。
+
+重力及几何动量源项的 `S_e=0`，热源同时更新 E、e。`SourceTerm` 末尾的
+`supplies_internal_energy=true` 表明回调已明确提供内能源项（包括明确为零）。
+旧的三字段回调默认 false，统一按 `S_e += S_E-v·S_m+|v|²*S_ρ/2` 补齐；
+新回调若直接写内能，必须设 true，避免重复添加。内置工厂及用户加热示例已更新。
+普通 Euler/RK2、两种 LTS 以及隐式推进器均接入新分量。隐式迭代保留独立的线性
+内能未知量和热能尺度，冷区总热能改用线性增量（允许 E-K 为负，压力仍由正的独立内能给出），
+热区继续使用原来的对数压力增量；收敛后才同步。
+
+回归：1/2/3D 各 17 组单元测试通过。34 个显式物理测试涵盖 Cartesian 1D/2D/3D
+Sedov、1D 球对称 Sedov，以及均匀/窄网格绝热膨胀；当前球坐标几何只支持 1D。
+Sedov 全部到 t=0.02，闭边界总能量相对误差最大约 3.11e-15。
+冷球对称膨胀 p0=1e-6、t=0.5，普通 RK2 的压力体积加权平均相对误差：
+32/64/128/256 格分别为 5.775e-4、1.454e-4、3.666e-5、9.171e-6。
+64 格、单格缩窄 64 倍、8 层 LTS RK2 的误差为 1.293e-4，完成 49 个同步大步。
+这项膨胀有流出边界，其总能量随时间下降不是守恒误差。
+
+测试入口集成在已有 `unit_test/test_integrator.cpp`，例如：
+
+```sh
+unit_test/build/ndim1/test_integrator --physics expansion 64 spherical lts_rk2 1e-6 narrow
+unit_test/build/ndim3/test_integrator --physics sedov 32 cartesian rk2
+```
+
+完整物理测试记录位于 `runs/dual_energy_validation_20261110/physics_results.json`。

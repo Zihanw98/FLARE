@@ -79,14 +79,14 @@ double advance_lts_rk2(
     if (star_pressure_cache) hints = *star_pressure_cache;
     hints.ensure_size(0, n + 1);
     std::vector<Conserved> flux(n + 1), initial_flux, first_flux(n + 1);
+    std::vector<double> face_velocity(n + 1), initial_velocity, work0(n);
     std::vector<double> speed(n + 1), initial_speed, local_dt(n), start_fraction(n);
     std::vector<Conserved> source(mesh.cells.size()), initial_source, contribution(mesh.cells.size());
     // Source-limit stage cache: allocate once per macro step, reuse across its
     // substeps. Each stage's first change_limit call fills it; later independent
     // sources and their sum reuse the same thermodynamic scales.
     const std::size_t source_cache_size = sources.empty() ? 0 : n;
-    std::vector<double> source_rho(source_cache_size), source_velocity(source_cache_size),
-        source_half_v2(source_cache_size), source_density_allowance(source_cache_size),
+    std::vector<double> source_rho(source_cache_size), source_density_allowance(source_cache_size),
         source_momentum_allowance(source_cache_size), source_internal_allowance(source_cache_size);
     bool source_cache_ready = false;
     std::vector<Conserved> base(n), slope(n), source0(n), pending(n);
@@ -101,12 +101,12 @@ double advance_lts_rk2(
             index[0] = ng + f;
             const auto [WL, WR] = performance::measure(performance::Section::Reconstruction,
                 [&] { return reconstruction.face(0, index); }, true);
-            hydro::wave_timestep.face_speed = -1.0;
+            speed[f] = -1.0;
+            face_velocity[f] = 0.0;
             flux[f] = performance::measure(performance::Section::Riemann, [&] {
                 return solver.flux_with_pressure_hint(WL, WR, 0,
-                    stage.cells[ng + f - 1].gamma, stage.cells[ng + f].gamma, hints[0][f]);
+                    stage.cells[ng + f - 1].gamma, stage.cells[ng + f].gamma, hints[0][f], speed[f], face_velocity[f]);
             }, true);
-            speed[f] = hydro::wave_timestep.face_speed;
             if (!std::isfinite(speed[f]) || speed[f] < 0.0)
                 throw std::runtime_error("LTS RK2 received an invalid wave speed");
             for (double x : flux[f].data)
@@ -114,7 +114,7 @@ double advance_lts_rk2(
         }
         if (periodic)
         {
-            flux[n] = flux[0]; speed[n] = speed[0]; hints[0][n] = hints[0][0];
+            flux[n] = flux[0]; speed[n] = speed[0]; face_velocity[n] = face_velocity[0]; hints[0][n] = hints[0][0];
         }
     };
     // Independent source-change caps prevent cancellation from hiding stiff terms.
@@ -135,14 +135,11 @@ double advance_lts_rk2(
                 const auto W = cell.U.to_Primtivies(cell.gamma);
                 const double rho = W[hd_core::RHO], p = W[hd_core::PRE];
                 source_rho[i] = rho;
-                source_velocity[i] = source_half_v2[i] = 0.0;
                 source_density_allowance[i] = 0.1 * rho;
                 source_momentum_allowance[i] = source_internal_allowance[i] = 0.0;
                 if (rho != 0.0)
                 {
                     const double v = W[hd_core::VEL(0)], cs = std::sqrt(cell.gamma * p / rho);
-                    source_velocity[i] = v;
-                    source_half_v2[i] = 0.5 * v * v;
                     // Cache the original rounded 10% numerators once per stage.
                     source_momentum_allowance[i] = 0.1 * (rho * (std::abs(v) + cs));
                     source_internal_allowance[i] = 0.1 * (p / (cell.gamma - 1.0));
@@ -157,8 +154,7 @@ double advance_lts_rk2(
             }
             bound(source_density_allowance[i], s[hd_core::RHO]);
             bound(source_momentum_allowance[i], s[hd_core::MOMDEN(0)]);
-            bound(source_internal_allowance[i], s[hd_core::ENERGY] - source_velocity[i] * s[hd_core::MOMDEN(0)]
-                + source_half_v2[i] * s[hd_core::RHO]);
+            bound(source_internal_allowance[i], s[hd_core::INTERNAL_ENERGY]);
         }
         source_cache_ready = true;
     };
@@ -194,6 +190,7 @@ double advance_lts_rk2(
             std::fill(contribution.begin(), contribution.end(), Conserved{});
             double cap = inf;
             term.func(stage, t, cfg, contribution, cap);
+            hd_source::complete_internal_source(stage, term, contribution);
             if (contribution.size() != source.size()) throw std::logic_error("Source resized LTS RK2 storage");
             if (std::isnan(cap) || cap <= 0.0) throw std::invalid_argument("Invalid LTS RK2 source limit");
             limit = std::min({limit, cap, change_limit(stage, contribution, trial_H)});
@@ -202,17 +199,17 @@ double advance_lts_rk2(
         return sources.empty() ? inf : std::min(limit, change_limit(stage, source, trial_H));
     };
     solve(start, all_faces);
-    initial_flux = flux; initial_speed = speed;
+    initial_flux = flux; initial_speed = speed; initial_velocity = face_velocity;
     const auto initial_hints = hints;
     const double source_limit = evaluate_sources(start, time, 0.0);
     initial_source = source;
     double min_dt = inf;
-    hydro::wave_timestep.max_inverse_dt = 0.0;
+    hydro::max_inverse_dt = 0.0;
     for (int i = 0; i < n; ++i)
     {
         const double rate = std::max(speed[i], speed[i + 1]) / mesh.cell_width(0, ng + i);
         if (!std::isfinite(rate)) throw std::runtime_error("Non-finite LTS RK2 CFL rate");
-        hydro::wave_timestep.max_inverse_dt = std::max(hydro::wave_timestep.max_inverse_dt, rate);
+        hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
         local_dt[i] = rate > 0.0 ? cfl / rate : inf;
         min_dt = std::min(min_dt, local_dt[i]);
     }
@@ -251,6 +248,7 @@ double advance_lts_rk2(
             for (int l = 0; l <= d; ++l) faces[l].push_back(f);
         }
         state.cells = start.cells;
+        face_velocity = initial_velocity;
         hints = initial_hints; flux = initial_flux; speed = initial_speed; source = initial_source;
         std::fill(pending.begin(), pending.end(), Conserved{});
         auto check_waves = [&](const std::vector<int>& list) {
@@ -258,7 +256,7 @@ double advance_lts_rk2(
                 for (int i : {left(f), right(f)}) if (i >= 0)
                 {
                     const double rate = speed[f] / mesh.cell_width(0, ng + i);
-                    hydro::wave_timestep.max_inverse_dt = std::max(hydro::wave_timestep.max_inverse_dt, rate);
+                    hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
                     if (!std::isfinite(rate) || std::ldexp(H, -level[i]) * rate > cfg.cfl_max) return false;
                 }
             return true;
@@ -295,7 +293,11 @@ double advance_lts_rk2(
                 base[i] = state.cells[ng + i].U;
                 start_fraction[i] = fraction;
                 source0[i] = source[ng + i];
+                // Local pressure work uses the same sampled face velocities and areas as Godunov.
+                work0[i] = -(state.cells[ng + i].gamma - 1.0) * base[i].internal_energy()
+                    * (area[i + 1] * face_velocity[i + 1] - area[i] * face_velocity[i]) / volume[i];
                 slope[i] = (flux[i] * area[i] - flux[i + 1] * area[i + 1]) / volume[i] + source0[i];
+                slope[i][hd_core::INTERNAL_ENERGY] += work0[i];
                 if (!physical(base[i] + h * slope[i], state.cells[ng + i].gamma)) return false;
             }
             if (depth < deepest)
@@ -319,7 +321,11 @@ double advance_lts_rk2(
             {
                 auto& cell = state.cells[ng + i];
                 cell.U = base[i] + pending[i] / volume[i] + (source0[i] + source[ng + i]) * (0.5 * h);
+                const double work1 = -(cell.gamma - 1.0) * view.cells[ng + i].U.internal_energy()
+                    * (area[i + 1] * face_velocity[i + 1] - area[i] * face_velocity[i]) / volume[i];
+                cell.U[hd_core::INTERNAL_ENERGY] += 0.5 * h * (work0[i] + work1);
                 if (!physical(cell.U, cell.gamma)) return false;
+                cell.synchronize_dual_energy();
                 pending[i] = Conserved{};
             }
             return true;

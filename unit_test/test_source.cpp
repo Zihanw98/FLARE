@@ -3,7 +3,6 @@
 #include "source/source.h"
 #include "time/integrator.h"
 #include "hydro/riemann/riemann.h"
-#include "hydro/wave_timestep.h"
 #include <limits>
 
 namespace
@@ -12,9 +11,10 @@ class ZeroFluxSolver : public hydro::RiemannSolver
 {
 public:
     hd_core::Conserved flux(const hd_core::Primitives&, const hd_core::Primitives&,
-                           int, double, double) const override
+                           int, double, double, double& face_speed, double& face_velocity) const override
     {
-        hydro::wave_timestep.face_speed = 0.0;
+        face_velocity = 0.0;
+        face_speed = 0.0;
         return {};
     }
 };
@@ -38,6 +38,7 @@ hd_core::MeshBlock make_mesh()
         cell.U[hd_core::ENERGY] = 20.0;
         for (int d = 0; d < hd_core::NDIM; ++d)
             cell.U[hd_core::MOMDEN(d)] = 0.5 * (d + 1);
+        cell.synchronize_dual_energy();
     }
     return mesh;
 }
@@ -79,7 +80,7 @@ void heating_tests()
     CHECK(near(limit, 0.01)); // 0.1 * (0.4 / 0.4) / (2 * 5).
     for (std::size_t flat = 0; flat < rhs.size(); ++flat)
         for (int k = 0; k < hd_core::NVAR; ++k)
-            CHECK(near(rhs[flat][k], 7.0 + (active[flat] && k == hd_core::ENERGY ? 10.0 : 0.0)));
+            CHECK(near(rhs[flat][k], 7.0 + (active[flat] && (k == hd_core::ENERGY || k == hd_core::INTERNAL_ENERGY) ? 10.0 : 0.0)));
     limit = 0.001;
     sources[0].func(mesh, 0.0, cfg, rhs, limit);
     CHECK(limit == 0.001); // Never loosen a tighter existing bound.
@@ -118,7 +119,7 @@ void heating_tests()
         CHECK(near(dt, expected_dt));
         for (const auto& cell : trial.cells)
             for (int k = 0; k < hd_core::NVAR; ++k)
-                CHECK(near(cell.U[k], initial[k] + (k == hd_core::ENERGY ? 100.0 * dt : 0.0)));
+                CHECK(near(cell.U[k], initial[k] + ((k == hd_core::ENERGY || k == hd_core::INTERNAL_ENERGY) ? 100.0 * dt : 0.0)));
     }
 }
 }

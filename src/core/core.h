@@ -6,6 +6,7 @@
 #include "user_config.h"
 #include "hdmath.h"
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cmath>
 #include <stdexcept>
@@ -27,7 +28,7 @@ namespace hd_core
         return ret;
     }
     //Total Number of Variables: for conservatives and primitives...
-    inline constexpr int NVAR = 2 + NDIM + NCOMP + NUSER;
+    inline constexpr int NVAR = 3 + NDIM + NCOMP + NUSER;
 
     static_assert(NDIM >= 1 && NDIM <= 3);
     static_assert(NCOMP >= 0 && NUSER >= 0);
@@ -51,6 +52,9 @@ namespace hd_core
     }
     //Conservatives component index
     inline constexpr int ENERGY = PRE;
+    // Same index: Conserved stores internal energy density e; Primitives stores e/rho.
+    inline constexpr int INTERNAL_ENERGY = ENERGY + 1;
+    inline constexpr double dual_energy_eta = 1.e-3;
     /**
      * @brief Return the storage index of a momentum-density component.
      * @param[in] d Zero-based component index in [0, NDIM).
@@ -66,7 +70,7 @@ namespace hd_core
         return 1+d;
     }
     //Hydrodynamics component number
-    inline constexpr int NHYDRO = NDIM + 2;
+    inline constexpr int NHYDRO = NDIM + 3;
     inline constexpr int COMP_BEGIN = NHYDRO;
     inline constexpr int USER_BEGIN = COMP_BEGIN + NCOMP;
 
@@ -129,12 +133,17 @@ namespace hd_core
         /**
          * @brief Convert primitive hydrodynamic components to conserved variables.
          * @param[in] gamma Finite ideal-gas adiabatic index greater than one.
-         * @return Density, momentum densities, and total energy density; extra components remain zero.
+         * @return Density, momentum, total and internal energy densities; composition/user fields remain zero.
          * @pre The input is a valid primitive state for gamma.
          * @note Zero density returns an all-zero state before validation. Only hydrodynamic components are converted.
          * @throws std::invalid_argument If the resulting non-vacuum state fails validation.
          */
         Conserved to_Conserved(double gamma) const;
+        // Pressure is authoritative; call after changing rho/p in a primitive state.
+        void update_internal_energy(double gamma)
+        {
+            data[INTERNAL_ENERGY] = data[RHO] == 0.0 ? 0.0 : data[PRE] / (gamma - 1.0) / data[RHO];
+        }
         /**
          * @brief Copy the stored primitive velocity components into a vector.
          * @return An NDIM-component velocity vector.
@@ -175,6 +184,30 @@ namespace hd_core
         const double& operator[](int i) const
         {
             return data[i];
+        }
+
+        double kinetic_energy() const
+        {
+            if (data[RHO] == 0.0) return 0.0;
+            double kinetic = 0.0;
+            for (int d = 0; d < NDIM; ++d)
+                kinetic += (0.5 * data[MOMDEN(d)]) * (data[MOMDEN(d)] / data[RHO]);
+            return kinetic;
+        }
+        bool total_energy_reliable() const
+        {
+            const double kinetic = kinetic_energy();
+            return data[ENERGY] - kinetic > dual_energy_eta * std::max(std::abs(data[ENERGY]), kinetic);
+        }
+        double internal_energy() const
+        {
+            if (data[RHO] == 0.0) return 0.0;
+            const double kinetic = kinetic_energy();
+            if (!std::isfinite(kinetic) || !std::isfinite(data[ENERGY]) || data[ENERGY] <= 0.0)
+                throw std::invalid_argument("Conserved: invalid kinetic or total energy");
+            const double thermal = data[ENERGY] - kinetic;
+            return thermal > dual_energy_eta * std::max(std::abs(data[ENERGY]), kinetic)
+                ? thermal : data[INTERNAL_ENERGY];
         }
 
         // Component-wise arithmetic also applies to fluxes and RHS values,
@@ -305,7 +338,7 @@ namespace hd_core
         /**
          * @brief Convert conserved hydrodynamic components to primitive variables.
          * @param[in] gamma Finite ideal-gas adiabatic index greater than one.
-         * @return Density, velocities, and pressure; extra components remain zero.
+         * @return Density, velocities, pressure and specific internal energy; composition/user fields remain zero.
          * @pre The input is a valid conserved state for gamma.
          * @note Zero density returns an all-zero primitive state before validating momentum or energy. The existing API spelling to_Primtivies is retained.
          * @throws std::invalid_argument If velocity extraction or validation of the converted gas state fails.
@@ -394,7 +427,7 @@ namespace hd_core
                     );
             }
 
-            if (data[ENERGY] != 0.0)
+            if (data[ENERGY] != 0.0 || data[INTERNAL_ENERGY] != 0.0)
                 throw std::invalid_argument(
                     "Vacuum must have zero energy"
                 );
@@ -405,6 +438,8 @@ namespace hd_core
         if (rho < 0.0)
             throw std::invalid_argument("Negative density");
 
+        if (data[ENERGY] <= 0.0)
+            throw std::invalid_argument("Conserved: total energy must be positive");
         double kinetic = 0.0;
         for (int d = 0; d < NDIM; ++d)
         {
@@ -418,8 +453,11 @@ namespace hd_core
         if (!std::isfinite(kinetic))
             throw std::invalid_argument("Conserved: kinetic energy is not finite");
 
-        const double internal = data[ENERGY] - kinetic;
-        if (!std::isfinite(internal) || internal <= 0.0)
+        // A negative auxiliary stage value is recoverable only when E-K is reliable.
+        const double thermal = data[ENERGY] - kinetic;
+        const double internal = thermal > dual_energy_eta * std::max(std::abs(data[ENERGY]), kinetic)
+            ? thermal : data[INTERNAL_ENERGY];
+        if (!std::isfinite(internal) || internal <= 0.0 || !std::isfinite(kinetic + internal))
             throw std::invalid_argument("Conserved: internal energy must be finite and positive");
 
         const double pressure = (gamma - 1.0) * internal;
@@ -449,7 +487,7 @@ namespace hd_core
                     );
             }
 
-            if (data[ENERGY] != 0.0)
+            if (data[ENERGY] != 0.0 || data[INTERNAL_ENERGY] != 0.0)
                 throw std::invalid_argument(
                     "Vacuum must have zero energy"
                 );
@@ -479,7 +517,8 @@ namespace hd_core
             speed_squared += data[VEL(i)] * data[VEL(i)];
             W[MOMDEN(i)] = W[RHO] * data[VEL(i)];
         }
-        W[ENERGY] = data[PRE] / (gamma - 1) + 0.5 * W[RHO] * speed_squared;
+        W[INTERNAL_ENERGY] = data[PRE] / (gamma - 1);
+        W[ENERGY] = W[INTERNAL_ENERGY] + 0.5 * W[RHO] * speed_squared;
         W.validate(gamma);
         return W;
     }
@@ -499,7 +538,8 @@ namespace hd_core
             W[VEL(i)] = data[MOMDEN(i)] / W[RHO];
             speed_squared += W[VEL(i)] * W[VEL(i)];
         }
-        W[PRE] = (gamma - 1) * (data[ENERGY] - 0.5 * W[RHO] * speed_squared);
+        W[PRE] = (gamma - 1) * internal_energy();
+        W.update_internal_energy(gamma);
         W.validate(gamma);
         return W;
     }

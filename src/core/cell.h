@@ -10,7 +10,21 @@ namespace hd_core
     struct Cell
     {
         Conserved U;
-        double gamma = 5.0/3;  
+        double gamma = 5.0/3;
+        // Accumulated density of energy added/removed by cold-cell synchronization.
+        double dual_energy_correction = 0.0;
+        void synchronize_dual_energy()
+        {
+            U.validate(gamma);
+            if (U.total_energy_reliable())
+                U[INTERNAL_ENERGY] = U[ENERGY] - U.kinetic_energy();
+            else
+            {
+                const double energy = U.kinetic_energy() + U[INTERNAL_ENERGY];
+                dual_energy_correction += energy - U[ENERGY];
+                U[ENERGY] = energy;
+            }
+        }
         /**
          * @brief Construct a cell with zero conserved components and gamma = 5/3.
          * @note Default construction does not validate the state.

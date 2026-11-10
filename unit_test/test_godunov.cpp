@@ -14,11 +14,12 @@ struct ProbeSolver final : hydro::RiemannSolver
 {
     mutable std::vector<FaceCall> calls;
     hd_core::Conserved flux(const hd_core::Primitives& left, const hd_core::Primitives& right,
-                            int d, double gl, double gr) const override
+                            int d, double gl, double gr, double& face_speed, double& face_velocity) const override
     {
         const double l = left[hd_core::RHO], r = right[hd_core::RHO];
         calls.push_back({l, r, gl, gr, d});
-        hydro::wave_timestep.face_speed = 1.0 + d + 0.1 * l;
+        face_velocity = 0.0;
+        face_speed = 1.0 + d + 0.1 * l;
         hd_core::Conserved result{};
         for (int k = 0; k < hd_core::NVAR; ++k)
             result[k] = (k + 1.0) * (d + 1.0) * (l + 2.0 * r);
@@ -111,6 +112,6 @@ int main()
             CHECK(mesh.cells[flat].U.data == original[flat].U.data);
             CHECK(mesh.cells[flat].gamma == original[flat].gamma);
         }
-        CHECK(near(hydro::wave_timestep.max_inverse_dt, expected_max_rate));
+        CHECK(near(hydro::max_inverse_dt, expected_max_rate));
     });
 }

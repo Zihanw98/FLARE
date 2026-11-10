@@ -81,41 +81,57 @@ void same_cells(const std::vector<hd_core::Cell>& a, const std::vector<hd_core::
 
 void exact_wave_tests()
 {
+    double face_speed = -1.0, face_velocity = 0.0;
     hydro::ExactSolver solver(1e-12, 200);
     const double c = std::sqrt(gamma_gas);
     for (int d = 0; d < hd_core::NDIM; ++d)
     {
         const auto w = state(1.0, 1.0, 20.0, d);
-        const auto uniform = solver.flux(w, w, d, gamma_gas, gamma_gas);
-        assert(near(hydro::wave_timestep.face_speed, 20.0 + c));
+        const auto uniform = solver.flux(w, w, d, gamma_gas, gamma_gas, face_speed, face_velocity);
+        assert(near(face_speed, 20.0 + c));
+        assert(near(face_velocity, 20.0));
         const auto physical = hydro::physical_flux(w, d, gamma_gas);
         for (int k = 0; k < hd_core::NVAR; ++k)
             assert(near(uniform[k], physical[k]));
 
-        solver.flux(state(1000.0, 1000.0), state(1.0, 0.01), d, gamma_gas, gamma_gas);
+        // Separate outputs retain the first interface's speed and velocity.
+        double other_speed = -1.0, other_velocity = 99.0, pressure_hint = 1.0;
+        const auto still = state(1.0, 1.0);
+        solver.flux_with_pressure_hint(still, still, d, gamma_gas, gamma_gas,
+                                       pressure_hint, other_speed, other_velocity);
+        assert(near(other_speed, c));
+        assert(other_velocity == 0.0);
+        assert(near(face_speed, 20.0 + c) && near(face_velocity, 20.0));
+
+        solver.flux(state(1000.0, 1000.0), state(1.0, 0.01), d, gamma_gas, gamma_gas, face_speed, face_velocity);
         // Independent reference: p*=9.832118791607545, right shock speed below.
-        assert(near(hydro::wave_timestep.face_speed, 3.4351917777511423));
-        solver.flux(state(1.0, 0.01), state(1000.0, 1000.0), d, gamma_gas, gamma_gas);
-        assert(near(hydro::wave_timestep.face_speed, 3.4351917777511423));
+        assert(near(face_speed, 3.4351917777511423));
+        solver.flux(state(1.0, 0.01), state(1000.0, 1000.0), d, gamma_gas, gamma_gas, face_speed, face_velocity);
+        assert(near(face_speed, 3.4351917777511423));
 
         const auto gas = state(1.0, 1.0);
         const auto vacuum = state(0.0, 0.0);
-        solver.flux(gas, vacuum, d, gamma_gas, gamma_gas);
-        assert(near(hydro::wave_timestep.face_speed, 2.0 * c / (gamma_gas - 1.0)));
-        solver.flux(vacuum, gas, d, gamma_gas, gamma_gas);
-        assert(near(hydro::wave_timestep.face_speed, 2.0 * c / (gamma_gas - 1.0)));
+        solver.flux(gas, vacuum, d, gamma_gas, gamma_gas, face_speed, face_velocity);
+        assert(near(face_speed, 2.0 * c / (gamma_gas - 1.0)));
+        assert(near(face_velocity, 2.0 * c / (gamma_gas + 1.0)));
+        solver.flux(vacuum, gas, d, gamma_gas, gamma_gas, face_speed, face_velocity);
+        assert(near(face_speed, 2.0 * c / (gamma_gas - 1.0)));
+        assert(near(face_velocity, -2.0 * c / (gamma_gas + 1.0)));
 
         const auto generated = solver.flux(state(1.0, 1.0, -10.0, d),
-            state(1.0, 1.0, 10.0, d), d, gamma_gas, gamma_gas);
-        assert(near(hydro::wave_timestep.face_speed, 10.0 + c));
+            state(1.0, 1.0, 10.0, d), d, gamma_gas, gamma_gas, face_speed, face_velocity);
+        assert(near(face_speed, 10.0 + c));
+        assert(face_velocity == 0.0);
         for (double f : generated.data) assert(f == 0.0);
-        const auto empty = solver.flux(vacuum, vacuum, d, gamma_gas, gamma_gas);
-        assert(hydro::wave_timestep.face_speed == 0.0);
+        face_velocity = 99.0;
+        const auto empty = solver.flux(vacuum, vacuum, d, gamma_gas, gamma_gas, face_speed, face_velocity);
+        assert(face_speed == 0.0);
+        assert(face_velocity == 0.0);
         for (double f : empty.data) assert(f == 0.0);
     }
     hydro::ExactSolver unconverged(1e-12, 1);
     expect_throw<std::runtime_error>([&] {
-        unconverged.flux(state(1000., 1000.), state(1., 0.01), 0, gamma_gas, gamma_gas);
+        unconverged.flux(state(1000., 1000.), state(1., 0.01), 0, gamma_gas, gamma_gas, face_speed, face_velocity);
     });
 }
 
@@ -126,11 +142,12 @@ struct CountingSolver final : hydro::RiemannSolver
     bool invalid_flux = false;
     bool publish_speed = true;
     hd_core::Conserved flux(const hd_core::Primitives&, const hd_core::Primitives&,
-                              int d, double, double) const override
+                              int d, double, double, double& face_speed, double& face_velocity) const override
     {
         ++calls;
         hd_core::Conserved r{};
-        if (publish_speed) hydro::wave_timestep.face_speed = 2.0 * (d + 1.0);
+        face_velocity = 0.0;
+        if (publish_speed) face_speed = 2.0 * (d + 1.0);
         if (invalid_flux) r[hd_core::RHO] = std::numeric_limits<double>::quiet_NaN();
         return r;
     }
@@ -145,7 +162,7 @@ void integration_tests()
     auto mesh = make_mesh(true);
     const auto original = mesh.cells;
     std::vector<hd_core::Conserved> rhs;
-    hydro::wave_timestep.max_inverse_dt = 1e100; // Must reset for this new RHS.
+    hydro::max_inverse_dt = 1e100; // Must reset for this new RHS.
     hydro::compute_hydro_rhs(mesh, hydro::SpatialScheme::Godunov, counting, rhs);
     double expected_rate = 0.0;
     for (std::size_t f = 0; f < mesh.cells.size(); ++f)
@@ -158,7 +175,7 @@ void integration_tests()
             rate += 2.0 * (d + 1.0) / (mesh.face[d][idx[d] + 1] - mesh.face[d][idx[d]]);
         expected_rate = std::max(expected_rate, rate);
     }
-    assert(near(hydro::wave_timestep.max_inverse_dt, expected_rate));
+    assert(near(hydro::max_inverse_dt, expected_rate));
     std::size_t face_count = 0;
     for (int n = 0; n < hd_core::NDIM; ++n)
     {
@@ -207,8 +224,14 @@ void integration_tests()
     for (std::size_t f = 0; f < shock.cells.size(); ++f)
     {
         if (!active(shock, f)) assert(shock.cells[f].U.data == before[f].U.data);
-        else for (int k = 0; k < hd_core::NVAR; ++k)
-            assert(near(shock.cells[f].U[k], before[f].U[k] + shock_dt * rhs[f][k]));
+        else
+        {
+            auto expected = before[f];
+            expected.U += shock_dt * rhs[f];
+            expected.synchronize_dual_energy();
+            for (int k = 0; k < hd_core::NVAR; ++k)
+                assert(near(shock.cells[f].U[k], expected.U[k]));
+        }
     }
 
     for (auto& cell : mesh.cells) cell = hd_core::Cell{};

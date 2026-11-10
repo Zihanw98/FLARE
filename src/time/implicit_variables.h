@@ -9,6 +9,8 @@
 namespace hd_implicit::detail
 {
 // Local Newton coordinates: d(log rho), dv / velocity_scale, d(log p).
+// Cold cells use a linear total-thermal-energy increment in the ENERGY slot:
+// log(p) cannot represent E-K < 0, which dual energy deliberately permits.
 // The equations remain conservative. Row scaling is held fixed throughout
 // each Jacobian construction, linear solve and its line search.
 class LogVariables
@@ -46,6 +48,8 @@ public:
             for (int d = 0; d < hd_core::NDIM; ++d)
                 scale.residual[hd_core::MOMDEN(d)] = rho*scale.velocity;
             scale.residual[hd_core::ENERGY] = std::max(cell.U[hd_core::ENERGY], old.cells[flat].U[hd_core::ENERGY]);
+            scale.residual[hd_core::INTERNAL_ENERGY] = std::max(
+                w[hd_core::PRE]/(cell.gamma-1), previous[hd_core::PRE]/(old.cells[flat].gamma-1));
             // Additional conserved fields stay linear, with a density-based
             // scale; never drop them through the hydro-only primitive conversion.
             for (int k = hd_core::NHYDRO; k < hd_core::NVAR; ++k)
@@ -81,14 +85,17 @@ public:
         const auto& w = scale.primitive;
         const double drho = w[hd_core::RHO]*std::expm1(alpha*dq[hd_core::RHO]);
         const double rho = w[hd_core::RHO]*std::exp(alpha*dq[hd_core::RHO]);
-        const double pressure = w[hd_core::PRE]*std::exp(alpha*dq[hd_core::PRE]);
+        const bool hot = base.U.total_energy_reliable();
+        const double pressure = hot ? w[hd_core::PRE]*std::exp(alpha*dq[hd_core::PRE]) : w[hd_core::PRE];
         if (!std::isfinite(rho) || !std::isfinite(pressure) || rho <= 0 || pressure <= 0)
             throw std::invalid_argument("Log implicit update overflow/underflow");
         auto result = base.U;
         result[hd_core::RHO] = rho;
         // Increment form preserves the exact base state for dq=0, avoiding
         // primitive/conserved roundtrip noise in small finite differences.
-        double energy_change = w[hd_core::PRE]/(base.gamma-1)*std::expm1(alpha*dq[hd_core::PRE]);
+        double energy_change = hot
+            ? w[hd_core::PRE]/(base.gamma-1)*std::expm1(alpha*dq[hd_core::PRE])
+            : alpha*scale.residual[hd_core::ENERGY]*dq[hd_core::ENERGY];
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
             const double velocity = w[hd_core::VEL(d)];
@@ -97,6 +104,7 @@ public:
             energy_change += 0.5*drho*velocity*velocity + rho*velocity*dv + 0.5*rho*dv*dv;
         }
         result[hd_core::ENERGY] += energy_change;
+        result[hd_core::INTERNAL_ENERGY] += alpha*scale.residual[hd_core::INTERNAL_ENERGY]*dq[hd_core::INTERNAL_ENERGY];
         for (int k = hd_core::NHYDRO; k < hd_core::NVAR; ++k)
             result[k] += alpha*scale.residual[k]*dq[k];
         result.validate(base.gamma);
@@ -111,7 +119,10 @@ public:
         const auto& w = scale.primitive;
         hd_core::Conserved du{};
         du[hd_core::RHO] = w[hd_core::RHO]*dq[hd_core::RHO];
-        du[hd_core::ENERGY] = w[hd_core::PRE]/(base.gamma-1)*dq[hd_core::PRE];
+        du[hd_core::INTERNAL_ENERGY] = scale.residual[hd_core::INTERNAL_ENERGY]*dq[hd_core::INTERNAL_ENERGY];
+        du[hd_core::ENERGY] = base.U.total_energy_reliable()
+            ? w[hd_core::PRE]/(base.gamma-1)*dq[hd_core::PRE]
+            : scale.residual[hd_core::ENERGY]*dq[hd_core::ENERGY];
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
             const double velocity = w[hd_core::VEL(d)];

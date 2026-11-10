@@ -228,7 +228,7 @@ namespace
             assert(std::stod(line.substr(prefix.size())) == entry.second);
         }
         assert(std::getline(file, line));
-        assert(line == "x,y,z,gamma,rho,vx,vy,vz,p,is_ghost");
+        assert(line == "x,y,z,gamma,rho,vx,vy,vz,p,is_ghost,internal_energy,total_energy,dual_energy_correction");
         std::size_t f = 0;
         while (std::getline(file, line))
         {
@@ -237,7 +237,7 @@ namespace
             std::vector<double> fields;
             std::string field;
             while (std::getline(row, field, ',')) fields.push_back(std::stod(field));
-            assert(fields.size() == 10);
+            assert(fields.size() == 13);
             const auto index = mesh.coordinates(f);
             const auto& cell = mesh.cells[f];
             const auto W = cell.U.to_Primtivies(cell.gamma);
@@ -250,6 +250,9 @@ namespace
             assert(near(fields[4], W[hd_core::RHO]));
             assert(near(fields[8], W[hd_core::PRE]));
             assert(fields[9] == (active(mesh, index) ? 0.0 : 1.0));
+            assert(fields[10] == cell.U[hd_core::INTERNAL_ENERGY]);
+            assert(fields[11] == cell.U[hd_core::ENERGY]);
+            assert(fields[12] == cell.dual_energy_correction);
             ++f;
         }
         assert(f == mesh.cells.size());

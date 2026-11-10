@@ -1,6 +1,5 @@
 #include "test_support.h"
 #include "time/integrator.h"
-#include "hydro/wave_timestep.h"
 #include "hydro/riemann/riemann.h"
 #include "user/user_api.h"
 #include <fstream>
@@ -16,18 +15,19 @@ public:
     bool zero_speed = false;
     mutable std::vector<double> hint_inputs, hint_outputs;
     hd_core::Conserved flux(const hd_core::Primitives& left,
-                           const hd_core::Primitives& right, int, double, double) const override
+                           const hd_core::Primitives& right, int, double, double, double& face_speed, double& face_velocity) const override
     {
-        hydro::wave_timestep.face_speed = zero_speed ? 0.0
+        face_velocity = 0.0;
+        face_speed = zero_speed ? 0.0
             : std::max(left[hd_core::RHO], right[hd_core::RHO]) / (2.0 * hd_core::NDIM);
         return {};
     }
     hd_core::Conserved flux_with_pressure_hint(const hd_core::Primitives& left,
                            const hd_core::Primitives& right, int d, double gl, double gr,
-                           double& pressure) const override
+                           double& pressure, double& face_speed, double& face_velocity) const override
     {
         hint_inputs.push_back(pressure);
-        const auto result = flux(left, right, d, gl, gr);
+        const auto result = flux(left, right, d, gl, gr, face_speed, face_velocity);
         pressure = 10 * (d + 1) + left[hd_core::RHO];
         hint_outputs.push_back(pressure);
         return result;

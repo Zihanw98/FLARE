@@ -228,6 +228,8 @@ void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
     const double injected_energy=injection_energy_erg/physcon::units.unit_energy;
     mesh.cells[injection_flat].U[hd_core::ENERGY]+=
         injected_energy/mesh.volume_cell[injection_flat];
+    mesh.cells[injection_flat].U[hd_core::INTERNAL_ENERGY] +=
+        injected_energy/mesh.volume_cell[injection_flat];
     mesh.validate_active();
 
     std::ofstream info(std::filesystem::path(cfg.output_directory)/"model.json");

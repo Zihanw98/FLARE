@@ -35,13 +35,13 @@ namespace
         for (int i = 0; i < mesh.nactive[0]; ++i)
         {
             const hd_core::Index index{i + mesh.nghost[0]};
-            const auto flat = mesh.flat_index(index);
             const bool inner = mesh.cell_center(0, index) < r_inj;
             hd_core::Conserved U{};
             U[hd_core::RHO] = 1.0;
             U[hd_core::ENERGY] =
                 (inner ? E_0 / V_inj : 0.0) + 1e-5 / (gamma - 1.0);
-            auto W = U.to_Primtivies(gamma);
+            U[hd_core::INTERNAL_ENERGY] = U[hd_core::ENERGY];
+            U.validate(gamma);
             mesh.at(index).U = U;
             mesh.at(index).gamma = gamma;
         }

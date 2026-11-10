@@ -75,7 +75,7 @@ namespace io
                 csv << ",comp_" << k;
             for (int k = 0; k < hd_core::NUSER; ++k)
                 csv << ",user_" << k;
-            csv << ",is_ghost\n";
+            csv << ",is_ghost,internal_energy,total_energy,dual_energy_correction\n";
         }
 
         double rho_min = std::numeric_limits<double>::infinity();
@@ -83,7 +83,7 @@ namespace io
         double p_min = std::numeric_limits<double>::infinity();
         double p_max = 0.0;
         long double mass = 0.0L;
-        long double energy = 0.0L;
+        long double energy = 0.0L, internal = 0.0L, correction = 0.0L;
         std::size_t active_cells = 0;
         for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
         {
@@ -109,6 +109,8 @@ namespace io
                 p_max = std::max(p_max, W[hd_core::PRE]);
                 mass += cell.U[hd_core::RHO] * volume;
                 energy += cell.U[hd_core::ENERGY] * volume;
+                internal += cell.U[hd_core::INTERNAL_ENERGY] * volume;
+                correction += cell.dual_energy_correction * volume;
             }
             if (write_snapshot)
             {
@@ -127,7 +129,8 @@ namespace io
                     csv << ',' << W[hd_core::COMP(k)];
                 for (int k = 0; k < hd_core::NUSER; ++k)
                     csv << ',' << W[hd_core::CONUSR(k)];
-                csv << ',' << (is_ghost ? 1 : 0) << '\n';
+                csv << ',' << (is_ghost ? 1 : 0) << ',' << cell.U[hd_core::INTERNAL_ENERGY]
+                    << ',' << cell.U[hd_core::ENERGY] << ',' << cell.dual_energy_correction << '\n';
             }
         }
         if (write_snapshot)
@@ -145,7 +148,8 @@ namespace io
                 << ", active_cells = " << active_cells
                 << ", rho = [" << rho_min << ", " << rho_max << ']'
                 << ", p = [" << p_min << ", " << p_max << ']'
-                << ", mass = " << mass << ", energy = " << energy;
+                << ", mass = " << mass << ", energy = " << energy
+                << ", internal_energy = " << internal << ", dual_energy_correction = " << correction;
         if (write_snapshot)
             message << ", csv = " << filename.string();
         std::cout << message.str() << '\n';

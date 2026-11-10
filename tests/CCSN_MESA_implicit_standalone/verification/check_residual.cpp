@@ -31,7 +31,14 @@ Snapshot read(const std::filesystem::path& path, hd_core::MeshBlock& mesh) {
             hd_core::Primitives w{};w[hd_core::RHO]=r;w[hd_core::PRE]=p;
             const double velocity[]={vx,vy,vz};
             for(int d=0;d<hd_core::NDIM;++d) w[hd_core::VEL(d)]=velocity[d];
-            mesh.cells[flat++]=hd_core::Cell(w,g);
+            auto& cell = mesh.cells[flat++];
+            cell=hd_core::Cell(w,g);
+            double internal,total,correction;
+            if (row>>internal>>total>>correction) {
+                cell.U[hd_core::INTERNAL_ENERGY]=internal;
+                cell.U[hd_core::ENERGY]=total;
+                cell.dual_energy_correction=correction;
+            }
         }
     }
     if(flat!=mesh.cells.size()) throw std::runtime_error("Wrong snapshot cell count");
@@ -65,7 +72,11 @@ int main(int argc,char** argv) {
                 const double speed=std::max({std::sqrt(mesh.cells[f].gamma*w[hd_core::PRE]/w[hd_core::RHO]),
                     std::sqrt(old.cells[f].gamma*wold[hd_core::PRE]/wold[hd_core::RHO]),
                     std::abs(w[hd_core::VEL(0)]),std::abs(wold[hd_core::VEL(0)])});
-                const double residual=mesh.cells[f].U[k]-old.cells[f].U[k]-current.dt*result.second[f][k];
+                // Auxiliary energy is synchronized after convergence, so it is not a conserved residual.
+                if (k==hd_core::INTERNAL_ENERGY) continue;
+                const double correction=k==hd_core::ENERGY
+                    ? mesh.cells[f].dual_energy_correction-old.cells[f].dual_energy_correction : 0.0;
+                const double residual=mesh.cells[f].U[k]-old.cells[f].U[k]-current.dt*result.second[f][k]-correction;
                 const double scale=1e-6*(k==hd_core::RHO ? rho : k==hd_core::ENERGY
                     ? std::max(mesh.cells[f].U[k],old.cells[f].U[k]) : rho*speed);
                 worst=std::max(worst,std::abs(residual)/scale);

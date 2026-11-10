@@ -18,7 +18,7 @@ namespace hd_source
                      const config::SimulationConfig& cfg,
                      std::vector<hd_core::Conserved>& rhs, double& dt_limit) {
                 constant_gravity(mesh, time, cfg, params, rhs, dt_limit);
-            }};
+            }, true};
     }
 
     void constant_gravity(
@@ -48,26 +48,25 @@ namespace hd_source
                      const config::SimulationConfig& cfg,
                      std::vector<hd_core::Conserved>& rhs, double& dt_limit) {
                 spherical_self_gravity(mesh, time, cfg, params, rhs, dt_limit);
-        }};
+        }, true};
     }
     void spherical_self_gravity(
         const hd_core::MeshBlock& mesh,
-        double time,
+        double /*time*/,
         const config::SimulationConfig& /*cfg*/,
         const SphericalGravityParams& params,
         std::vector<hd_core::Conserved>& rhs,
-        double& dt_limit
+        double& /*dt_limit*/
     )
     {
         performance::Scope timer(performance::Section::Gravity);
         //Central Gravity + Self Gravity
 
-        const std::size_t r_total = mesh.nactive[0];
+        const int r_total = mesh.nactive[0];
         std::vector<double> shell_mass(r_total, 0.0);
         std::vector<double> shell_g(r_total, 0.0);
         for(size_t flat=0; flat<mesh.cells.size(); flat++)
         {
-            const auto& Index = mesh.coordinates(flat);
             if(!mesh.is_active(flat))
             {
                 continue;

@@ -166,6 +166,7 @@ namespace hd_core
          * @note Skips ghost states and leaves all data unchanged; geometry is checked separately by validate_geometry().
          */
         void validate_active() const;
+        void synchronize_dual_energy();
 
         /**
          * @brief Validate geometry and resize cell storage to include all ghost cells.

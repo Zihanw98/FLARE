@@ -66,9 +66,9 @@ inside a step. Custom source callbacks must report any additional hard timestep
 limit, particularly for prescribed time-dependent forcing. Gas creation from
 exact vacuum by a source is unsupported.
 
-The source-change checks cache five thermodynamic scales per active cell:
-density, velocity, half velocity squared, acoustic momentum scale, and internal
-energy. The first independent source fills them; later sources and the summed
+The source-change checks cache three thermodynamic scales per active cell:
+density, acoustic momentum scale, and internal energy. The dual-energy version
+checks the explicit `S[INTERNAL_ENERGY]` rate. The first independent source fills them; later sources and the summed
 rate reuse them. With two sources this reduces primitive conversion and sound
 speed evaluation from three times to once per cell per macro step. Storage is
 kept in the existing `LTSEulerWorkspace::Impl::source_scales`; no new class is
@@ -257,3 +257,14 @@ also shortens the macro step and the frozen-source interval; differences shrink
 approximately linearly in this check. The wall times are single serial runs,
 not repeated timing statistics. More levels improve scheduling efficiency but
 do not increase time accuracy or establish validity through shock breakout.
+
+
+## Dual energy
+
+The existing `Conserved` now includes internal energy density. Face registers also
+transport this component. Each local Euler step adds `-h*p*div(v)` using its start
+pressure and the sampled Riemann face velocities, both in the coarse predictor
+and the final update. Physical source callbacks remain frozen at macro-step start.
+Accepted local states synchronize total/internal energies through
+`Cell::synchronize_dual_energy`; rejected trials discard the corrections with the
+trial mesh. See [the shared dual-energy rules and tests](lts_rk2.md#独立内能与双能量同步2026-11-10).

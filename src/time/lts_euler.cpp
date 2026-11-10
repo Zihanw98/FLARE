@@ -44,9 +44,10 @@ struct FaceResult
 {
     Conserved flux{};
     double speed = 0.0;
+    double velocity = 0.0;
 };
 
-// Keep the existing solver ABI; capture its wave speed immediately, locally.
+// Both interface outputs are stored directly in the caller-owned result.
 FaceResult solve_face(const MeshBlock& mesh, hydro::ReconstructionCache& reconstruction, int face,
                       const hydro::RiemannSolver& solver, double& pressure_hint)
 {
@@ -57,12 +58,11 @@ FaceResult solve_face(const MeshBlock& mesh, hydro::ReconstructionCache& reconst
     index[0] = right;
     const auto [WL, WR] = performance::measure(performance::Section::Reconstruction,
         [&] { return reconstruction.face(0, index); }, true);
-    hydro::wave_timestep.face_speed = -1.0;
     FaceResult result;
+    result.speed = -1.0;
     result.flux = performance::measure(performance::Section::Riemann, [&] {
-        return solver.flux_with_pressure_hint(WL, WR, 0, L.gamma, R.gamma, pressure_hint);
+        return solver.flux_with_pressure_hint(WL, WR, 0, L.gamma, R.gamma, pressure_hint, result.speed, result.velocity);
     }, true);
-    result.speed = hydro::wave_timestep.face_speed;
     if (!std::isfinite(result.speed) || result.speed < 0.0)
         throw std::runtime_error("LTS received an invalid Riemann wave speed");
     for (double x : result.flux.data)
@@ -82,7 +82,7 @@ bool physical(const Conserved& U, double gamma)
 // Bound density change, momentum relative to rho*(|v|+cs), and internal-energy
 // change. The acoustic momentum scale also bounds acceleration starting at v=0.
 double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& S,
-                          std::vector<std::array<double, 5>>& scales, bool& cache_ready)
+                          std::vector<std::array<double, 3>>& scales, bool& cache_ready)
 {
     double limit = infinity;
     auto bound = [&](double scale, double rate) {
@@ -96,25 +96,25 @@ double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& 
         for (double x : s.data)
             if (!std::isfinite(x))
                 throw std::runtime_error("LTS received a non-finite source rate");
-        // rho, velocity, half velocity squared, momentum scale, internal energy.
+        // rho, momentum scale, internal energy.
         // Without sources the existing single zero-rate scan needs no storage.
-        std::array<double, 5> uncached{};
+        std::array<double, 3> uncached{};
         auto& cached = scales.empty() ? uncached : scales[i];
         if (!cache_ready || scales.empty())
         {
             const auto& cell = mesh.cells[k];
             const auto W = cell.U.to_Primtivies(cell.gamma);
             const double rho = W[hd_core::RHO];
-            cached = {rho, 0.0, 0.0, 0.0, 0.0};
+            cached = {rho, 0.0, 0.0};
             if (rho != 0.0)
             {
                 const double v = W[hd_core::VEL(0)];
                 const double cs = std::sqrt(cell.gamma * W[hd_core::PRE] / rho);
-                cached = {rho, v, 0.5 * v * v, rho * (std::abs(v) + cs),
+                cached = {rho, rho * (std::abs(v) + cs),
                           W[hd_core::PRE] / (cell.gamma - 1.0)};
             }
         }
-        const auto [rho, v, half_v2, momentum, internal] = cached;
+        const auto [rho, momentum, internal] = cached;
         if (rho == 0.0)
         {
             for (double x : s.data)
@@ -124,8 +124,7 @@ double source_change_limit(const MeshBlock& mesh, const std::vector<Conserved>& 
         }
         bound(rho, s[hd_core::RHO]);
         bound(momentum, s[hd_core::MOMDEN(0)]);
-        bound(internal, s[hd_core::ENERGY] - v * s[hd_core::MOMDEN(0)]
-                       + half_v2 * s[hd_core::RHO]);
+        bound(internal, s[hd_core::INTERNAL_ENERGY]);
     }
     cache_ready = true;
     return limit;
@@ -142,7 +141,7 @@ struct LTSEulerWorkspace::Impl
     std::vector<FaceResult> initial, stage;
     std::vector<Conserved> source, contribution, pending_flux, step_start;
     // Reuse storage across macro steps; values belong only to their start state.
-    std::vector<std::array<double, 5>> source_scales;
+    std::vector<std::array<double, 3>> source_scales;
     std::vector<int> level, face_level;
     std::vector<unsigned char> predicted, lower_ghosts, upper_ghosts;
     std::vector<std::vector<int>> level_cells, level_faces, prediction_cells;
@@ -239,13 +238,13 @@ double advance_lts_euler(
                                     scratch.initial_pressure[0][f]);
     }
     double min_dt = infinity;
-    hydro::wave_timestep.max_inverse_dt = 0.0;
+    hydro::max_inverse_dt = 0.0;
     for (int i = 0; i < n; ++i)
     {
         const double rate = std::max(initial[i].speed, initial[i + 1].speed) / start.cell_width(0, ng + i);
         if (!std::isfinite(rate))
             throw std::runtime_error("Non-finite LTS CFL rate");
-        hydro::wave_timestep.max_inverse_dt = std::max(hydro::wave_timestep.max_inverse_dt, rate);
+        hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
         local_dt[i] = rate > 0.0 ? cfl / rate : infinity;
         min_dt = std::min(min_dt, local_dt[i]);
     }
@@ -264,6 +263,7 @@ double advance_lts_euler(
         std::fill(contribution.begin(), contribution.end(), Conserved{});
         double limit = infinity;
         term.func(start, time, cfg, contribution, limit);
+        hd_source::complete_internal_source(start, term, contribution);
         if (contribution.size() != source.size())
             throw std::logic_error("Source changed LTS RHS storage size");
         if (std::isnan(limit) || limit <= 0.0)
@@ -283,6 +283,7 @@ double advance_lts_euler(
     auto& pending = scratch.pending_flux;
     auto& step_start = scratch.step_start;
     auto& step_fraction = scratch.step_fraction;
+    std::vector<double> pressure_work(n);
     auto left = [&](int f) { return f == 0 ? (periodic ? n - 1 : -1) : f - 1; };
     auto right = [&](int f) { return f == n ? (periodic ? 0 : -1) : f; };
     const int unique_faces = periodic ? n : n + 1;
@@ -411,7 +412,7 @@ double advance_lts_euler(
                     if (i >= 0)
                     {
                         const double rate = stage[f].speed / start.cell_width(0, ng + i);
-                        hydro::wave_timestep.max_inverse_dt = std::max(hydro::wave_timestep.max_inverse_dt, rate);
+                        hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
                         // Check EACH side with its own full local step, not h.
                         if (!std::isfinite(rate) || std::ldexp(H, -level[i]) * rate > cfg.cfl_max)
                             return false;
@@ -429,10 +430,13 @@ double advance_lts_euler(
             {
                 step_start[i] = work.cells[ng + i].U;
                 step_fraction[i] = fraction;
+                pressure_work[i] = -(work.cells[ng + i].gamma - 1.0) * step_start[i].internal_energy()
+                    * (area[i + 1] * stage[i + 1].velocity - area[i] * stage[i].velocity) / volume[i];
                 auto& cell = candidate.cells[ng + i];
                 cell.U = step_start[i]
                     + (stage[i].flux * area[i] - stage[i + 1].flux * area[i + 1]) * (h / volume[i])
                     + source[ng + i] * h;
+                cell.U[hd_core::INTERNAL_ENERGY] += h * pressure_work[i];
                 if (!physical(cell.U, cell.gamma)) return false;
             }
             if (depth < deepest)
@@ -444,7 +448,9 @@ double advance_lts_euler(
             {
                 auto& cell = work.cells[ng + i];
                 cell.U = step_start[i] + pending[i] / volume[i] + source[ng + i] * h;
+                cell.U[hd_core::INTERNAL_ENERGY] += h * pressure_work[i];
                 if (!physical(cell.U, cell.gamma)) return false;
+                cell.synchronize_dual_energy();
                 pending[i] = Conserved{};
             }
             return true;
