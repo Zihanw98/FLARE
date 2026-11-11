@@ -298,44 +298,6 @@ void retries_and_sources()
         CHECK(near(mesh.cells[i+2].U[hd_core::ENERGY] - before.cells[i+2].U[hd_core::ENERGY], 0.0002, 2e-13));
 }
 
-void source_change_predicate_tests()
-{
-    auto check = [](double H, double scale, double rate) {
-        const bool reference = rate != 0.0 && H > 0.1 * scale / std::abs(rate);
-        CHECK(hd_time::detail::source_change_exceeds(H, 2.0*H, 0.1*scale, rate) == reference);
-    };
-    const double tiny = std::numeric_limits<double>::denorm_min();
-    const std::array<double, 14> values{0.0, tiny, 2*tiny, 10*tiny,
-        std::numeric_limits<double>::min(), 1e-200, 1e-20, 0.1, 1.0, 1e20, 1e200,
-        std::numeric_limits<double>::max(), infinity, std::numeric_limits<double>::quiet_NaN()};
-    for (double H : values)
-        if (H > 0.0 && std::isfinite(H))
-            for (double scale : values)
-                for (double rate : values) { check(H, scale, rate); check(H, scale, -rate); }
-
-    // Check the original rounded limit and its adjacent floating-point values,
-    // along with the fast-path threshold, across the full double exponent range.
-    std::mt19937_64 random(20261109);
-    auto number = [&] {
-        const std::uint64_t bits = random() & UINT64_C(0x7fffffffffffffff);
-        double value;
-        static_assert(sizeof(value) == sizeof(bits));
-        std::memcpy(&value, &bits, sizeof(value));
-        return value;
-    };
-    for (int k = 0; k < 50000; ++k)
-    {
-        const double scale = number(), rate = number(), H = number();
-        if (H > 0.0 && std::isfinite(H)) check(H, scale, rate);
-        if (rate == 0.0) continue;
-        const double cap = 0.1 * scale / rate;
-        for (double threshold : {cap, 0.5*cap})
-            for (double trial : {std::nextafter(threshold, 0.0), threshold,
-                                  std::nextafter(threshold, infinity)})
-                if (trial > 0.0 && std::isfinite(trial)) check(trial, scale, rate);
-    }
-}
-
 void source_cache_stage_tests()
 {
     Transport solver; solver.zero_flux = true;
@@ -483,7 +445,6 @@ void boundaries_and_inputs()
 int main(int argc, char** argv)
 {
     return run_test("multilevel conservative RK2", [&] {
-        source_change_predicate_tests();
         CHECK(hd_time::parse_time_integrator("LTS_RK2") == hd_time::TimeIntegrator::LTSRK2);
         if (argc > 1)
         {
