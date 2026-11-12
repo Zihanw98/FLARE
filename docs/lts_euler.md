@@ -1,5 +1,19 @@
 # Multilevel explicit LTS Euler
 
+## 实现 pipeline
+
+`advance_lts_euler` 只负责校验输入、选择持久或临时 workspace，并启动一次内部
+`LTSEulerStep`。一次同步大步按以下顺序完成：
+
+1. 复制同步起点状态、填充边界，计算全部独立面的通量和波速。
+2. 计算各单元 CFL 局部步，并在同步起点计算一次需要在整个 `H` 内冻结的源项。
+3. 由剩余时间、最细层 CFL 容量和源项上限共同选择同步大步 `H`。
+4. 给单元分配 `H/2^level`，给面分配负责层，并建立细层重构需要的慢单元预测表。
+5. `advance_level` 递归执行两个细半步；每个物理面只由最细相邻层积分一次。
+6. 面积分以相反符号写入左右单元寄存器，每层结束时结算本层单元并同步双能量。
+7. 非物理解或动态 CFL 超限会丢弃完整试算、将 `H` 减半并重新分层。
+8. 全部层成功后才提交正式网格和星区压力历史。
+
 Select the separate integrator in `src/time/lts_euler.cpp` with:
 
 ```ini
@@ -70,9 +84,10 @@ The source-change checks cache three thermodynamic scales per active cell:
 density, acoustic momentum scale, and internal energy. The dual-energy version
 checks the explicit `S[INTERNAL_ENERGY]` rate. The first independent source fills them; later sources and the summed
 rate reuse them. With two sources this reduces primitive conversion and sound
-speed evaluation from three times to once per cell per macro step. Storage is
-kept in the existing `LTSEulerWorkspace::Impl::source_scales`; no new class is
-introduced. Values are refreshed at every macro step, including workspace reuse
+speed evaluation from three times to once per cell per macro step. Storage remains
+owned by `LTSEulerWorkspace`; `LTSEulerStep` exposes it through directly named
+members such as `source_scales_`, so the numerical pipeline does not depend on
+repeated `scratch_.xxx` lookups. Values are refreshed at every macro step, including workspace reuse
 after an exception or a mesh/state change. Retry trials use the same frozen
 start-state rates and limits. The no-source zero-rate check retains its existing
 validation behavior without allocating cache elements. Independent limits,

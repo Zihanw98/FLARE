@@ -7,6 +7,7 @@
 
 namespace hd_source
 {
+    //some old sources doesn't provide source term of internal energy. By checking the bool flag supplies_internal_energy, this function can automatically supply the internal energy source contribution
     void complete_internal_source(const hd_core::MeshBlock& mesh, const SourceTerm& term,
                                   std::vector<hd_core::Conserved>& rates)
     {
