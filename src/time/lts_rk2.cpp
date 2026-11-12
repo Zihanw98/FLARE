@@ -490,7 +490,7 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
     if (!reuse_start_stage)
     {
         if (!build_stage_view(depth, fraction, false)) return false;
-        solve_faces(view_, faces_needed_by_level_[depth]);
+        solve_faces(view_, faces_needed_by_level_[depth]);              // Flux get updated
         if (macro_step_ > evaluate_sources(
                 view_, time_ + fraction * macro_step_, macro_step_)) return false;
     }
@@ -526,6 +526,9 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
     }
 
     if (cells_by_level_[depth].empty()) return true;
+
+    //Next is the Phase II of RK2, which mainly calculate the tentative slope at the endpoint
+
     if (!build_stage_view(depth, end_fraction, true)) return false;
     solve_faces(view_, faces_owned_by_level_[depth]);
     if (!check_wave_speeds(faces_owned_by_level_[depth]) ||
