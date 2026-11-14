@@ -107,13 +107,13 @@ MeshBlock make_mesh(bool nonuniform = true, int narrow = 7, bool spherical = fal
 double advance(MeshBlock& mesh, const hydro::RiemannSolver& solver,
                double time = 0.0, double limit = 1.0,
                const hd_source::SourceList& sources = {},
-               config::SimulationConfig cfg = {}, hd_time::LTSEulerWorkspace* workspace = nullptr)
+               config::SimulationConfig cfg = {}, hydro::StarPressureCache* hints = nullptr)
 {
     double next = 0.123;
     cfg.cfl = 0.2;
     const double dt = hd_time::advance_one_step(mesh, time, limit,
         hd_time::TimeIntegrator::LTSEuler, hydro::SpatialScheme::Godunov,
-        solver, sources, cfg, {}, cfg.cfl, next, workspace);
+        solver, sources, cfg, {}, cfg.cfl, next, hints);
     CHECK(std::isinf(next));
     return dt;
 }
@@ -201,11 +201,11 @@ void conservation_and_cost_tests(const std::string& method)
         cfg.reconstructor = method;
         cfg.limiter = "MC";
         double time = 0.0;
-        hd_time::LTSEulerWorkspace workspace;
+        hydro::StarPressureCache hints;
         for (int step = 0; step < 40; ++step)
         {
             const int before = solver.calls;
-            const double H = advance(mesh, solver, time, 1.0, {}, cfg, &workspace);
+            const double H = advance(mesh, solver, time, 1.0, {}, cfg, &hints);
             // One global pass and only the fast-adjacent faces in pass two.
             CHECK(solver.calls - before < 2 * mesh.nactive[0]);
             double ref_time = time;
@@ -279,7 +279,7 @@ void source_cache_tests()
     CountSolver solver;
     config::SimulationConfig cfg;
     cfg.lts_max_levels = 8;
-    hd_time::LTSEulerWorkspace workspace;
+    hydro::StarPressureCache hints;
     auto mesh = make_mesh(false);
     const auto initial = mesh;
     auto heating = [](double rate) -> hd_source::SourceTerm {
@@ -292,10 +292,10 @@ void source_cache_tests()
     };
     const hd_source::SourceList cooling{heating(0.0), heating(-1.0)};
     // A zero source primes the cache. Cooling still limits H independently;
-    // the next macro step must refresh the scales despite workspace reuse.
-    const double h0 = advance(mesh, solver, 0.0, 1.0, cooling, cfg, &workspace);
+    // the next macro step must refresh the scales despite hints reuse.
+    const double h0 = advance(mesh, solver, 0.0, 1.0, cooling, cfg, &hints);
     CHECK(near(h0, 0.25));
-    const double h1 = advance(mesh, solver, h0, 1.0, cooling, cfg, &workspace);
+    const double h1 = advance(mesh, solver, h0, 1.0, cooling, cfg, &hints);
     CHECK(near(h1, 0.225));
     for (int i = 0; i < mesh.nactive[0]; ++i)
         CHECK(near(mesh.cells[i+2].U[hd_core::ENERGY],
@@ -303,11 +303,11 @@ void source_cache_tests()
 
     mesh = initial;
     CHECK(near(advance(mesh, solver, 0.0, 1.0,
-        {heating(1.0), heating(-1.0)}, cfg, &workspace), 0.25));
+        {heating(1.0), heating(-1.0)}, cfg, &hints), 0.25));
     same(mesh, initial);
     expect_throw<std::runtime_error>([&] {
         advance(mesh, solver, 0.0, 1.0,
-            {heating(0.0), heating(std::numeric_limits<double>::quiet_NaN())}, cfg, &workspace);
+            {heating(0.0), heating(std::numeric_limits<double>::quiet_NaN())}, cfg, &hints);
     });
     same(mesh, initial, 0.0);
 
@@ -319,15 +319,15 @@ void source_cache_tests()
         w[hd_core::RHO] = 2.0; w[hd_core::PRE] = 0.4; w[hd_core::VEL(0)] = -0.3;
         cell = hd_core::Cell(w, 5.0/3.0);
     }
-    CHECK(near(advance(mesh, solver, 0.0, 1.0, cooling, cfg, &workspace), 0.06));
+    CHECK(near(advance(mesh, solver, 0.0, 1.0, cooling, cfg, &hints), 0.06));
 
     for (auto& cell : mesh.cells) cell.U = Conserved{};
     const auto vacuum = mesh;
-    CHECK(advance(mesh, solver, 0.0, 0.01, {}, cfg, &workspace) == 0.01);
-    CHECK(advance(mesh, solver, 0.0, 0.01, {heating(0.0)}, cfg, &workspace) == 0.01);
+    CHECK(advance(mesh, solver, 0.0, 0.01, {}, cfg, &hints) == 0.01);
+    CHECK(advance(mesh, solver, 0.0, 0.01, {heating(0.0)}, cfg, &hints) == 0.01);
     same(mesh, vacuum, 0.0);
     expect_throw<std::invalid_argument>([&] {
-        advance(mesh, solver, 0.0, 0.01, {heating(0.0), heating(1.0)}, cfg, &workspace);
+        advance(mesh, solver, 0.0, 0.01, {heating(0.0), heating(1.0)}, cfg, &hints);
     });
     same(mesh, vacuum, 0.0);
 }
@@ -390,10 +390,10 @@ void shock_test(const std::string& method, int levels = 2)
     cfg.limiter = "MC";
     cfg.lts_max_levels = levels;
     double t = 0.0;
-    hd_time::LTSEulerWorkspace workspace;
+    hydro::StarPressureCache hints;
     while (t < 0.2)
     {
-        const double H = advance(mesh, solver, t, 0.2 - t, {}, cfg, &workspace);
+        const double H = advance(mesh, solver, t, 0.2 - t, {}, cfg, &hints);
         double ref = t;
         while (ref < t + H)
         {
@@ -481,13 +481,13 @@ void midpoint_stencil_test(const std::string& method, int levels = 2)
     CHECK(stale_difference > 1e-6);
 }
 
-void workspace_tests()
+void repeated_step_tests()
 {
     CountSolver solver;
-    hd_time::LTSEulerWorkspace workspace;
+    hydro::StarPressureCache hints;
     config::SimulationConfig cfg;
-    // Reuse across distinct meshes, geometry rebuilds, states and reconstructors.
-    // Fresh-workspace and reused-workspace paths must give the same results.
+    // Step-owned storage must handle distinct grids, states and reconstructors.
+    // Optional pressure hints must not change the numerical results.
     for (int pass = 0; pass < 6; ++pass)
     {
         const bool spherical = pass % 2 != 0;
@@ -507,7 +507,7 @@ void workspace_tests()
         double t = 0.0;
         for (int step = 0; step < 3; ++step)
         {
-            const double a = advance(reused, solver, t, 1.0, sources, cfg, &workspace);
+            const double a = advance(reused, solver, t, 1.0, sources, cfg, &hints);
             const double b = advance(fresh, solver, t, 1.0, sources, cfg);
             CHECK(a == b);
             same(reused, fresh, 0.0);
@@ -515,16 +515,16 @@ void workspace_tests()
         }
     }
 
-    // A failed trial must not poison the workspace for a subsequent call.
+    // A failed trial must not poison the hints for a subsequent call.
     JumpSpeedSolver jump;
     auto trial = make_mesh();
     jump.initial_faces = trial.nactive[0];
     cfg.integrator_retry_max = 0;
     const auto before = trial;
-    expect_throw<std::runtime_error>([&] { advance(trial, jump, 0.0, 1.0, {}, cfg, &workspace); });
+    expect_throw<std::runtime_error>([&] { advance(trial, jump, 0.0, 1.0, {}, cfg, &hints); });
     same(trial, before, 0.0);
     auto reference = before;
-    const double H = advance(trial, solver, 0.0, 1.0, {}, cfg, &workspace);
+    const double H = advance(trial, solver, 0.0, 1.0, {}, cfg, &hints);
     CHECK(H == advance(reference, solver, 0.0, 1.0, {}, cfg));
     same(trial, reference, 0.0);
 }
@@ -535,13 +535,13 @@ void star_pressure_cache_test(int levels = 2)
     contact(mesh);
     auto reference = mesh;
     HintSolver solver;
-    hd_time::LTSEulerWorkspace workspace, reference_workspace;
+    hydro::StarPressureCache hints, reference_hints;
     config::SimulationConfig cfg;
     cfg.reconstructor = "PLM";
     cfg.lts_max_levels = levels;
     const int faces = mesh.nactive[0]; // Periodic seam is solved only once.
-    double t = advance(mesh, solver, 0.0, 1.0, {}, cfg, &workspace);
-    CHECK(t == advance(reference, solver.exact, 0.0, 1.0, {}, cfg, &reference_workspace));
+    double t = advance(mesh, solver, 0.0, 1.0, {}, cfg, &hints);
+    CHECK(t == advance(reference, solver.exact, 0.0, 1.0, {}, cfg, &reference_hints));
     same(mesh, reference, 0.0);
     CHECK(solver.inputs.size() > static_cast<std::size_t>(faces));
     for (int f = 0; f < faces; ++f) CHECK(solver.inputs[f] == 0.0);
@@ -550,25 +550,26 @@ void star_pressure_cache_test(int levels = 2)
     solver.inputs.clear();
     solver.throw_on_call = faces + 2; // Fail during the fine step, after one updated face.
     const auto before = mesh;
-    expect_throw<std::runtime_error>([&] { advance(mesh, solver, t, 1.0, {}, cfg, &workspace); });
+    expect_throw<std::runtime_error>([&] { advance(mesh, solver, t, 1.0, {}, cfg, &hints); });
     same(mesh, before, 0.0);
     const auto failed_inputs = solver.inputs;
     for (int f = 0; f < faces; ++f) CHECK(failed_inputs[f] > 0.0);
 
     solver.throw_on_call = -1;
     solver.inputs.clear();
-    CHECK(advance(mesh, solver, t, 1.0, {}, cfg, &workspace) ==
-          advance(reference, solver.exact, t, 1.0, {}, cfg, &reference_workspace));
+    CHECK(advance(mesh, solver, t, 1.0, {}, cfg, &hints) ==
+          advance(reference, solver.exact, t, 1.0, {}, cfg, &reference_hints));
     same(mesh, reference, 0.0);
     CHECK(solver.inputs.size() >= failed_inputs.size());
     for (std::size_t f = 0; f < failed_inputs.size(); ++f)
         CHECK(solver.inputs[f] == failed_inputs[f]);
 
-    // Even same-sized coordinate edits invalidate the old face identities.
+    // The caller clears pressure guesses when changing the mesh geometry.
     mesh.face[0][mesh.nghost[0] + 4] += 0.001;
     mesh.build_geometry();
+    hints.clear();
     solver.inputs.clear();
-    advance(mesh, solver, 0.0, 1.0, {}, cfg, &workspace);
+    advance(mesh, solver, 0.0, 1.0, {}, cfg, &hints);
     for (int f = 0; f < faces; ++f) CHECK(solver.inputs[f] == 0.0);
 }
 
@@ -593,6 +594,7 @@ void custom_boundary_prediction_test(int levels = 2)
     contact(mesh);
     mesh.bc_lower[0] = boundary::BoundaryCondition::User;
     mesh.bc_upper[0] = boundary::BoundaryCondition::Reflective;
+    mesh.build_topology();
     hd_user::UserHooks hooks;
     hooks.userbc = global_read_boundary;
     boundary_half_time = -1.0;
@@ -610,10 +612,10 @@ void custom_boundary_prediction_test(int levels = 2)
     boundary_half_time = h;
     boundary_expected_density = middle[hd_core::RHO];
     CHECK(std::abs(boundary_expected_density - mesh.cells[mesh.nghost[0] + 12].U[hd_core::RHO]) > 1e-7);
-    hd_time::LTSEulerWorkspace workspace;
+    hydro::StarPressureCache hints;
     double next = infinity;
     const double H = hd_time::advance_one_step(mesh, 0.0, 1.0, hd_time::TimeIntegrator::LTSEuler,
-        hydro::SpatialScheme::Godunov, solver, {}, cfg, hooks, cfg.cfl, next, &workspace);
+        hydro::SpatialScheme::Godunov, solver, {}, cfg, hooks, cfg.cfl, next, &hints);
     CHECK(H == std::ldexp(h, levels - 1));
     CHECK(boundary_half_calls == 1);
 }
@@ -637,13 +639,13 @@ void multilevel_conservation_and_cost(const std::string& method)
         double rate, source_limit;
         const auto [h0, rhs] = hd_time::evaluate_RHS(reference, 0.0, hydro::SpatialScheme::Godunov,
             {}, reference_solver, cfg, cfg.cfl, rate, source_limit);
-        hd_time::LTSEulerWorkspace workspace;
+        hydro::StarPressureCache hints;
         double t = 0.0;
         int reference_calls = 0;
         for (int step = 0; step < 20; ++step)
         {
             const int before = solver.calls;
-            const double H = advance(mesh, solver, t, 1.0, {}, cfg, &workspace);
+            const double H = advance(mesh, solver, t, 1.0, {}, cfg, &hints);
             if (step == 0) CHECK(near(H, 16 * h0, 1e-13));
             CHECK(solver.calls - before < 8 * mesh.nactive[0]);
             double ref = t;
@@ -698,6 +700,233 @@ void multilevel_conservation_and_cost(const std::string& method)
         same(mesh, before, 0.0);
     }
 }
+// Unequal extents/ghost offsets expose accidental use of x-only storage indices.
+MeshBlock multidim_mesh(int narrow_axis = -1, int narrow_cell = 15, bool walls = false)
+{
+    MeshBlock mesh;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        mesh.nactive[d] = d == narrow_axis ? 32 : 6 + 2 * d;
+        mesh.nghost[d] = 2 + d % 2;
+        mesh.bc_lower[d] = mesh.bc_upper[d] = walls && d == hd_core::NDIM - 1
+            ? boundary::BoundaryCondition::Reflective : boundary::BoundaryCondition::Periodic;
+        mesh.set_linear_uniform_faces(d, 0.0, 1.0 + 0.3 * d);
+        if (d == narrow_axis)
+        {
+            const int ng = mesh.nghost[d], n = mesh.nactive[d];
+            auto& face = mesh.face[d];
+            face[ng] = 0.0;
+            for (int i = 0; i < n; ++i)
+                face[ng + i + 1] = face[ng + i] + (i == narrow_cell ? 0.002 : 0.1);
+            for (int g = 1; g <= ng; ++g)
+            {
+                face[ng - g] = face[ng - g + 1] - (face[ng + n - g + 1] - face[ng + n - g]);
+                face[ng + n + g] = face[ng + n + g - 1] + (face[ng + g] - face[ng + g - 1]);
+            }
+        }
+    }
+    mesh.allocate();
+    mesh.build_geometry();
+    for (auto flat : mesh.active_to_storage)
+    {
+        const auto index = mesh.coordinates(flat);
+        hd_core::Primitives w{};
+        w[hd_core::RHO] = 1.0;
+        w[hd_core::PRE] = 1.0;
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            w[hd_core::RHO] += 0.04 * std::sin(6.283185307179586 * mesh.cell_center(d, index[d]) / mesh.active_length(d));
+            w[hd_core::VEL(d)] = (d % 2 ? -1 : 1) * (0.15 + 0.05 * d);
+        }
+        mesh.cells[flat] = hd_core::Cell(w, 1.4);
+    }
+    boundary::FillBoundary(mesh, 0.0, {});
+    return mesh;
+}
+
+void multidim_equivalence_and_cache(const std::string& method)
+{
+    config::SimulationConfig cfg;
+    cfg.reconstructor = method;
+    cfg.cfl = 0.2;
+    for (bool walls : {false, true})
+    {
+        auto mesh = multidim_mesh(-1, 15, walls), reference = mesh;
+        HintSolver solver;
+        hydro::StarPressureCache hints;
+        const hd_source::SourceList sources{hd_source::make_constant_heating(0.3)};
+        const double h = advance(mesh, solver, 0.0, 1e-4, sources, cfg, &hints);
+        CHECK(h == 1e-4);
+        CHECK(hd_time::advance_euler(reference, 0.0, h, hydro::SpatialScheme::Godunov,
+            solver.exact, sources, cfg, {}, cfg.cfl) == h);
+        boundary::FillBoundary(reference, h, {});
+        same(mesh, reference, 2e-12);
+        CHECK(solver.inputs.size() == mesh.face_info.size());
+        for (double value : solver.inputs) CHECK(value == 0.0);
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            std::size_t count = 1, normal_stride = 1;
+            for (int axis = 0; axis < hd_core::NDIM; ++axis)
+            {
+                if (axis == d) normal_stride = count;
+                count *= mesh.nactive[axis] + (axis == d ? 1 : 0);
+            }
+            CHECK(hints[d].size() == count);
+            for (double value : hints[d]) CHECK(value > 0.0);
+            if (mesh.bc_lower[d] == boundary::BoundaryCondition::Periodic)
+                for (std::size_t f = 0; f < count; ++f)
+                    if ((f / normal_stride) % (mesh.nactive[d] + 1) == 0)
+                        CHECK(hints[d][f] == hints[d][f + mesh.nactive[d] * normal_stride]);
+        }
+        solver.inputs.clear();
+        advance(mesh, solver, h, h, sources, cfg, &hints);
+        for (double value : solver.inputs) CHECK(value > 0.0);
+        const auto accepted = mesh;
+        const auto saved_hints = hints;
+        solver.inputs.clear();
+        solver.throw_on_call = static_cast<int>(mesh.face_info.size()) / 2;
+        expect_throw<std::runtime_error>([&] { advance(mesh, solver, 2*h, h, sources, cfg, &hints); });
+        same(mesh, accepted, 0.0);
+        CHECK(hints == saved_hints);
+    }
+}
+
+void multidim_subcycling(const std::string& method, int axis, int narrow)
+{
+    auto mesh = multidim_mesh(axis, narrow), reference = mesh;
+    const auto initial = integral(mesh);
+    config::SimulationConfig cfg;
+    cfg.reconstructor = method; cfg.limiter = "MC"; cfg.cfl = 0.2; cfg.lts_max_levels = 4;
+    CountSolver solver, reference_solver;
+    hydro::StarPressureCache hints;
+    int source_calls = 0;
+    double expected_source_time = 0.0;
+    const auto heating = hd_source::make_constant_heating(0.3);
+    const hd_source::SourceList sources{{"count heating", hd_source::SourceKind::Thermal,
+        [&](const MeshBlock& stage, double time, const config::SimulationConfig& config,
+            std::vector<Conserved>& rhs, double& limit) {
+            ++source_calls;
+            CHECK(time == expected_source_time);
+            heating.func(stage, time, config, rhs, limit);
+        }}};
+    const hd_source::SourceList reference_sources{heating};
+    double time = 0.0;
+    for (int step = 0; step < 3; ++step)
+    {
+        expected_source_time = time;
+        const double H = advance(mesh, solver, time, 1.0, sources, cfg, &hints);
+        CHECK(source_calls == step + 1); // One source evaluation per macro step, including all fine levels.
+        const double end = time + H;
+        while (time < end)
+        {
+            const double h = hd_time::advance_euler(reference, time, end - time,
+                hydro::SpatialScheme::Godunov, reference_solver, reference_sources, cfg, {}, cfg.cfl);
+            time += h;
+            boundary::FillBoundary(reference, time, {});
+        }
+    }
+    const auto final = integral(mesh);
+    CHECK(near(final[hd_core::RHO], initial[hd_core::RHO], 2e-12));
+    CHECK(near(final[hd_core::ENERGY], initial[hd_core::ENERGY] + 0.3 * initial[hd_core::RHO] * time, 2e-12));
+    for (int d = 0; d < hd_core::NDIM; ++d)
+        CHECK(near(final[hd_core::MOMDEN(d)], initial[hd_core::MOMDEN(d)], 2e-12));
+    double difference = 0.0, norm = 0.0;
+    for (auto flat : mesh.active_to_storage)
+    {
+        mesh.cells[flat].U.validate(mesh.cells[flat].gamma);
+        difference += std::abs(mesh.cells[flat].U[hd_core::RHO] - reference.cells[flat].U[hd_core::RHO]) * mesh.volume_cell[flat];
+        norm += reference.cells[flat].U[hd_core::RHO] * mesh.volume_cell[flat];
+    }
+    CHECK(difference / norm < 2e-3);
+    CHECK(solver.calls < reference_solver.calls * 0.7);
+    std::cout << "  NDIM=" << hd_core::NDIM << ", " << method << ", thin axis=" << axis
+              << ", thin cell=" << narrow << ", density L1=" << difference / norm
+              << ", face solves=" << solver.calls << '/' << reference_solver.calls << '\n';
+}
+
+class TransientSpeedSolver : public hydro::RiemannSolver
+{
+public:
+    mutable std::size_t calls = 0;
+    std::size_t faces = 0;
+    bool jump = true;
+    Conserved flux(const hd_core::Primitives&, const hd_core::Primitives&, int,
+                   double, double, double& speed, double& velocity) const override
+    {
+        // Only the first fine-stage solve has fast waves. A retry must clear their history.
+        speed = jump && calls >= faces && calls < 2 * faces ? 3.0 : 1.0;
+        ++calls;
+        velocity = 0.0;
+        return {};
+    }
+};
+
+void multidim_cfl_sources_and_retries()
+{
+    auto original = multidim_mesh();
+    for (int d = 0; d < hd_core::NDIM; ++d)
+        original.set_linear_uniform_faces(d, 0.0, original.nactive[d]); // dx = 1 along every axis
+    original.build_geometry();
+    hd_core::Primitives w{};
+    w[hd_core::RHO] = w[hd_core::PRE] = 1.0;
+    for (auto& cell : original.cells) cell = hd_core::Cell(w, 1.4);
+    TransientSpeedSolver solver;
+    solver.faces = original.face_info.size();
+    config::SimulationConfig cfg;
+    cfg.reconstructor = "PCM"; cfg.cfl = 0.2; cfg.lts_max_levels = 1;
+    auto mesh = original;
+    const double h = cfg.cfl / hd_core::NDIM;
+    CHECK(near(advance(mesh, solver, 0.0, 1.0, {}, cfg), h, 1e-14));
+    same(mesh, original, 0.0);
+    cfg.lts_max_levels = 3;
+    cfg.integrator_retry_max = 0;
+    solver.calls = 0;
+    hydro::StarPressureCache hints;
+    expect_throw<std::runtime_error>([&] { advance(mesh, solver, 0.0, 1.0, {}, cfg, &hints); });
+    same(mesh, original, 0.0);
+    CHECK(hints == hydro::StarPressureCache{});
+    cfg.integrator_retry_max = 1;
+    solver.calls = 0;
+    CHECK(near(advance(mesh, solver, 0.0, 1.0, {}, cfg, &hints), 2*h, 1e-14));
+    same(mesh, original, 0.0);
+
+    // Every momentum component, including transverse ones, must constrain H.
+    CountSolver exact;
+    cfg.lts_max_levels = 4;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        mesh = original;
+        std::array<double, hd_core::NDIM> acceleration{};
+        acceleration[d] = 1e4;
+        const hd_source::SourceList sources{hd_source::make_constant_gravity({acceleration})};
+        const double accepted = advance(mesh, exact, 0.0, 1.0, sources, cfg);
+        CHECK(near(accepted, 0.1 * std::sqrt(1.4) / acceleration[d], 1e-14));
+        for (auto flat : mesh.active_to_storage)
+            CHECK(near(mesh.cells[flat].U[hd_core::MOMDEN(d)], accepted * acceleration[d], 1e-12));
+    }
+    // Check paired boundaries independently on every axis, without touching the input.
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        mesh = original;
+        mesh.bc_upper[d] = boundary::BoundaryCondition::Outflow;
+        const auto before = mesh;
+        expect_throw<std::invalid_argument>([&] { advance(mesh, exact); });
+        same(mesh, before, 0.0);
+    }
+}
+
+void multidimensional_tests()
+{
+    multidim_cfl_sources_and_retries();
+    for (const std::string method : {"PCM", "PLM", "PLM_corrected"})
+    {
+        multidim_equivalence_and_cache(method);
+        for (int d = 0; d < hd_core::NDIM; ++d)
+            multidim_subcycling(method, d, 15);
+        multidim_subcycling(method, hd_core::NDIM - 1, 0); // Periodic seam on y/z.
+    }
+}
+
 }
 
 int main(int argc, char** argv)
@@ -725,9 +954,7 @@ int main(int argc, char** argv)
         CHECK(hd_time::parse_time_integrator("LTS_EULER") == hd_time::TimeIntegrator::LTSEuler);
         if (hd_core::NDIM != 1)
         {
-            auto mesh = make_mesh(false);
-            CountSolver solver;
-            expect_throw<std::invalid_argument>([&] { advance(mesh, solver); });
+            multidimensional_tests();
             return;
         }
         for (const std::string method : {"PCM", "PLM", "PLM_corrected"})
@@ -750,7 +977,7 @@ int main(int argc, char** argv)
             shock_test(method, 4);
         }
         source_cache_tests();
-        workspace_tests();
+        repeated_step_tests();
         star_pressure_cache_test();
         star_pressure_cache_test(5);
         custom_boundary_prediction_test();

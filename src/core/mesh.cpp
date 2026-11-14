@@ -489,18 +489,128 @@ namespace
     {
         validate_geometry();
         std::size_t count = 1;
+        for (int d = 0; d < NDIM; ++d)
+        {
+            const auto n = static_cast<std::size_t>(ntotal(d));
+            if (count > cells.max_size() / n)
+                throw std::length_error("Too many mesh cells");
+            count *= n;
+        }
+
+        cells.resize(count);
+        build_topology();
+    }
+
+    void MeshBlock::build_topology()
+    {
+        std::size_t new_total_count = 1;
+        std::size_t new_active_count = 1;
+        std::array<std::size_t, NDIM> storage_stride{};
+        std::array<std::size_t, NDIM> active_stride{};
 
         for (int d = 0; d < NDIM; ++d)
         {
             const auto n = static_cast<std::size_t>(ntotal(d));
 
-            if (count > cells.max_size() / n)
+            if (new_total_count > cells.max_size() / n)
                 throw std::length_error("Too many mesh cells");
 
-            count *= n;
+            storage_stride[d] = new_total_count;
+            active_stride[d] = new_active_count;
+            new_total_count *= n;
+            // Active counts cannot exceed the already checked storage counts.
+            new_active_count *= static_cast<std::size_t>(nactive[d]);
         }
 
-        cells.resize(count);
+        if (cells.size() != new_total_count)
+            throw std::logic_error("Cell storage does not match mesh dimensions");
+
+        std::array<bool, NDIM> periodic{};
+        std::array<std::size_t, NDIM> face_count{};
+        std::vector<FaceInfo> new_face_info;
+        std::size_t total_faces = 0;
+        for (int d = 0; d < NDIM; ++d)
+        {
+            periodic[d] = bc_lower[d] == boundary::BoundaryCondition::Periodic;
+            if (periodic[d] != (bc_upper[d] == boundary::BoundaryCondition::Periodic))
+                throw std::invalid_argument("Periodic boundaries must be paired on the same axis");
+
+            // Periodic axes omit the duplicate upper boundary plane.
+            const auto boundary_faces = periodic[d] ? 0 :
+                new_active_count / static_cast<std::size_t>(nactive[d]);
+            if (new_active_count > new_face_info.max_size() ||
+                boundary_faces > new_face_info.max_size() - new_active_count)
+                throw std::length_error("Too many mesh faces");
+            face_count[d] = new_active_count + boundary_faces;
+            if (face_count[d] > new_face_info.max_size() - total_faces)
+                throw std::length_error("Too many mesh faces");
+            total_faces += face_count[d];
+        }
+
+        std::vector<std::size_t> new_active_to_storage(new_active_count);
+        std::vector<std::size_t> new_storage_to_active(new_total_count, invalid_active_index);
+        for (std::size_t cell_id = 0; cell_id < new_active_count; ++cell_id)
+        {
+            auto remaining = cell_id;
+            std::size_t flat = 0;
+            for (int d = 0; d < NDIM; ++d)
+            {
+                const auto active_size = static_cast<std::size_t>(nactive[d]);
+                const auto coordinate = remaining % active_size
+                    + static_cast<std::size_t>(nghost[d]);
+                remaining /= active_size;
+                flat += coordinate * storage_stride[d];
+            }
+            new_active_to_storage[cell_id] = flat;
+            new_storage_to_active[flat] = cell_id;
+        }
+
+        new_face_info.reserve(total_faces);
+        std::vector<std::array<CellFacePair, NDIM>> new_cell_faces(new_active_count);
+        for (int direction = 0; direction < NDIM; ++direction)
+        {
+            for (std::size_t face = 0; face < face_count[direction]; ++face)
+            {
+                FaceInfo info;
+                info.direction = direction;
+                auto remaining = face;
+                std::size_t transverse_cell = 0;
+                std::size_t normal_coordinate = 0;
+                for (int d = 0; d < NDIM; ++d)
+                {
+                    const auto extent = static_cast<std::size_t>(nactive[d])
+                        + (d == direction && !periodic[direction] ? 1 : 0);
+                    const auto coordinate = remaining % extent;
+                    remaining /= extent;
+                    info.storage_coordinates[d] = static_cast<int>(coordinate) + nghost[d];
+                    if (d == direction) normal_coordinate = coordinate;
+                    else transverse_cell += coordinate * active_stride[d];
+                }
+
+                const auto normal_cells = static_cast<std::size_t>(nactive[direction]);
+                const auto stride = active_stride[direction];
+                if (normal_coordinate > 0)
+                    info.left_active = transverse_cell + (normal_coordinate - 1) * stride;
+                else if (periodic[direction])
+                    info.left_active = transverse_cell + (normal_cells - 1) * stride;
+                if (normal_coordinate < normal_cells)
+                    info.right_active = transverse_cell + normal_coordinate * stride;
+
+                const auto face_id = new_face_info.size();
+                new_face_info.push_back(info);
+                if (info.left_active != invalid_active_index)
+                    new_cell_faces[info.left_active][direction].upper = face_id;
+                if (info.right_active != invalid_active_index)
+                    new_cell_faces[info.right_active][direction].lower = face_id;
+            }
+        }
+
+        active_to_storage.swap(new_active_to_storage);
+        storage_to_active.swap(new_storage_to_active);
+        face_info.swap(new_face_info);
+        cell_faces.swap(new_cell_faces);
+        total_count = new_total_count;
+        active_count = new_active_count;
     }
 
     Index MeshBlock::coordinates(std::size_t flat) const

@@ -131,7 +131,7 @@ double step(MeshBlock& mesh, const hydro::RiemannSolver& solver, config::Simulat
 {
     double next = infinity;
     return hd_time::advance_one_step(mesh, time, limit, method, hydro::SpatialScheme::Godunov,
-        solver, sources, cfg, hooks, cfg.cfl, next, nullptr, hints);
+        solver, sources, cfg, hooks, cfg.cfl, next, hints);
 }
 
 void evolve(MeshBlock& mesh, const hydro::RiemannSolver& solver, config::SimulationConfig cfg,
@@ -416,6 +416,7 @@ void boundaries_and_inputs()
     auto mesh = make_mesh(true, 0, false, 2, 64, 0.001);
     mesh.bc_lower[0] = boundary::BoundaryCondition::User;
     mesh.bc_upper[0] = boundary::BoundaryCondition::Reflective;
+    mesh.build_topology();
     boundary_energy0 = mesh.cells[2].U[hd_core::ENERGY]; boundary_calls = 0;
     Transport solver; solver.zero_flux = true;
     config::SimulationConfig cfg; cfg.cfl = 0.2; cfg.lts_max_levels = 5; cfg.reconstructor = "PLM";

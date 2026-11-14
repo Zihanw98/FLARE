@@ -2,13 +2,14 @@
 
 ## 实现 pipeline
 
-`advance_lts_euler` 只负责校验输入、选择持久或临时 workspace，并启动一次内部
-`LTSEulerStep`。一次同步大步按以下顺序完成：
+`advance_lts_euler` 负责校验输入并启动一次内部 `LTSEulerStep`。
+网格副本、面量、源项、层级表和递归推进逻辑都由这个类持有，与 `LTSRK2Step` 的组织方式一致。
+一次同步大步按以下顺序完成：
 
 1. 复制同步起点状态、填充边界，计算全部独立面的通量和波速。
 2. 计算各单元 CFL 局部步，并在同步起点计算一次需要在整个 `H` 内冻结的源项。
 3. 由剩余时间、最细层 CFL 容量和源项上限共同选择同步大步 `H`。
-4. 给单元分配 `H/2^level`，给面分配负责层，并建立细层重构需要的慢单元预测表。
+4. 给单元分配 `H/2^level`，给面分配负责层；细层重构前建立同一时刻的阶段视图。
 5. `advance_level` 递归执行两个细半步；每个物理面只由最细相邻层积分一次。
 6. 面积分以相反符号写入左右单元寄存器，每层结束时结算本层单元并同步双能量。
 7. 非物理解或动态 CFL 超限会丢弃完整试算、将 `H` 减半并重新分层。
@@ -31,11 +32,11 @@ reduces to global Euler. Eight levels permit a maximum coarse/fine step ratio of
 128; sixteen permit 32768. These ratios are ceilings, not guaranteed speedups:
 source limits, the requested end time and retries can shorten the macro step.
 
-This experimental implementation supports **1D Godunov only**, Cartesian or
-spherical geometry, and fixed spatial meshes. Select `PCM`, `PLM`, or
-`PLM_corrected`; both PLM variants need at least two ghost cells. Unknown
-reconstruction names and multiple dimensions are rejected explicitly. Existing
-Euler and RK2 algorithms are unchanged. **Time accuracy remains
+This experimental implementation supports **1D/2D/3D Cartesian Godunov** and
+**1D spherical Godunov** on fixed spatial meshes. Select `PCM`, `PLM`, or
+`PLM_corrected`; PCM needs at least one ghost cell on every axis, and both PLM
+variants need at least two. Periodic boundaries must be paired on each axis.
+Existing global Euler and RK2 algorithms are unchanged. **Time accuracy remains
 first order**: PLM supplies linear spatial reconstruction, not RK2 time stepping.
 
 ## One synchronized macro step
@@ -45,14 +46,16 @@ first order**: PLM supplies linear spatial reconstruction, not RK2 time stepping
    bounded by `2^(lts_max_levels-1)` times the minimum hydro CFL step, source callback limits, a
    10-percent source-change estimate, and the caller's remaining-time limit.
 3. Assign the smallest level `l` for which `H/2^l` fits each cell's CFL bound.
-   Add one neighbour on each side for PCM, or two for PLM. Grade surrounding
-   levels so reconstruction neighbours differ by at most one level. Build cell,
-   face and predictor lists once per trial, not on each finest substep.
+   Add one neighbour along each axis and side for PCM, or two for PLM. Grade
+   surrounding levels through the same axial-neighbour traversal. The initial
+   promotion follows coordinate axes, not a full diagonal box. Build cell and
+   face lists once per trial, not on each finest substep.
 4. At each level, predict its cells' Euler endpoints, recursively advance the
    finer levels twice, then commit that level's cells. PCM holds coarser states
    at their **local** step start. PLM interpolates between each coarser cell's
    local start and provisional endpoint to the actual fine-stage time. Fill
-   needed ghosts and reset the reconstruction cache before each fresh solve.
+   all directional ghosts in the stage view and reset the reconstruction cache
+   before each fresh solve. Accepted local states remain in `state_`.
    The first child step reuses its parent's start-time fluxes; the second solves
    only faces touching that level or finer cells.
 5. Integrate each physical face only at the finer of its adjacent levels. Add
@@ -80,18 +83,15 @@ inside a step. Custom source callbacks must report any additional hard timestep
 limit, particularly for prescribed time-dependent forcing. Gas creation from
 exact vacuum by a source is unsupported.
 
-The source-change checks cache three thermodynamic scales per active cell:
-density, acoustic momentum scale, and internal energy. The dual-energy version
-checks the explicit `S[INTERNAL_ENERGY]` rate. The first independent source fills them; later sources and the summed
-rate reuse them. With two sources this reduces primitive conversion and sound
-speed evaluation from three times to once per cell per macro step. Storage remains
-owned by `LTSEulerWorkspace`; `LTSEulerStep` exposes it through directly named
-members such as `source_scales_`, so the numerical pipeline does not depend on
-repeated `scratch_.xxx` lookups. Values are refreshed at every macro step, including workspace reuse
-after an exception or a mesh/state change. Retry trials use the same frozen
-start-state rates and limits. The no-source zero-rate check retains its existing
-validation behavior without allocating cache elements. Independent limits,
-finite-rate/vacuum checks, and the 10-percent threshold are unchanged.
+The source-change checks cache `NDIM + 2` thermodynamic scales per active cell:
+density, one acoustic momentum scale for each direction, and internal energy.
+The dual-energy version checks the explicit `S[INTERNAL_ENERGY]` rate. The first
+independent source fills these scales; later sources and the sum reuse them.
+`LTSEulerStep` owns `source_scales_` directly. Every new macro step recomputes
+the scales, while retries reuse the same frozen start-state rates and limits.
+With no sources, the source evaluation returns an infinite limit immediately.
+Finite-rate/vacuum checks and the 10-percent threshold apply to every source
+and to their sum.
 
 This optimization also exists in LTS RK2, where the cache must instead refresh
 at every source stage evaluation. Global Euler and RK2 share `evaluate_RHS`,
@@ -100,7 +100,7 @@ source-change scan. Adding such a scan there would change timestep semantics,
 so those algorithms are not modified by this cache optimization. Optimizations
 to shared source or reconstruction routines can benefit all four integrators.
 
-`source_cache_tests` covers consecutive cooling steps with a reused workspace,
+`source_cache_tests` covers consecutive cooling steps with reused pressure hints,
 independent limits for cancelling sources, later-source NaNs, changed mesh/state
 after an exception, and zero/nonzero sources in vacuum.
 
@@ -124,26 +124,49 @@ at the frequency of its finer adjacent time level; the synchronized initial solv
 is reused by the first substeps. Source evaluation remains at macro-step frequency.
 Output and the simulation step counter refer to synchronized macro steps.
 
-## Reused workspace and pressure initial guesses
+## Class-owned state and multidimensional indexing
 
-The main driver keeps one `hd_time::LTSEulerWorkspace` for the simulation and
-passes its address as the `lts_workspace` argument to `advance_one_step`. Direct callers
-can do the same with `advance_lts_euler`. Omitting this optional argument remains
-valid but creates temporary storage on each call and loses cross-step reuse.
-The workspace retains mesh snapshots, source/flux arrays, fast-cell/face lists,
-and primitive/slope buffers. Cell states are still copied for rollback; fixed
-mesh coordinates, face areas and volumes are copied only when geometry changes.
-Separate concurrently advanced simulations must use separate workspaces.
+`LTSEulerStep` owns all temporary storage for one synchronized macro step:
 
-Only coarser cells read by finer-face stencils are predicted at each fine-stage time.
-Periodic and reflecting ghost donors are included. If a needed user boundary
-can read arbitrary active cells, the implementation conservatively predicts all
-coarser cells before calling it. Unused boundary sides need no fine-stage fill.
+- `start_`: the boundary-filled synchronized start, retained for rollback.
+- `state_`: each cell's accepted local state, which may be at a different time.
+- `view_`: a copy of `state_` with coarser cells predicted to the requested stage
+  time, followed by boundary filling on every axis. Reconstruction reads this view.
+- `step_start_` and `candidate_`: each active cell's local start and provisional
+  Euler endpoint, used to interpolate PLM coarse states.
+- Face results, source rates, flux registers, level lists and reconstruction cache.
 
-Mesh geometry keeps its original coordinate, face-area and volume arrays. No
-shared geometry owner or separate physical-state cache is used. Reconstruction
-retains its own primitive/slope arrays and invalidates them at every stage;
-sources use the original callbacks.
+There is no external `LTSEulerWorkspace`. The optional pointer after `cfl` in
+`advance_lts_euler`, or after `dt_next` in `advance_one_step`, is a
+`hydro::StarPressureCache*`, just as for LTS RK2. The main driver passes its shared
+pressure cache. Omitting it is supported and starts each macro step with fresh
+pressure guesses. Temporary arrays and mesh copies are allocated per call.
+
+Cell arrays use active-flat indices and access full storage through
+`mesh.active_to_storage`. Face results use global independent `face_id` values;
+`mesh.face_info` supplies direction, storage coordinates and active neighbours.
+`mesh.cell_faces[cell][d]` supplies the lower and upper faces. Periodic seam faces
+have one shared flux register contribution. Pressure hints use the directional
+active-face layout, with shape `nactive + e_d`; the duplicate upper periodic hint
+is synchronized to the lower hint. Rebuild mesh topology after changing boundary
+conditions, and clear pressure hints after remeshing.
+
+For cell `i`, the initial multidimensional CFL rate is
+
+\[
+\lambda_i=\sum_{d=0}^{D-1}
+\frac{\max(a_{i,d,-},a_{i,d,+})}{\Delta x_{i,d}},
+\qquad h_i=\frac{\mathrm{CFL}}{\lambda_i}.
+\]
+
+Dynamic checks use the largest speed seen on each face during the current
+attempt, sum over directions again, and check the cell's full local step against
+`cfl_max`. A retry restores all face-speed records to their initial values.
+Flux divergence and pressure work also sum the area-weighted contributions
+from both faces on every axis before division by cell volume. See
+[multidimensional CFL](multidimensional_cfl.md) for the shared CFL convention.
+
+## Pressure initial guesses
 
 For `riemann_solver=exact`, Euler, RK2 and both LTS methods store star pressures
 in the shared `hydro::StarPressureCache` type (`src/hydro/star_pressure_cache.h`),
@@ -167,11 +190,10 @@ own stage/substep updates, periodic-face synchronization, retries and commits.
 Initial and trial caches keep history transactional: rejected steps
 and exceptions before state acceptance cannot commit partial history. Every RK2 retry restores the
 stage-0 pressure guesses before evaluating stage 1. LTS periodic boundary faces
-share the same physical solve, and LTS Euler geometry changes reset its cache.
-Euler/RK2 direct callers can pass a persistent `hydro::StarPressureCache` through
+share the same physical solve.
+Direct callers of all four explicit integrators can pass a persistent `hydro::StarPressureCache` through
 the optional `star_pressure_cache` argument; omitting it retains the original
-cold-start behavior. LTS RK2 accepts the same type and keeps local trial copies;
-LTS Euler owns its cache in `LTSEulerWorkspace`. Call `clear()` on a caller-owned
+cold-start behavior. Both LTS methods keep local trial copies. Call `clear()` on a caller-owned
 cache for a new simulation or remeshing. Face-count changes also reset the
 affected direction's entries.
 The solver owns no cross-call state. Existing `flux()` callers keep the original
@@ -197,17 +219,31 @@ also checks that stale slow-neighbour states would give a different result.
 Additional multilevel tests cover 16:1 macro steps, periodic thin cells at either
 end or in the interior, conservation and face-solve savings against global Euler,
 one-level and all-fine Euler equivalence, fine-stage PLM prediction, source limits,
-shock crossing, rollback and pressure-history reuse. Workspace regression tests
+shock crossing, rollback and pressure-history reuse. Repeated-step regression tests
 also change the number of levels between calls. The timing numbers below describe
 the original **default two-level** runs, not multilevel performance.
 
-Workspace regression tests cover repeated steps, mesh sizes and ghost counts,
+Repeated-step regression tests cover repeated steps, mesh sizes and ghost counts,
 geometry rebuilds, failed trials followed by reuse, and a user boundary that
 reads a remote slow cell at the midpoint. Pressure-history tests check invalid
 and unrelated old guesses, vacuum, exceptions, periodic faces, mesh changes,
 rollback, and agreement with the independent bisection solver. Euler/RK2 tests
 also check multidimensional face indexing, reuse across accepted steps, source
 exceptions, invalid-state failures, and discarding rejected RK2 stage pressures.
+
+The multidimensional tests use unequal axis sizes and ghost counts. They check
+single-step agreement with global Euler for all three reconstructors, mixed
+periodic/reflecting boundaries, per-direction pressure hints and rollback,
+multilevel conservation with heating and a thin cell on each axis or periodic
+seam, comparison with global Euler, and directional source limits. A transient
+wave-speed test requires rejection based on the **sum** of directional CFL
+rates, then verifies that the next attempt clears rejected wave-speed history.
+
+## Historical 1D measurements
+
+The following numbers were measured with the earlier 1D implementation. They
+are retained as historical comparisons, not timings of the current class-owned
+multidimensional implementation.
 
 The native CCSN MESA case was also checked through 0.1 physical seconds using
 PCM and CFL=0.2 for both methods, with temporary output directories. Its existing

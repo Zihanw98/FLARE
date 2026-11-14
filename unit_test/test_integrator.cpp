@@ -88,7 +88,6 @@ int dual_energy_physics(int argc, char** argv)
     if (spherical) sources.push_back(hd_source::make_geometric_source());
     hydro::ExactSolver solver(1.e-10,200);
     hydro::StarPressureCache hints;
-    hd_time::LTSEulerWorkspace workspace;
     const auto integrator=hd_time::parse_time_integrator(method);
     std::unique_ptr<hd_implicit::Integrator> implicit;
     if (method == "implicit")
@@ -108,7 +107,7 @@ int dual_energy_physics(int argc, char** argv)
     while (t<end && steps<200000)
     {
         t += hd_time::advance_one_step(mesh,t,end-t,integrator,hydro::SpatialScheme::Godunov,
-            solver,sources,cfg,hooks,cfg.cfl,next,&workspace,&hints,implicit.get());
+            solver,sources,cfg,hooks,cfg.cfl,next,&hints,implicit.get());
         ++steps;
     }
     CHECK(near(t,end,1.e-13));

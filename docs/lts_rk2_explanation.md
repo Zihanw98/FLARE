@@ -1,14 +1,61 @@
 # 多层守恒 RK2 局部时间步（`lts_rk2`）
-
+这份算法解释主要配合docs文件夹的lts_rk2.cpp使用,这是一个1D的旧版本,与源代码文件夹的3D新版本有一些细节差异，但算法思路一致。
 ## 类实例化
 
 
-n_ : mesh.nactive[0] 一维活跃cell数
-ng_ : mesh.nghost[0] 一维ghost cell数
 independent_face_count_: 若第一维是周期边界,则独立面数为n_+1，否则为n_(第0个active_cell)
-## 入口-run函数
+### 与面有关的hints_和flux_
+
+`hints_` 保存各个单元面上一次求解得到的**星区压力 \(p_*\)**，用于下一次求解该面黎曼问题时的迭代初猜，以加快收敛。缓存值为 `0` 表示没有可用的压力猜测。
+
+它按法向方向分组，通过以下方式访问：
+
+```cpp
+hints_[d][face_flat]
+```
+
+- `d`：面的法向方向，`0、1、2` 分别对应 x、y、z。
+- `face_flat`：该方向面场内部的展平索引，由面的完整多维坐标计算，包含切向位置的信息，**不是仅沿法向方向的坐标索引**。
+
+计算 `face_flat` 时，先从面存储坐标中减去各方向的 ghost 偏移，再按 active 面场的尺寸展平。该面场的各方向尺寸为 `nactive`，其中法向方向多一个面位置。
+
+例如，二维网格包含 `2×2` 个 active cell。对于 x 向面，面场尺寸为：
+
+```text
+(nactive[0] + 1) × nactive[1] = 3 × 2
+```
+
+令 `(i,j)` 为减去 ghost 偏移后的面坐标，则：
+
+```cpp
+face_flat = i + 3 * j;
+```
+
+同在 `x = x₁` 这条分界线上的两个面片，对应不同的缓存位置：
+
+| 面片 | 面坐标 `(i,j)` | `face_flat` | 缓存位置 |
+| --- | --- | --- | --- |
+| 下方一行的面片 | `(1,0)` | `1` | `hints_[0][1]` |
+| 上方一行的面片 | `(1,1)` | `4` | `hints_[0][4]` |
+
+虽然两个面片的 x 坐标相同，但它们位于不同的行，连接不同的 cell，因此压力猜测分别存储。
+
+需要区分以下几套索引：
+
+| 数组 | 索引含义 |
+| --- | --- |
+| `hints_[d][face_flat]` | 方向 `d` 内的 active 面场展平索引 |
+| <span style="color: red;">原Godunov</span> 的 `flux[d].faces[face_flat]`(注意不是LTS_RK2后面的flux_) | 与 `hints_` 使用相同的索引布局 |
+| LTS 的 `flux_[face_id]`、`face_velocity_[face_id]`、`speed_[face_id]` | 所有方向的独立面统一编号，与 `mesh.face_info[face_id]` 对应 |
+| `mesh.face_area[d].faces[flat]` | 包含 ghost 区域的完整面场展平索引 |
+
+此外，`hints_` 的布局保留周期边界的两个端点槽位，而 `face_info` 将周期边界两端合并为一个独立面。因此，访问压力缓存时需要将 `face_id` 转换为对应的方向和 `face_flat`。
+
+flux_的索引同理,其保存的是黎曼问题求解出来的通量。
 
 
+## 入口
+## run函数
 ### 第一步:初始扫描
 ```cpp
     solve_faces(start_, all_faces_);
@@ -54,8 +101,98 @@ independent_face_count_: 若第一维是周期边界,则独立面数为n_+1，�
 
 #### 重置(reset_attempt)逻辑
 - 首先设置时间步层级,若CFL步长小于二分后的结果,就再次升级,直到大于为止
-- 这里有一个提升邻居等级的trick，把高等级周围(宽度由buffer参数指定)提升到同等级，保证数值稳定性。特别地，周期情形还要取模考虑另一侧
-- 最后再遍历一遍，让邻居缓冲过渡，例如3级周围要是2级，2级周围要是1级，缓冲宽度取决于buffer参数，特别地，周期情形还要取模考虑另一侧
+- 然后我们需要扩展同级缓冲区，将周围的低等级邻居(宽度由buffer参数指定)提升到与中心cell同等级，然后再平滑过渡到更远处的低层级处，使得邻居之间最多只相差1级，不会出现超过1级的跳跃。
+- **先扩展同层缓冲区，覆盖重构所需的邻域。**
+
+  根据每个 cell 的 CFL 要求确定其层级 `depth`，然后将自身及沿各坐标方向、距离不超过 `level_buffer_` 的邻居提升到**至少 `depth` 层**。已经处于更高层级的单元保持原样。
+
+  使用 **PCM** 时，`level_buffer_ = 1`，需要提升两侧一格的邻居。虽然 PCM 不计算空间斜率，但一个面的黎曼问题需要左右两个 cell 分别提供状态，因此计算当前 cell 的面通量仍然需要相邻 cell。
+
+  使用 **PLM / PLM_corrected** 时，`level_buffer_ = 2`，需要提升两侧各两格的邻居。除了面两侧的 cell，还需要它们各自的邻居来计算重构斜率。例如，计算 cell `i` 右侧面的通量，需要重构 cell `i` 和 `i+1` 的状态，其中 cell `i+1` 的斜率还会用到 cell `i+2`。
+
+  多维情况下，沿每个坐标方向分别进行上述扩展。
+
+- **再从最高层向下逐层处理，使层级平滑过渡。**
+
+  对每个处于 `depth` 层的 cell，将缓冲范围内的邻居提升到**至少 `depth - 1` 层**。例如，3 级单元周围至少为 2 级，随后处理 2 级单元，使其周围至少为 1 级。这里使用的缓冲宽度同样由 `level_buffer_` 决定，已有的更高层级不会被降低。
+
+  两个步骤都通过面拓扑寻找邻居：周期边界的首尾 active cell 已经连接，会自动绕到另一侧；遇到非周期边界外不存在的 active 邻居，则停止沿该侧扩展。当前多维版本不需要在这个函数中手动取模。
+
+注意，**扩展同层级区域**和**平滑层级过渡**都在 `assign_time_levels()` 中通过调用 `promote_neighbors(cell, depth)` 完成，区别在于传入的目标层级。
+
+- **第一步：扩展同层级区域。**
+
+  根据当前 cell 的 CFL 限制计算所需层级 `depth`，然后调用：
+
+  ```cpp
+  promote_neighbors(cell, depth);
+  ```
+
+  将当前 cell 及缓冲范围内的邻居提升到至少 `depth` 层。
+
+- **第二步：平滑层级过渡。**
+
+  从最高层向下遍历，对于当前处于 `depth` 层的 cell，调用：
+
+  ```cpp
+  promote_neighbors(cell, depth - 1);
+  ```
+
+  将其缓冲范围内的邻居提升到至少 `depth - 1` 层。例如，3 级单元周围至少为 2 级，随后处理 2 级单元，使其周围至少为 1 级。
+
+两次调用都通过 `std::max` 更新层级，因此只会提升层级，已有的更高层级不会降低。
+
+
+- 更新：兼容多维后,promote_neighbor的实现方式修改，因为每一个cell有2个/3个维度与其他cell相邻,每个维度通常有2个方向的邻居(非周期边界只有一个active邻居)：
+```cpp
+void LTSRK2Step::promote_neighbors(int cell, int depth)
+{
+    level_[cell] = std::max(level_[cell], depth);
+
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        for (int side : {-1, 1})
+        {
+            int neighbor = cell;
+
+            for (int distance = 0; distance < level_buffer_; ++distance)
+            {
+                const auto& pair = mesh_.cell_faces[neighbor][d];
+
+                neighbor = side < 0
+                    ? left_cell(static_cast<int>(pair.lower))
+                    : right_cell(static_cast<int>(pair.upper));
+
+                if (neighbor < 0) break;
+
+                level_[neighbor] =
+                    std::max(level_[neighbor], depth);
+            }
+        }
+    }
+}
+```
+以三维为例
+1. 第一层for循环遍历三个维度
+2. 第二层for循环遍历向低侧和向高侧两个方向,ide=-1 表示向坐标减小的低侧移动，side=1 表示向坐标增大的高侧移动。每次开始处理一侧时，都将 neighbor 重置为中心 cell,
+3. 第三层循环先沿着低侧方向向外移动neighbor指向的cell,寻找邻居并将其promote,然后再向外移动neighbor,最多走到buffer格外的邻居处,或遇到非周期边界时,结束这一次循环,neighbor退回中间，退回到第二层循环。然后再沿高侧方向向外移动neighbour指向的cell,promote邻居,同理继续循环直到距离达到或遇到非周期边界。然后退回到第一层循环，更换维度继续重复2和3。
+4. 第一层所有维度循环结束后遍历了所有邻居。例如，中心 cell 的坐标为 `(i,j,k)`，当 `level_buffer_=2` 时，六个方向的访问顺序分别为：
+
+| 移动方向 | 第一次移动 | 第二次移动 |
+| --- | --- | --- |
+| x 低侧 | `(i-1,j,k)` | `(i-2,j,k)` |
+| x 高侧 | `(i+1,j,k)` | `(i+2,j,k)` |
+| y 低侧 | `(i,j-1,k)` | `(i,j-2,k)` |
+| y 高侧 | `(i,j+1,k)` | `(i,j+2,k)` |
+| z 低侧 | `(i,j,k-1)` | `(i,j,k-2)` |
+| z 高侧 | `(i,j,k+1)` | `(i,j,k+2)` |
+
+因此，扩展范围是**穿过中心 cell 的三条坐标轴上的邻域**，不包含斜对角单元。
+
+在远离边界、邻居互不重复的情况下：
+
+- `level_buffer_=1`：中心 cell 加上 6 个邻居，共 7 个 cell。
+- `level_buffer_=2`：中心 cell 加上 12 个邻居，共 13 个 cell。
 
 #### 分配面到不同层级逻辑(assign_faces_to_levels)
 - 开场的三个二维数组遵循相同结构,第一维是层级,第二维是面或cell的index(注意,层数从0开始,因此第一维是deepest_ + 1个层级)
@@ -871,3 +1008,127 @@ C3：|---------- H/2 ---------|---------- H/2 ---------|
 6. 细层先完成多个小步，粗层等待细层界面通量全部到齐。
 7. 同一份界面通量以相反符号累计给左右 cell，保证守恒。
 8. 所有层最终重新同步在宏步终点 $H$。
+
+
+## 一些细节和3D扩展
+- 在1D架构中, 我们通过cell_index从0~nactive-1遍历活跃区,cell_index为活跃区下标,再加上nghost的offset得到flat_index。拓展到3D情形,我们需要用Index进行变换
+- build_stage_view中
+```cpp
+        auto& cell = view_.cells[ng_ + cell_index];
+```
+修改为
+```cpp
+
+```
+
+### 源项贡献和检查
+evaluate_sources函数会逐项将源项贡献加到网格stage上
+
+然后通过source_change_limit计算在给定allowance=0.1 下每个源项限制的最小dt,并且最后再取所有源项之和再计算一次，防止诸如多个加热源项单独计算dt限制那种情形。
+
+allowance的限制是,用源项对cell状态产生的单位时间变化率rate,乘上步长dt,要小于0.1*原状态,即一步之内状态不能因为源项产生超过10%的变化. 这个allowance目前是硬编码在scan_source_changes函数中的。
+
+source_change_limit里,输入的参数rate就是源项对每个cell的单位时间变化率(注意是在evaluate_sources里调用的,每个源项都会调用一次,此时rate是每个源项对cell产生的变化率,最后把源项求和再调用一次,rate是所有源项之和对cell产生的变化率)
+
+if(trial_H>0.0) 的分支就是正常循环里的分支(所有的步长都必然大于0),此时调用scan_source_changes,这个函数计算每个,这里采用一票否决机制,调用中的lambda函数Bound(第三个参数)
+```cpp
+    scan_source_changes(stage, rates, [&](double allowance, double rate) {
+        exceeded |= source_change_exceeds(trial_H, twice_H, allowance, rate);
+    });
+```
+会在scan_source_changes里被执行。scan_source_changes首先遍历每个网格,计算容许值,这里0.1是硬编码的
+
+```cpp
+for (int cell_index = 0; cell_index < n_; ++cell_index)
+    {
+        const auto& rate = rates[ng_ + cell_index];
+        for (double value : rate.data)
+            if (!std::isfinite(value)) throw std::runtime_error("Non-finite LTS RK2 source");
+
+        if (!source_cache_ready_)
+        {
+            const auto& cell = stage.cells[ng_ + cell_index];
+            const auto primitive = cell.U.to_Primtivies(cell.gamma);
+            const double rho = primitive[hd_core::RHO];
+            const double pressure = primitive[hd_core::PRE];
+            source_rho_[cell_index] = rho;
+            source_density_allowance_[cell_index] = 0.1 * rho;
+            source_momentum_allowance_[cell_index] = 0.0;
+            source_internal_allowance_[cell_index] = 0.0;
+            if (rho != 0.0)
+            {
+                const double velocity = primitive[hd_core::VEL(0)];
+                const double sound_speed = std::sqrt(cell.gamma * pressure / rho);
+                source_momentum_allowance_[cell_index] =
+                    0.1 * (rho * (std::abs(velocity) + sound_speed));
+                source_internal_allowance_[cell_index] =
+                    0.1 * (pressure / (cell.gamma - 1.0));
+            }
+        }
+
+        if (source_rho_[cell_index] == 0.0)
+        {
+            for (double value : rate.data)
+                if (value != 0.0)
+                    throw std::invalid_argument("LTS RK2 cannot create gas in vacuum");
+            continue;
+        }
+
+        bound(source_density_allowance_[cell_index], rate[hd_core::RHO]);
+        bound(source_momentum_allowance_[cell_index], rate[hd_core::MOMDEN(0)]);
+        bound(source_internal_allowance_[cell_index], rate[hd_core::INTERNAL_ENERGY]);
+    }
+```
+计算出的某个cell的三个容许变化量(密度,动量和内能)会传递给bound函数,在这里就是刚才的source_change_exceeds,scan_source_changes会把计算出的容许变化量和函数变化率传递给它,然后它还会使用一倍的步长和两倍的步长作为参数，这个函数的作用就是判断源项在这一格上产生的变化量是否超过了容许值
+```cpp
+bool source_change_exceeds(double H, double twice_H, double allowance, double rate)
+{
+    const double magnitude = std::abs(rate);
+    if (twice_H * magnitude < allowance) return false;
+    return rate != 0.0 && H > allowance / magnitude;
+}
+```
+这里是一个优化浮点除法的小trick,如果两倍的步长产生的变化都没有超过容许值的话,那么必然没有超过,返回false. 否则再回退到原本的除法,即步长是否大于容许值/变化率,如果大于且变化率不等于0就说明超过，返回true,否则返回false表示不超过.
+
+所以前面source_change_limit内
+```cpp
+    scan_source_changes(stage, rates, [&](double allowance, double rate) {
+        exceeded |= source_change_exceeds(trial_H, twice_H, allowance, rate);
+    });
+```
+的含义也很明显,就是只要有任何一个cell的三个状态变化量中的任何一个超出了容许的变化量allowance,那么就会返回true, exceeded就会永远保持true,只有所有cell的所有容许值都没有被超过,那么exceeded才会保持false。
+接下来如果exceeded=true,有容许值被超过了，就返回0.0,这时候上级的advance推进函数会返回false,回到attempt循环里,会尝试缩小一半步长。如果exceeded=false,那么就继续执行。
+
+另一个分支,trial_H<=0.0的情形,只在一种情况发生,就是在run()函数做初始化的时候调用了一次evaluate_source,给的步长是0.0,这个时候的目的是试探一下初始条件下源项限制的步长
+```cpp
+    const double source_limit = evaluate_sources(start_, time_, 0.0);
+    initial_source_ = source_;
+
+    double minimum_local_dt = inf;
+    hydro::max_inverse_dt = 0.0;
+    for (int cell = 0; cell < n_; ++cell)
+    {
+        const double rate =
+            std::max(speed_[cell], speed_[cell + 1])
+            / mesh_.cell_width(0, ng_ + cell);
+        if (!std::isfinite(rate)) throw std::runtime_error("Non-finite LTS RK2 CFL rate");
+        hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
+        local_dt_[cell] = rate > 0.0 ? cfl_ / rate : inf;
+        minimum_local_dt = std::min(minimum_local_dt, local_dt_[cell]);
+    }
+
+    macro_step_ = std::min({
+        dt_limit_, std::ldexp(minimum_local_dt, max_depth_), source_limit});
+```
+与后面从cell初状态得到的流体允许的最小步长$\times 2^{\mathrm{depth}}$ 以及外层大循环的dt_limit比较,取最小值得到最开始的macro_step尝试值，因此这里scan_source_changes的bound函数里写的是
+```cpp
+    scan_source_changes(stage, rates, [&](double allowance, double rate) {
+        if (rate != 0.0) limit = std::min(limit, allowance / std::abs(rate));
+    });
+```
+它的作用是在遍历每个cell的过程中,对三个状态(密度,动量和内能)分别计算:
+
+$$\frac{\text{状态的容许变化量allowance}}{\text{源项产生的对应状态的变化率rate}}=\text{该状态上的源项步长限制}$$,
+
+并逐步取更小的步长限制，遍历的最终效果就是取最小的源项步长限制并返回给调用者,参与初始步长的猜测和限制。
+

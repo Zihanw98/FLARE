@@ -3,11 +3,11 @@
  * @brief 守恒的多层一阶 Euler 局部时间步。
  *
  * 总体 pipeline：
- * 1. 校验配置，把正式网格复制到 workspace，并填充同步起点边界；
+ * 1. 校验配置，建立同步起点和本次推进状态，并填充同步起点边界；
  * 2. 求全部独立面的初始通量和波速，计算每个单元的 CFL 局部步；
  * 3. 在同步起点计算一次源项，并在整个同步大步 H 内冻结；
  * 4. 由 CFL、源项和外部上限共同选择 H，再按 H/2^level 给单元分层；
- * 5. 每个面交给相邻单元中更细的层，并预先建立细层需要的慢单元预测表；
+ * 5. 每个面交给相邻单元中更细的层，通过同一时刻的阶段视图重构；
  * 6. advance_level() 递归执行两个半步，累计两侧共享的守恒面通量积分；
  * 7. 每层结束时结算本层单元并同步双能量；失败则 H 减半、恢复起点并重试；
  * 8. 所有层成功后才提交正式网格和星区压力缓存。
@@ -24,7 +24,6 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -54,8 +53,8 @@ ValidatedOptions validate_lts_euler_inputs(
     hydro::SpatialScheme spatial_scheme, const config::SimulationConfig& cfg,
     double cfl)
 {
-    if (hd_core::NDIM != 1 || spatial_scheme != hydro::SpatialScheme::Godunov)
-        throw std::invalid_argument("lts_euler requires 1D Godunov");
+    if (spatial_scheme != hydro::SpatialScheme::Godunov)
+        throw std::invalid_argument("lts_euler requires Godunov");
     if (!utils::iequals(cfg.reconstructor, "PCM") &&
         !utils::iequals(cfg.reconstructor, "PLM") &&
         !utils::iequals(cfg.reconstructor, "PLM_corrected"))
@@ -70,87 +69,35 @@ ValidatedOptions validate_lts_euler_inputs(
         cfg.integrator_retry_max < 0 || cfg.lts_max_levels < 1 || cfg.lts_max_levels > 16)
         throw std::invalid_argument("Invalid LTS time, CFL or retry settings");
 
+    mesh.validate_geometry();
     (void)mesh.flat_index(hd_core::Index{}, true);
-    if (mesh.nghost[0] < (linear ? 2 : 1))
-        throw std::invalid_argument("LTS requires one ghost cell for PCM, two for PLM variants");
-
-    const bool periodic = mesh.bc_lower[0] == boundary::BoundaryCondition::Periodic;
-    if (periodic != (mesh.bc_upper[0] == boundary::BoundaryCondition::Periodic))
-        throw std::invalid_argument("LTS requires paired periodic boundaries");
-    if (periodic && mesh.geometry != hd_core::Geometry::Cartesian)
-        throw std::invalid_argument("LTS periodic boundaries require Cartesian geometry");
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        if (mesh.nghost[d] < (linear ? 2 : 1))
+            throw std::invalid_argument(
+                "LTS requires one ghost cell for PCM, two for PLM variants on every axis");
+        const bool periodic = mesh.bc_lower[d] == boundary::BoundaryCondition::Periodic;
+        if (periodic != (mesh.bc_upper[d] == boundary::BoundaryCondition::Periodic))
+            throw std::invalid_argument("LTS requires paired periodic boundaries on every axis");
+        if (periodic && mesh.geometry != hd_core::Geometry::Cartesian)
+            throw std::invalid_argument("LTS periodic boundaries require Cartesian geometry");
+    }
+    const auto max_count = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (mesh.active_count > max_count || mesh.face_info.size() > max_count)
+        throw std::length_error("LTS cell or face count exceeds int range");
 
     return {method, limiter};
 }
+
+MeshBlock make_start_stage(
+    const MeshBlock& mesh, double time, const hd_user::UserHooks& hooks)
+{
+    auto start = mesh;
+    boundary::FillBoundary(start, time, hooks);
+    return start;
 }
 
-// 跨同步大步复用的存储。这里不保存一次调用的控制流程。
-struct LTSEulerWorkspace::Impl
-{
-    MeshBlock start, work, candidate;
-    std::unique_ptr<hydro::ReconstructionCache> initial_reconstruction, sub_reconstruction;
-    std::vector<double> local_dt, step_fraction, pressure_work;
-
-    // 星区压力的持久缓存、同步起点快照和当前试算副本。
-    hydro::StarPressureCache star_pressure_cache, initial_pressure, trial_pressure;
-    std::vector<FaceResult> initial_faces, stage_faces;
-
-    // 冻结源项、跨层面通量寄存器和局部 Euler 预测器。
-    std::vector<Conserved> source, source_contribution, pending_flux_integral, step_start;
-    std::vector<std::array<double, 3>> source_scales;
-
-    // 每次重试重新生成的层级表、面表和预测模板。
-    std::vector<int> level, face_level;
-    std::vector<unsigned char> predicted, lower_ghosts, upper_ghosts;
-    std::vector<std::vector<int>> cells_by_level, faces_needed_by_level, prediction_cells;
-
-    void prepare(const MeshBlock& mesh)
-    {
-        const bool geometry_changed =
-            start.nactive != mesh.nactive || start.nghost != mesh.nghost ||
-            start.geometry != mesh.geometry || start.face != mesh.face ||
-            start.volume_cell != mesh.volume_cell ||
-            start.face_area[0].faces != mesh.face_area[0].faces;
-        if (geometry_changed)
-        {
-            mesh.validate_geometry();
-            start = mesh;
-            work = mesh;
-            candidate = mesh;
-            star_pressure_cache.reset(0, mesh.nactive[0] + 1);
-        }
-
-        start.bc_lower = work.bc_lower = candidate.bc_lower = mesh.bc_lower;
-        start.bc_upper = work.bc_upper = candidate.bc_upper = mesh.bc_upper;
-        start.cells = mesh.cells;
-
-        const auto cell_count = static_cast<std::size_t>(mesh.nactive[0]);
-        local_dt.resize(cell_count);
-        step_fraction.resize(cell_count);
-        pressure_work.resize(cell_count);
-        initial_faces.resize(cell_count + 1);
-        stage_faces.resize(cell_count + 1);
-        source.resize(mesh.cells.size());
-        source_contribution.resize(mesh.cells.size());
-        pending_flux_integral.resize(cell_count);
-        step_start.resize(cell_count);
-        level.resize(cell_count);
-        face_level.resize(cell_count + 1);
-        predicted.resize(cell_count);
-    }
-};
-
-LTSEulerWorkspace::LTSEulerWorkspace() : impl(std::make_unique<Impl>()) {}
-LTSEulerWorkspace::~LTSEulerWorkspace() = default;
-
-namespace
-{
-/**
- * 一次同步 LTS Euler 大步的控制对象。
- *
- * 算法通过下面的具名成员直接访问状态；这些成员引用 workspace 中的持久存储，
- * 因而既保持与 LTS RK2 一致的阅读方式，也避免每个同步大步重复分配数组。
- */
+// 一次同步 Euler 大步的状态、缓存和递归推进全部由此类持有。
 class LTSEulerStep
 {
 public:
@@ -158,38 +105,36 @@ public:
         MeshBlock& mesh, double time, double dt_limit,
         const hydro::RiemannSolver& solver, const hd_source::SourceList& sources,
         const config::SimulationConfig& cfg, const hd_user::UserHooks& hooks,
-        double cfl, LTSEulerWorkspace::Impl& storage,
+        double cfl, hydro::StarPressureCache* star_pressure_cache,
         hydro::Reconstructor method, hydro::Limiter limiter);
 
     double run();
 
 private:
     // ---------- 网格拓扑与状态有效性 ----------
+    std::size_t storage_index(int cell) const { return mesh_.active_to_storage[cell]; }
+    double face_area(int face) const;
     int left_cell(int face) const;
     int right_cell(int face) const;
     static bool is_physical(const Conserved& state, double gamma);
 
-    // ---------- 面重构、Riemann 求解与初始 CFL ----------
-    hydro::ReconstructionCache& reset_reconstruction(
-        std::unique_ptr<hydro::ReconstructionCache>& cache, const MeshBlock& stage);
-    FaceResult solve_face(
-        const MeshBlock& stage, hydro::ReconstructionCache& reconstruction,
-        int face, double& pressure_hint) const;
+    // ---------- 面重构、Riemann 求解与多维 CFL ----------
+    FaceResult solve_face(const MeshBlock& stage, int face);
+    double cell_wave_rate(int cell) const;
     double solve_initial_faces_and_cfl();
 
     // ---------- 同步起点的冻结源项 ----------
     double source_change_limit(const std::vector<Conserved>& rates, bool& cache_ready);
     double evaluate_frozen_sources();
 
-    // ---------- CFL 分层、面所有权与预测模板 ----------
+    // ---------- CFL 分层与面所有权 ----------
     void promote_neighbors(int cell, int depth);
     void assign_time_levels();
     void assign_faces_to_levels();
-    void mark_prediction_cell(int depth, int cell);
-    void assign_prediction_cells();
     void reset_attempt();
 
-    // ---------- 阶段预测与递归 Euler 子循环 ----------
+    // ---------- 同时刻阶段视图与递归 Euler 子循环 ----------
+    bool build_stage_view(int depth, double fraction, double stage_time);
     bool refresh_stage_faces(int depth, double fraction, double stage_time);
     bool check_waves_and_accumulate_flux(int depth, double local_step);
     bool build_level_predictors(int depth, double fraction, double local_step);
@@ -201,105 +146,79 @@ private:
     const hd_source::SourceList& sources_;
     const config::SimulationConfig& cfg_;
     const hd_user::UserHooks& hooks_;
-
-    // 同步起点、当前已接受状态和 Euler 预测终点。
-    MeshBlock& start_;
-    MeshBlock& state_;
-    MeshBlock& candidate_;
-    std::unique_ptr<hydro::ReconstructionCache>& initial_reconstruction_;
-    std::unique_ptr<hydro::ReconstructionCache>& stage_reconstruction_;
-
-    // 面量与星区压力：initial_* 是重试快照，其余是当前试算值。
-    hydro::StarPressureCache& star_pressure_cache_;
-    hydro::StarPressureCache& initial_pressure_;
-    hydro::StarPressureCache& pressure_hints_;
-    std::vector<FaceResult>& initial_faces_;
-    std::vector<FaceResult>& stage_faces_;
-
-    // CFL、源项、局部预测器和跨层守恒通量寄存器。
-    std::vector<double>& local_dt_;
-    std::vector<double>& step_fraction_;
-    std::vector<double>& pressure_work_;
-    std::vector<Conserved>& source_;
-    std::vector<Conserved>& source_contribution_;
-    std::vector<Conserved>& pending_flux_integral_;
-    std::vector<Conserved>& step_start_;
-    std::vector<std::array<double, 3>>& source_scales_;
-
-    // LTS 层级、面所有权与慢层预测模板。
-    std::vector<int>& level_;
-    std::vector<int>& face_level_;
-    std::vector<unsigned char>& predicted_;
-    std::vector<unsigned char>& lower_ghosts_;
-    std::vector<unsigned char>& upper_ghosts_;
-    std::vector<std::vector<int>>& cells_by_level_;
-    std::vector<std::vector<int>>& faces_needed_by_level_;
-    std::vector<std::vector<int>>& prediction_cells_;
-
-    double time_;
-    double dt_limit_;
-    double cfl_;
+    double time_, dt_limit_, cfl_;
     hydro::Reconstructor method_;
     hydro::Limiter limiter_;
     bool linear_;
-    int n_;
-    int ng_;
-    bool periodic_;
-    int independent_face_count_;
-    int max_depth_;
-    int level_buffer_;
-
-    // mesh 几何不随局部子步改变；指针从第一个 active 单元/面开始。
-    const double* area_ = nullptr;
-    const double* volume_ = nullptr;
+    int n_, independent_face_count_, max_depth_, level_buffer_;
     int deepest_ = 0;
     double macro_step_ = 0.0;
+
+    // start_：同步起点；state_：各 cell 已接受的局部状态；view_：同一时刻的重构视图。
+    MeshBlock start_, state_, view_;
+    hydro::ReconstructionCache reconstruction_;
+
+    // 只有可选的星区压力猜测跨大步传递；所有试算存储都属于本类。
+    hydro::StarPressureCache* star_pressure_cache_;
+    hydro::StarPressureCache initial_pressure_, pressure_hints_;
+    std::vector<FaceResult> initial_faces_, stage_faces_;
+    std::vector<double> max_seen_speed_;
+    std::vector<double> local_dt_, step_fraction_, pressure_work_;
+    std::vector<Conserved> source_, source_contribution_, pending_flux_integral_;
+    std::vector<Conserved> step_start_, candidate_;
+    // rho、各方向 momentum、internal energy 的源项变化尺度。
+    std::vector<std::array<double, hd_core::NDIM + 2>> source_scales_;
+    std::vector<int> level_, face_level_;
+    std::vector<std::vector<int>> cells_by_level_, faces_needed_by_level_;
 };
 
 LTSEulerStep::LTSEulerStep(
     MeshBlock& mesh, double time, double dt_limit,
     const hydro::RiemannSolver& solver, const hd_source::SourceList& sources,
     const config::SimulationConfig& cfg, const hd_user::UserHooks& hooks,
-    double cfl, LTSEulerWorkspace::Impl& storage,
+    double cfl, hydro::StarPressureCache* star_pressure_cache,
     hydro::Reconstructor method, hydro::Limiter limiter)
     : mesh_(mesh), solver_(solver), sources_(sources), cfg_(cfg), hooks_(hooks),
-      start_(storage.start), state_(storage.work), candidate_(storage.candidate),
-      initial_reconstruction_(storage.initial_reconstruction),
-      stage_reconstruction_(storage.sub_reconstruction),
-      star_pressure_cache_(storage.star_pressure_cache),
-      initial_pressure_(storage.initial_pressure), pressure_hints_(storage.trial_pressure),
-      initial_faces_(storage.initial_faces), stage_faces_(storage.stage_faces),
-      local_dt_(storage.local_dt), step_fraction_(storage.step_fraction),
-      pressure_work_(storage.pressure_work), source_(storage.source),
-      source_contribution_(storage.source_contribution),
-      pending_flux_integral_(storage.pending_flux_integral),
-      step_start_(storage.step_start), source_scales_(storage.source_scales),
-      level_(storage.level), face_level_(storage.face_level),
-      predicted_(storage.predicted), lower_ghosts_(storage.lower_ghosts),
-      upper_ghosts_(storage.upper_ghosts), cells_by_level_(storage.cells_by_level),
-      faces_needed_by_level_(storage.faces_needed_by_level),
-      prediction_cells_(storage.prediction_cells),
-      time_(time), dt_limit_(dt_limit), cfl_(cfl),
-      method_(method), limiter_(limiter), linear_(method != hydro::Reconstructor::PCM),
-      n_(mesh.nactive[0]), ng_(mesh.nghost[0]),
-      periodic_(mesh.bc_lower[0] == boundary::BoundaryCondition::Periodic),
-      independent_face_count_(periodic_ ? n_ : n_ + 1),
-      max_depth_(cfg.lts_max_levels - 1), level_buffer_(linear_ ? 2 : 1)
+      time_(time), dt_limit_(dt_limit), cfl_(cfl), method_(method), limiter_(limiter),
+      linear_(method != hydro::Reconstructor::PCM),
+      n_(static_cast<int>(mesh.active_count)),
+      independent_face_count_(static_cast<int>(mesh.face_info.size())),
+      max_depth_(cfg.lts_max_levels - 1), level_buffer_(linear_ ? 2 : 1),
+      start_(make_start_stage(mesh, time, hooks)), state_(start_), view_(start_),
+      reconstruction_(start_, method, limiter, cfg.limiter_beta),
+      star_pressure_cache_(star_pressure_cache),
+      initial_faces_(independent_face_count_), stage_faces_(independent_face_count_),
+      max_seen_speed_(independent_face_count_), local_dt_(n_), step_fraction_(n_),
+      pressure_work_(n_), source_(mesh.cells.size()), source_contribution_(mesh.cells.size()),
+      pending_flux_integral_(n_), step_start_(n_), candidate_(n_),
+      source_scales_(sources.empty() ? 0 : n_), level_(n_), face_level_(independent_face_count_)
 {
-    storage.prepare(mesh_);
-    boundary::FillBoundary(start_, time_, hooks_);
-    area_ = start_.face_area[0].faces.data() + ng_;
-    volume_ = start_.volume_cell.data() + ng_;
+    if (star_pressure_cache_) pressure_hints_ = *star_pressure_cache_;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        std::size_t count = 1;
+        for (int axis = 0; axis < hd_core::NDIM; ++axis)
+            count *= static_cast<std::size_t>(mesh.nactive[axis]) + (axis == d ? 1 : 0);
+        pressure_hints_.ensure_size(d, count);
+    }
+}
+
+double LTSEulerStep::face_area(int face) const
+{
+    const auto& info = mesh_.face_info[face];
+    return mesh_.face_area[info.direction].at(info.storage_coordinates);
 }
 
 int LTSEulerStep::left_cell(int face) const
 {
-    return face == 0 ? (periodic_ ? n_ - 1 : -1) : face - 1;
+    const auto cell = mesh_.face_info[face].left_active;
+    return cell == MeshBlock::invalid_active_index ? -1 : static_cast<int>(cell);
 }
 
 int LTSEulerStep::right_cell(int face) const
 {
-    return face == n_ ? (periodic_ ? 0 : -1) : face;
+    const auto cell = mesh_.face_info[face].right_active;
+    return cell == MeshBlock::invalid_active_index ? -1 : static_cast<int>(cell);
 }
 
 bool LTSEulerStep::is_physical(const Conserved& state, double gamma)
@@ -309,34 +228,31 @@ bool LTSEulerStep::is_physical(const Conserved& state, double gamma)
     return true;
 }
 
-hydro::ReconstructionCache& LTSEulerStep::reset_reconstruction(
-    std::unique_ptr<hydro::ReconstructionCache>& cache, const MeshBlock& stage)
+FaceResult LTSEulerStep::solve_face(const MeshBlock& stage, int face)
 {
-    if (!cache)
-        cache = std::make_unique<hydro::ReconstructionCache>(
-            stage, method_, limiter_, cfg_.limiter_beta);
-    else
-        cache->reset(stage, method_, limiter_, cfg_.limiter_beta);
-    return *cache;
-}
-
-FaceResult LTSEulerStep::solve_face(
-    const MeshBlock& stage, hydro::ReconstructionCache& reconstruction,
-    int face, double& pressure_hint) const
-{
-    const int right = ng_ + face;
-    hd_core::Index right_index{};
-    right_index[0] = right;
+    const auto& info = mesh_.face_info[face];
+    const int d = info.direction;
+    const auto& right_index = info.storage_coordinates;
+    auto left_index = right_index;
+    --left_index[d];
     const auto [left_state, right_state] = performance::measure(
         performance::Section::Reconstruction,
-        [&] { return reconstruction.face(0, right_index); }, true);
+        [&] { return reconstruction_.face(d, right_index); }, true);
 
+    // 压力猜测按各方向的 active 面场展平；通量则按全局独立 face_id 存储。
+    std::size_t hint_index = 0, stride = 1, normal_stride = 1;
+    for (int axis = 0; axis < hd_core::NDIM; ++axis)
+    {
+        if (axis == d) normal_stride = stride;
+        hint_index += static_cast<std::size_t>(right_index[axis] - stage.nghost[axis]) * stride;
+        stride *= static_cast<std::size_t>(stage.nactive[axis]) + (axis == d ? 1 : 0);
+    }
+    auto& pressure_hint = pressure_hints_[d][hint_index];
     FaceResult result;
     result.speed = -1.0;
     result.flux = performance::measure(performance::Section::Riemann, [&] {
         return solver_.flux_with_pressure_hint(
-            left_state, right_state, 0,
-            stage.cells[right - 1].gamma, stage.cells[right].gamma,
+            left_state, right_state, d, stage.at(left_index).gamma, stage.at(right_index).gamma,
             pressure_hint, result.speed, result.velocity);
     }, true);
 
@@ -345,36 +261,39 @@ FaceResult LTSEulerStep::solve_face(
     for (double value : result.flux.data)
         if (!std::isfinite(value))
             throw std::runtime_error("LTS received a non-finite face flux");
+    if (stage.bc_lower[d] == boundary::BoundaryCondition::Periodic &&
+        right_index[d] == stage.nghost[d])
+        pressure_hints_[d][hint_index + stage.nactive[d] * normal_stride] = pressure_hint;
     return result;
+}
+
+double LTSEulerStep::cell_wave_rate(int cell) const
+{
+    const auto index = mesh_.coordinates(storage_index(cell));
+    double rate = 0.0;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        const auto& pair = mesh_.cell_faces[cell][d];
+        rate += std::max(max_seen_speed_[pair.lower], max_seen_speed_[pair.upper])
+              / mesh_.cell_width(d, index[d]);
+    }
+    return rate;
 }
 
 double LTSEulerStep::solve_initial_faces_and_cfl()
 {
-    auto& reconstruction = reset_reconstruction(
-        initial_reconstruction_, start_);
-    initial_pressure_ = star_pressure_cache_;
-    for (int face = 0; face <= n_; ++face)
+    for (int face = 0; face < independent_face_count_; ++face)
     {
-        if (periodic_ && face == n_)
-        {
-            initial_faces_[face] = initial_faces_[0];
-            initial_pressure_[0][face] = initial_pressure_[0][0];
-        }
-        else
-        {
-            initial_faces_[face] = solve_face(
-                start_, reconstruction, face, initial_pressure_[0][face]);
-        }
+        initial_faces_[face] = solve_face(start_, face);
+        max_seen_speed_[face] = initial_faces_[face].speed;
     }
+    initial_pressure_ = pressure_hints_;
 
     double minimum_local_dt = infinity;
     hydro::max_inverse_dt = 0.0;
     for (int cell = 0; cell < n_; ++cell)
     {
-        const double rate =
-            std::max(initial_faces_[cell].speed,
-                     initial_faces_[cell + 1].speed)
-            / start_.cell_width(0, ng_ + cell);
+        const double rate = cell_wave_rate(cell);
         if (!std::isfinite(rate))
             throw std::runtime_error("Non-finite LTS CFL rate");
         hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
@@ -395,44 +314,41 @@ double LTSEulerStep::source_change_limit(
 
     for (int cell_index = 0; cell_index < n_; ++cell_index)
     {
-        const int storage_index = ng_ + cell_index;
-        const auto& rate = rates[storage_index];
+        const auto flat = storage_index(cell_index);
+        const auto& rate = rates[flat];
         for (double value : rate.data)
             if (!std::isfinite(value))
                 throw std::runtime_error("LTS received a non-finite source rate");
 
-        std::array<double, 3> uncached{};
-        auto& scale = source_scales_.empty()
-            ? uncached
-            : source_scales_[cell_index];
-        if (!cache_ready || source_scales_.empty())
+        auto& scale = source_scales_[cell_index];
+        if (!cache_ready)
         {
-            const auto& cell = start_.cells[storage_index];
+            const auto& cell = start_.cells[flat];
             const auto primitive = cell.U.to_Primtivies(cell.gamma);
             const double rho = primitive[hd_core::RHO];
-            scale = {rho, 0.0, 0.0};
+            scale.fill(0.0);
+            scale[0] = rho;
             if (rho != 0.0)
             {
-                const double velocity = primitive[hd_core::VEL(0)];
                 const double sound_speed =
                     std::sqrt(cell.gamma * primitive[hd_core::PRE] / rho);
-                scale = {rho, rho * (std::abs(velocity) + sound_speed),
-                         primitive[hd_core::PRE] / (cell.gamma - 1.0)};
+                for (int d = 0; d < hd_core::NDIM; ++d)
+                    scale[1 + d] = rho * (std::abs(primitive[hd_core::VEL(d)]) + sound_speed);
+                scale[1 + hd_core::NDIM] = primitive[hd_core::PRE] / (cell.gamma - 1.0);
             }
         }
 
-        const auto [rho, momentum, internal_energy] = scale;
-        if (rho == 0.0)
+        if (scale[0] == 0.0)
         {
             for (double value : rate.data)
                 if (value != 0.0)
-                    throw std::invalid_argument(
-                        "LTS does not support sources creating gas in vacuum");
+                    throw std::invalid_argument("LTS does not support sources creating gas in vacuum");
             continue;
         }
-        bound(rho, rate[hd_core::RHO]);
-        bound(momentum, rate[hd_core::MOMDEN(0)]);
-        bound(internal_energy, rate[hd_core::INTERNAL_ENERGY]);
+        bound(scale[0], rate[hd_core::RHO]);
+        for (int d = 0; d < hd_core::NDIM; ++d)
+            bound(scale[1 + d], rate[hd_core::MOMDEN(d)]);
+        bound(scale[1 + hd_core::NDIM], rate[hd_core::INTERNAL_ENERGY]);
     }
     cache_ready = true;
     return limit;
@@ -441,7 +357,7 @@ double LTSEulerStep::source_change_limit(
 double LTSEulerStep::evaluate_frozen_sources()
 {
     std::fill(source_.begin(), source_.end(), Conserved{});
-    source_scales_.resize(sources_.empty() ? 0 : n_);
+    if (sources_.empty()) return infinity;
     bool cache_ready = false;
     double source_limit = infinity;
 
@@ -463,7 +379,7 @@ double LTSEulerStep::evaluate_frozen_sources()
             source_limit, callback_limit,
             source_change_limit(source_contribution_, cache_ready)});
         for (int cell = 0; cell < n_; ++cell)
-            source_[ng_ + cell] += source_contribution_[ng_ + cell];
+            source_[storage_index(cell)] += source_contribution_[storage_index(cell)];
     }
     return std::min(
         source_limit, source_change_limit(source_, cache_ready));
@@ -471,13 +387,20 @@ double LTSEulerStep::evaluate_frozen_sources()
 
 void LTSEulerStep::promote_neighbors(int cell, int depth)
 {
-    for (int offset = -level_buffer_; offset <= level_buffer_; ++offset)
-    {
-        int neighbor = cell + offset;
-        if (periodic_) neighbor = (neighbor % n_ + n_) % n_;
-        if (neighbor >= 0 && neighbor < n_)
-            level_[neighbor] = std::max(level_[neighbor], depth);
-    }
+    level_[cell] = std::max(level_[cell], depth);
+    for (int d = 0; d < hd_core::NDIM; ++d)
+        for (int side : {-1, 1})
+        {
+            int neighbor = cell;
+            for (int distance = 0; distance < level_buffer_; ++distance)
+            {
+                const auto& pair = mesh_.cell_faces[neighbor][d];
+                neighbor = side < 0 ? left_cell(static_cast<int>(pair.lower))
+                                    : right_cell(static_cast<int>(pair.upper));
+                if (neighbor < 0) break;
+                level_[neighbor] = std::max(level_[neighbor], depth);
+            }
+        }
 }
 
 void LTSEulerStep::assign_time_levels()
@@ -503,14 +426,10 @@ void LTSEulerStep::assign_faces_to_levels()
 {
     cells_by_level_.resize(deepest_ + 1);
     faces_needed_by_level_.resize(deepest_ + 1);
-    prediction_cells_.resize(deepest_ + 1);
-    lower_ghosts_.assign(deepest_ + 1, false);
-    upper_ghosts_.assign(deepest_ + 1, false);
     for (int depth = 0; depth <= deepest_; ++depth)
     {
         cells_by_level_[depth].clear();
         faces_needed_by_level_[depth].clear();
-        prediction_cells_[depth].clear();
     }
 
     for (int cell = 0; cell < n_; ++cell)
@@ -526,126 +445,65 @@ void LTSEulerStep::assign_faces_to_levels()
         for (int depth = 0; depth <= face_level_[face]; ++depth)
             faces_needed_by_level_[depth].push_back(face);
     }
-    if (periodic_) face_level_[n_] = face_level_[0];
-}
-
-void LTSEulerStep::mark_prediction_cell(int depth, int cell)
-{
-    if (level_[cell] < depth && !predicted_[cell])
-    {
-        predicted_[cell] = true;
-        prediction_cells_[depth].push_back(cell);
-    }
-}
-
-void LTSEulerStep::assign_prediction_cells()
-{
-    for (int depth = 1; depth <= deepest_; ++depth)
-    {
-        std::fill(predicted_.begin(), predicted_.end(), false);
-        bool global_boundary = false;
-        for (int face : faces_needed_by_level_[depth])
-        {
-            const int stencil_left = face - (linear_ ? 2 : 1);
-            const int stencil_right = face + (linear_ ? 1 : 0);
-            for (int cell = stencil_left; cell <= stencil_right; ++cell)
-            {
-                if (cell >= 0 && cell < n_)
-                {
-                    mark_prediction_cell(depth, cell);
-                    continue;
-                }
-
-                const bool lower = cell < 0;
-                lower_ghosts_[depth] |= lower;
-                upper_ghosts_[depth] |= !lower;
-                const auto condition = lower
-                    ? start_.bc_lower[0]
-                    : start_.bc_upper[0];
-                if (condition == boundary::BoundaryCondition::Periodic)
-                    mark_prediction_cell(depth, (cell % n_ + n_) % n_);
-                else if (condition == boundary::BoundaryCondition::Reflective)
-                    mark_prediction_cell(depth, lower ? -cell - 1 : 2 * n_ - cell - 1);
-                else if (condition == boundary::BoundaryCondition::User)
-                    global_boundary = true;
-            }
-        }
-        if (global_boundary)
-            for (int cell = 0; cell < n_; ++cell)
-                mark_prediction_cell(depth, cell);
-    }
 }
 
 void LTSEulerStep::reset_attempt()
 {
     assign_time_levels();
     assign_faces_to_levels();
-    assign_prediction_cells();
     state_.cells = start_.cells;
-    candidate_.cells = start_.cells;
     pressure_hints_ = initial_pressure_;
     stage_faces_ = initial_faces_;
-    std::fill(pending_flux_integral_.begin(),
-              pending_flux_integral_.end(), Conserved{});
+    for (int face = 0; face < independent_face_count_; ++face)
+        max_seen_speed_[face] = initial_faces_[face].speed;
+    std::fill(pending_flux_integral_.begin(), pending_flux_integral_.end(), Conserved{});
 }
 
-bool LTSEulerStep::refresh_stage_faces(
-    int depth, double fraction, double stage_time)
+bool LTSEulerStep::build_stage_view(int depth, double fraction, double stage_time)
 {
-    for (int cell_index : prediction_cells_[depth])
+    view_.cells = state_.cells;
+    for (int cell_index = 0; cell_index < n_; ++cell_index)
     {
-        auto& cell = state_.cells[ng_ + cell_index];
+        if (level_[cell_index] >= depth) continue;
+        auto& cell = view_.cells[storage_index(cell_index)];
+        // PLM 使用慢层 Euler 预测；PCM 保持慢层局部步起点值。
         const double theta = linear_
-            ? std::ldexp(
-                fraction - step_fraction_[cell_index],
-                level_[cell_index])
-            : 0.0;
-        cell.U = (1.0 - theta) * step_start_[cell_index]
-            + theta * candidate_.cells[ng_ + cell_index].U;
+            ? std::ldexp(fraction - step_fraction_[cell_index], level_[cell_index]) : 0.0;
+        cell.U = (1.0 - theta) * step_start_[cell_index] + theta * candidate_[cell_index];
         if (!is_physical(cell.U, cell.gamma)) return false;
     }
+    boundary::FillBoundary(view_, stage_time, hooks_);
+    return true;
+}
 
-    if (lower_ghosts_[depth])
-        boundary::ApplyBoundaryCondition(
-            state_, 0, boundary::BoundarySide::Lower, stage_time, hooks_);
-    if (upper_ghosts_[depth])
-        boundary::ApplyBoundaryCondition(
-            state_, 0, boundary::BoundarySide::Upper, stage_time, hooks_);
-
-    auto& reconstruction = reset_reconstruction(
-        stage_reconstruction_, state_);
+bool LTSEulerStep::refresh_stage_faces(int depth, double fraction, double stage_time)
+{
+    if (!build_stage_view(depth, fraction, stage_time)) return false;
+    reconstruction_.reset(view_, method_, limiter_, cfg_.limiter_beta);
     for (int face : faces_needed_by_level_[depth])
-        stage_faces_[face] = solve_face(
-            state_, reconstruction, face, pressure_hints_[0][face]);
-    if (periodic_)
-    {
-        stage_faces_[n_] = stage_faces_[0];
-        pressure_hints_[0][n_] = pressure_hints_[0][0];
-    }
+        stage_faces_[face] = solve_face(view_, face);
     return true;
 }
 
 bool LTSEulerStep::check_waves_and_accumulate_flux(int depth, double local_step)
 {
+    // 先更新整批面，再用各方向历史峰值的总和检查 CFL；重试时清除本次峰值。
+    for (int face : faces_needed_by_level_[depth])
+        max_seen_speed_[face] = std::max(max_seen_speed_[face], stage_faces_[face].speed);
     for (int face : faces_needed_by_level_[depth])
     {
         for (int cell : {left_cell(face), right_cell(face)})
         {
             if (cell < 0) continue;
-            const double rate =
-                stage_faces_[face].speed
-                / start_.cell_width(0, ng_ + cell);
+            const double rate = cell_wave_rate(cell);
             hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
             const double cell_step = std::ldexp(macro_step_, -level_[cell]);
             if (!std::isfinite(rate) || cell_step * rate > cfg_.cfl_max) return false;
         }
-
         if (face_level_[face] == depth)
         {
-            const auto integral =
-                stage_faces_[face].flux * (local_step * area_[face]);
-            const int left = left_cell(face);
-            const int right = right_cell(face);
+            const auto integral = stage_faces_[face].flux * (local_step * face_area(face));
+            const int left = left_cell(face), right = right_cell(face);
             if (left >= 0) pending_flux_integral_[left] -= integral;
             if (right >= 0) pending_flux_integral_[right] += integral;
         }
@@ -658,25 +516,29 @@ bool LTSEulerStep::build_level_predictors(
 {
     for (int cell_index : cells_by_level_[depth])
     {
-        const auto& current_cell = state_.cells[ng_ + cell_index];
+        const auto flat = storage_index(cell_index);
+        const auto& current_cell = state_.cells[flat];
+        const double volume = mesh_.volume_cell[flat];
         step_start_[cell_index] = current_cell.U;
         step_fraction_[cell_index] = fraction;
-        pressure_work_[cell_index] =
-            -(current_cell.gamma - 1.0)
-            * step_start_[cell_index].internal_energy()
-            * (area_[cell_index + 1] * stage_faces_[cell_index + 1].velocity
-               - area_[cell_index] * stage_faces_[cell_index].velocity)
-            / volume_[cell_index];
-
-        auto& candidate = candidate_.cells[ng_ + cell_index];
-        candidate.U = step_start_[cell_index]
-            + (stage_faces_[cell_index].flux * area_[cell_index]
-               - stage_faces_[cell_index + 1].flux * area_[cell_index + 1])
-                * (local_step / volume_[cell_index])
-            + source_[ng_ + cell_index] * local_step;
-        candidate.U[hd_core::INTERNAL_ENERGY] +=
-            local_step * pressure_work_[cell_index];
-        if (!is_physical(candidate.U, candidate.gamma)) return false;
+        Conserved flux_balance{};
+        double div_velocity_balance = 0.0;
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            const auto& pair = mesh_.cell_faces[cell_index][d];
+            const int lower = static_cast<int>(pair.lower), upper = static_cast<int>(pair.upper);
+            const double lower_area = face_area(lower), upper_area = face_area(upper);
+            flux_balance += stage_faces_[lower].flux * lower_area - stage_faces_[upper].flux * upper_area;
+            div_velocity_balance += upper_area * stage_faces_[upper].velocity
+                                  - lower_area * stage_faces_[lower].velocity;
+        }
+        pressure_work_[cell_index] = -(current_cell.gamma - 1.0)
+            * step_start_[cell_index].internal_energy() * div_velocity_balance / volume;
+        auto& candidate = candidate_[cell_index];
+        candidate = step_start_[cell_index] + flux_balance * (local_step / volume)
+                  + source_[flat] * local_step;
+        candidate[hd_core::INTERNAL_ENERGY] += local_step * pressure_work_[cell_index];
+        if (!is_physical(candidate, current_cell.gamma)) return false;
     }
     return true;
 }
@@ -685,10 +547,11 @@ bool LTSEulerStep::commit_level(int depth, double local_step)
 {
     for (int cell_index : cells_by_level_[depth])
     {
-        auto& cell = state_.cells[ng_ + cell_index];
+        const auto flat = storage_index(cell_index);
+        auto& cell = state_.cells[flat];
         cell.U = step_start_[cell_index]
-            + pending_flux_integral_[cell_index] / volume_[cell_index]
-            + source_[ng_ + cell_index] * local_step;
+            + pending_flux_integral_[cell_index] / mesh_.volume_cell[flat]
+            + source_[flat] * local_step;
         cell.U[hd_core::INTERNAL_ENERGY] +=
             local_step * pressure_work_[cell_index];
         if (!is_physical(cell.U, cell.gamma)) return false;
@@ -742,7 +605,7 @@ double LTSEulerStep::run()
         // Pipeline 4：递归全部成功后才提交正式网格和压力历史。
         boundary::FillBoundary(state_, time_ + macro_step_, hooks_);
         mesh_.cells.swap(state_.cells);
-        star_pressure_cache_.swap(pressure_hints_);
+        if (star_pressure_cache_) star_pressure_cache_->swap(pressure_hints_);
         return macro_step_;
     }
     throw std::runtime_error("LTS Euler retry limit exceeded");
@@ -753,21 +616,14 @@ double advance_lts_euler(
     MeshBlock& mesh, double time, double dt_limit,
     hydro::SpatialScheme spatial_scheme, const hydro::RiemannSolver& solver,
     const hd_source::SourceList& source_list, const config::SimulationConfig& cfg,
-    const hd_user::UserHooks& hooks, double cfl, LTSEulerWorkspace* workspace)
+    const hd_user::UserHooks& hooks, double cfl, hydro::StarPressureCache* star_pressure_cache)
 {
     const auto options = validate_lts_euler_inputs(
         mesh, time, dt_limit, spatial_scheme, cfg, cfl);
 
-    std::optional<LTSEulerWorkspace> temporary_workspace;
-    if (!workspace)
-    {
-        temporary_workspace.emplace();
-        workspace = &*temporary_workspace;
-    }
-
     LTSEulerStep step(
         mesh, time, dt_limit, solver, source_list, cfg, hooks, cfl,
-        *workspace->impl, options.method, options.limiter);
+        star_pressure_cache, options.method, options.limiter);
     return step.run();
 }
 }

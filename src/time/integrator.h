@@ -10,7 +10,6 @@
 #include <array>
 #include <vector>
 #include <utility>
-#include <memory>
 namespace hd_core
 {
     struct MeshBlock;
@@ -19,24 +18,13 @@ namespace hd_implicit { class Integrator; }
 
 namespace hd_time
 {
-    /** Reusable scratch storage for a serial LTS evolution. Own one per caller;
-     * never share concurrently. Geometry changes invalidate its mesh views. */
-    struct LTSEulerWorkspace
-    {
-        struct Impl;
-        std::unique_ptr<Impl> impl;
-        LTSEulerWorkspace();
-        ~LTSEulerWorkspace();
-        LTSEulerWorkspace(const LTSEulerWorkspace&) = delete;
-        LTSEulerWorkspace& operator=(const LTSEulerWorkspace&) = delete;
-    };
     /** @brief Available time integration methods. */
     enum class TimeIntegrator
     {
         Euler, ///< One-stage forward Euler update.
-        LTSEuler, ///< Experimental 1D Euler with multilevel conservative subcycling.
+        LTSEuler, ///< Experimental multidimensional Euler with multilevel conservative subcycling.
         RK2, ///< Two-stage SSP-RK2 update with timestep retries.
-        LTSRK2, ///< Experimental 1D conservative multilevel Heun subcycling.
+        LTSRK2, ///< Experimental multidimensional conservative multilevel Heun subcycling.
         Implicit ///< Backward Euler with Newton-Krylov and optional adaptive steps.
     };
 
@@ -50,7 +38,7 @@ namespace hd_time
 
     /**
      * @brief Advance one synchronized macro step using multilevel explicit subcycling.
-     * @details Restricted to 1D Godunov with PCM, PLM or PLM_corrected.
+     * @details Godunov on Cartesian grids in 1D/2D/3D or spherical grids in 1D with PCM, PLM or PLM_corrected.
      * Cells take H/2^level with up to cfg.lts_max_levels levels (default two).
      * Each face is integrated at the finer adjacent level and shared by both cells.
      * PLM variants require two ghost cells and predict slow stencil states to
@@ -67,9 +55,10 @@ namespace hd_time
         hd_core::MeshBlock& mesh, double time, double dt_limit,
         hydro::SpatialScheme spatial_scheme, const hydro::RiemannSolver& solver,
         const hd_source::SourceList& source_list, const config::SimulationConfig& cfg,
-        const hd_user::UserHooks& hooks, double cfl, LTSEulerWorkspace* workspace = nullptr);
+        const hd_user::UserHooks& hooks, double cfl,
+        hydro::StarPressureCache* star_pressure_cache = nullptr);
 
-    /** Conservative multilevel RK2 (Heun), restricted to 1D Godunov.
+    /** Conservative multilevel RK2 (Heun), using multidimensional Godunov.
      * Linear coarse predictors supply fine-stage states; shared trapezoidal
      * face integrals synchronize levels. Sources are reevaluated at stage times.
      * Uses cfg.lts_max_levels; retries commit neither states nor pressure hints.
@@ -121,8 +110,8 @@ namespace hd_time
      * @param[in,out] dt_next RK2 timestep suggestion (initially infinity). Implicit writes
      * its next-step suggestion here but reads step history from implicit_workspace.
      * Euler and both LTS methods ignore the input and reset it to infinity after acceptance.
-     * @param[in,out] star_pressure_cache Optional per-face star-pressure cache for Euler/RK2/LTSRK2
-     * initial guesses; commit with accepted states. LTSEuler uses its own workspace.
+     * @param[in,out] star_pressure_cache Optional per-face star-pressure cache for explicit integrators;
+     * commit with accepted states. Clear it when repurposing or remapping the mesh.
      * @param[in,out] implicit_workspace Required for Implicit; owns reusable solver storage
      * and adaptive-step history. Construct once with the mesh and configuration.
      * @return The finite positive timestep actually used; the caller advances time by this value.
@@ -144,7 +133,6 @@ namespace hd_time
         const hd_user::UserHooks& hooks,
         double cfl,
         double& dt_next,
-        LTSEulerWorkspace* lts_workspace = nullptr,
         hydro::StarPressureCache* star_pressure_cache = nullptr,
         hd_implicit::Integrator* implicit_workspace = nullptr
     );

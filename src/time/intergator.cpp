@@ -129,7 +129,6 @@ namespace hd_time
         const hd_user::UserHooks& hooks,
         double cfl,
         double& dt_next,
-        LTSEulerWorkspace* lts_workspace,
         hydro::StarPressureCache* star_pressure_cache,
         hd_implicit::Integrator* implicit_workspace
     )
@@ -147,7 +146,7 @@ namespace hd_time
                 break;
             case TimeIntegrator::LTSEuler:
                 dt = advance_lts_euler(mesh, time, dt_limit, spatial_scheme, solver,
-                                       source_list, cfg, hooks, cfl, lts_workspace);
+                                       source_list, cfg, hooks, cfl, star_pressure_cache);
                 dt_next = std::numeric_limits<double>::infinity();
                 return dt; // LTS commits only after the synchronized boundary fill.
             case TimeIntegrator::LTSRK2:

@@ -204,7 +204,7 @@ int main(int argc, char** argv)
             hydro::StarPressureCache star_pressure_cache;
             auto with_cache = [&](double limit) {
                 return hd_time::advance_one_step(mesh, 0.0, limit, method, scheme,
-                    solver, sources, cfg, hooks, cfg.cfl, dt_next, nullptr, &star_pressure_cache);
+                    solver, sources, cfg, hooks, cfg.cfl, dt_next, &star_pressure_cache);
             };
             solver.hint_inputs.clear(); solver.hint_outputs.clear();
             dt_next = std::numeric_limits<double>::infinity();

@@ -134,9 +134,6 @@ int main(int argc, char* argv[])
             implicit_workspace = std::make_unique<hd_implicit::Integrator>(mesh, cfg);
         double dt_next = std::numeric_limits<double>::infinity();
         hydro::StarPressureCache star_pressure_cache;
-        std::unique_ptr<hd_time::LTSEulerWorkspace> lts_workspace;
-        if (integrator == hd_time::TimeIntegrator::LTSEuler)
-            lts_workspace = std::make_unique<hd_time::LTSEulerWorkspace>();
         std::uint64_t active_cells = 1;
         for (int d = 0; d < hd_core::NDIM; ++d)
             active_cells *= mesh.nactive[d];
@@ -162,7 +159,6 @@ int main(int argc, char* argv[])
                 hooks,
                 cfg.cfl,
                 dt_next,
-                lts_workspace.get(),
                 &star_pressure_cache,
                 implicit_workspace.get()
             );

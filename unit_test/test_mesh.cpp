@@ -4,10 +4,111 @@
 #include "hydro/facefield.h"
 #include <limits>
 
+namespace
+{
+void check_topology(const hd_core::MeshBlock& mesh)
+{
+    const auto invalid = hd_core::MeshBlock::invalid_active_index;
+    const auto active_count = mesh.active_to_storage.size();
+    CHECK(mesh.total_count == mesh.cells.size());
+    CHECK(mesh.active_count == active_count);
+    CHECK(mesh.cell_faces.size() == active_count);
+    std::size_t expected_faces = 0;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        const bool periodic = mesh.bc_lower[d] == boundary::BoundaryCondition::Periodic;
+        expected_faces += active_count + (periodic ? 0 : active_count / mesh.nactive[d]);
+    }
+    CHECK(mesh.face_info.size() == expected_faces);
+    std::vector<int> references(mesh.face_info.size(), 0);
+    for (std::size_t cell = 0; cell < active_count; ++cell)
+    {
+        const auto storage = mesh.coordinates(mesh.active_to_storage[cell]);
+        const auto local = mesh.coordinates_active(mesh.active_to_storage[cell]);
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            const bool periodic = mesh.bc_lower[d] == boundary::BoundaryCondition::Periodic;
+            const auto& pair = mesh.cell_faces[cell][d];
+            const auto& lower = mesh.face_info.at(pair.lower);
+            const auto& upper = mesh.face_info.at(pair.upper);
+            CHECK(lower.direction == d && upper.direction == d);
+            CHECK(lower.right_active == cell);
+            CHECK(upper.left_active == cell);
+            CHECK(lower.storage_coordinates == storage);
+            auto upper_coordinate = storage;
+            ++upper_coordinate[d];
+            if (periodic && local[d] == mesh.nactive[d] - 1)
+                upper_coordinate[d] = mesh.nghost[d];
+            CHECK(upper.storage_coordinates == upper_coordinate);
+
+            for (int side : {-1, 1})
+            {
+                auto neighbor_coordinate = local;
+                neighbor_coordinate[d] += side;
+                const bool outside = neighbor_coordinate[d] < 0 ||
+                    neighbor_coordinate[d] >= mesh.nactive[d];
+                std::size_t neighbor = invalid;
+                if (periodic || !outside)
+                {
+                    if (neighbor_coordinate[d] < 0) neighbor_coordinate[d] = mesh.nactive[d] - 1;
+                    if (neighbor_coordinate[d] == mesh.nactive[d]) neighbor_coordinate[d] = 0;
+                    neighbor = mesh.storage_to_active.at(mesh.flat_index(neighbor_coordinate, true));
+                    CHECK(neighbor != invalid);
+                    const auto& other = mesh.cell_faces.at(neighbor)[d];
+                    CHECK((side < 0 ? other.upper : other.lower) ==
+                          (side < 0 ? pair.lower : pair.upper));
+                }
+                CHECK((side < 0 ? lower.left_active : upper.right_active) == neighbor);
+            }
+            ++references[pair.lower];
+            ++references[pair.upper];
+            if constexpr (hd_core::NDIM == 1)
+            {
+                // Preserve the old LTS face numbering, including periodic face 0.
+                CHECK(pair.lower == cell);
+                CHECK(pair.upper == (periodic && cell + 1 == active_count ? 0 : cell + 1));
+            }
+        }
+    }
+    for (std::size_t face = 0; face < mesh.face_info.size(); ++face)
+    {
+        const auto& info = mesh.face_info[face];
+        const int sides = (info.left_active != invalid) + (info.right_active != invalid);
+        CHECK(sides >= 1);
+        CHECK(references[face] == sides);
+    }
+}
+
+void check_same_topology(const hd_core::MeshBlock& a, const hd_core::MeshBlock& b)
+{
+    CHECK(a.total_count == b.total_count);
+    CHECK(a.active_count == b.active_count);
+    CHECK(a.active_to_storage == b.active_to_storage);
+    CHECK(a.storage_to_active == b.storage_to_active);
+    CHECK(a.face_info.size() == b.face_info.size());
+    CHECK(a.cell_faces.size() == b.cell_faces.size());
+    for (std::size_t f = 0; f < a.face_info.size(); ++f)
+    {
+        CHECK(a.face_info[f].direction == b.face_info[f].direction);
+        CHECK(a.face_info[f].storage_coordinates == b.face_info[f].storage_coordinates);
+        CHECK(a.face_info[f].left_active == b.face_info[f].left_active);
+        CHECK(a.face_info[f].right_active == b.face_info[f].right_active);
+    }
+    for (std::size_t c = 0; c < a.cell_faces.size(); ++c)
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            CHECK(a.cell_faces[c][d].lower == b.cell_faces[c][d].lower);
+            CHECK(a.cell_faces[c][d].upper == b.cell_faces[c][d].upper);
+        }
+}
+}
+
 int main()
 {
     return run_test("mesh indexing, geometry and active-state validation", [] {
         hd_core::MeshBlock mesh{};
+        CHECK(mesh.total_count == 0);
+        CHECK(mesh.active_count == 0);
         std::size_t count = 1;
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
@@ -20,7 +121,15 @@ int main()
             CHECK(near(mesh.active_length(d), 3.0 + d));
         }
         mesh.allocate();
+        check_topology(mesh);
+        auto bounded = mesh;
+        bounded.bc_lower.fill(boundary::BoundaryCondition::Reflective);
+        bounded.bc_upper.fill(boundary::BoundaryCondition::Reflective);
+        bounded.build_topology();
+        check_topology(bounded);
         CHECK(mesh.cells.size() == count);
+        CHECK(mesh.storage_to_active.size() == count);
+        std::size_t active_count = 0;
         const auto& const_mesh = mesh;
         for (std::size_t flat = 0; flat < count; ++flat)
         {
@@ -42,11 +151,114 @@ int main()
             CHECK(expected == flat); // Axis 0 has unit stride.
             if (active)
             {
+                CHECK(mesh.active_to_storage.at(active_count) == flat);
+                CHECK(mesh.storage_to_active.at(flat) == active_count);
+                CHECK(mesh.active_to_storage.at(mesh.storage_to_active[flat]) == flat);
+                ++active_count;
                 CHECK(mesh.flat_index(local, true) == flat);
                 CHECK(&mesh.at_active(local) == &mesh.cells[flat]);
                 CHECK(&const_mesh.at_active(local) == &mesh.cells[flat]);
             }
+            else
+                CHECK(mesh.storage_to_active.at(flat) == hd_core::MeshBlock::invalid_active_index);
         }
+        CHECK(mesh.active_to_storage.size() == active_count);
+
+        // The builder recreates all connectivity without reallocating cell storage.
+        auto rebuilt = mesh;
+        rebuilt.active_to_storage.clear();
+        rebuilt.storage_to_active.clear();
+        rebuilt.face_info.clear();
+        rebuilt.cell_faces.clear();
+        auto* const cell_storage = rebuilt.cells.data();
+        rebuilt.cells[0].U[hd_core::RHO] = 7.0;
+        rebuilt.build_topology();
+        check_same_topology(rebuilt, mesh);
+        CHECK(rebuilt.cells.data() == cell_storage);
+        CHECK(rebuilt.cells[0].U[hd_core::RHO] == 7.0);
+
+        // Reallocating a copied grid must rebuild its maps even when the
+        // storage size is unchanged, without modifying the original grid.
+        auto resized = mesh;
+        resized.nactive[0] -= 2;
+        ++resized.nghost[0];
+        resized.set_linear_uniform_faces(0, -1.0, 2.0);
+        resized.allocate();
+        check_topology(resized);
+        CHECK(resized.cells.size() == count);
+        std::vector<std::size_t> expected_active;
+        std::vector<std::size_t> expected_inverse(count, hd_core::MeshBlock::invalid_active_index);
+        for (std::size_t flat = 0; flat < resized.cells.size(); ++flat)
+            if (resized.is_active(flat))
+            {
+                expected_inverse[flat] = expected_active.size();
+                expected_active.push_back(flat);
+            }
+        CHECK(resized.active_to_storage == expected_active);
+        CHECK(resized.storage_to_active == expected_inverse);
+        CHECK(mesh.active_to_storage.size() == active_count);
+        CHECK(resized.active_to_storage != mesh.active_to_storage);
+        CHECK(resized.storage_to_active != mesh.storage_to_active);
+        CHECK(mesh.storage_to_active == rebuilt.storage_to_active);
+
+        // Without ghosts both maps are the identity in every dimension.
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            resized.nactive[d] = 2 + d;
+            resized.nghost[d] = 0;
+            resized.set_linear_uniform_faces(d, -1.0, 2.0 + d);
+        }
+        resized.allocate();
+        check_topology(resized);
+        CHECK(resized.active_to_storage.size() == resized.cells.size());
+        CHECK(resized.storage_to_active.size() == resized.cells.size());
+        for (std::size_t flat = 0; flat < resized.cells.size(); ++flat)
+        {
+            CHECK(resized.active_to_storage[flat] == flat);
+            CHECK(resized.storage_to_active[flat] == flat);
+        }
+
+        // Every combination of periodic/physical axes, with asymmetric shapes,
+        // no ghosts or unequal ghost widths, and a one-cell periodic direction.
+        for (int mask = 0; mask < (1 << hd_core::NDIM); ++mask)
+        {
+            for (int ghosts : {0, 1})
+            {
+                hd_core::MeshBlock topology;
+                for (int d = 0; d < hd_core::NDIM; ++d)
+                {
+                    topology.nactive[d] = 1 + d;
+                    topology.nghost[d] = ghosts * (d + 1);
+                    topology.bc_lower[d] = topology.bc_upper[d] = (mask & (1 << d))
+                        ? boundary::BoundaryCondition::Periodic
+                        : boundary::BoundaryCondition::Reflective;
+                    topology.set_linear_uniform_faces(d, -1.0, 2.0 + d);
+                }
+                topology.allocate();
+                check_topology(topology);
+                topology.build_geometry();
+                for (const auto& info : topology.face_info)
+                    CHECK(topology.face_area[info.direction].at(info.storage_coordinates) > 0.0);
+
+                // A boundary-only change rebuilds faces without changing cells.
+                const auto* storage = topology.cells.data();
+                const auto active_map = topology.active_to_storage;
+                const auto reverse_map = topology.storage_to_active;
+                const auto old_face_count = topology.face_info.size();
+                const bool was_periodic = topology.bc_lower[0] == boundary::BoundaryCondition::Periodic;
+                topology.bc_lower[0] = topology.bc_upper[0] = was_periodic
+                    ? boundary::BoundaryCondition::Reflective : boundary::BoundaryCondition::Periodic;
+                topology.build_topology();
+                check_topology(topology);
+                CHECK(topology.cells.data() == storage);
+                CHECK(topology.active_to_storage == active_map);
+                CHECK(topology.storage_to_active == reverse_map);
+                const auto boundary_plane = active_map.size() / topology.nactive[0];
+                CHECK(topology.face_info.size() == (was_periodic
+                    ? old_face_count + boundary_plane : old_face_count - boundary_plane));
+            }
+        }
+
         // Along an axis widths may vary; the other coordinates do not enter.
         mesh.face[0][1] = mesh.face[0][0] + 0.25;
         CHECK(near(mesh.cell_width(0, 0), 0.25));
@@ -66,12 +278,19 @@ int main()
         auto invalid = mesh;
         invalid.face[0][1] = invalid.face[0][0];
         expect_throw<std::invalid_argument>([&] { invalid.allocate(); });
+        check_same_topology(invalid, mesh);
         invalid = mesh;
         invalid.face[0].pop_back();
         expect_throw<std::invalid_argument>([&] { invalid.validate_geometry(); });
         invalid = mesh;
         invalid.cells.pop_back();
         expect_throw<std::logic_error>([&] { invalid.coordinates(0); });
+        expect_throw<std::logic_error>([&] { invalid.build_topology(); });
+        check_same_topology(invalid, mesh);
+        invalid = mesh;
+        invalid.bc_lower[0] = boundary::BoundaryCondition::Reflective;
+        expect_throw<std::invalid_argument>([&] { invalid.build_topology(); });
+        check_same_topology(invalid, mesh);
         invalid = mesh;
         invalid.nghost[0] = std::numeric_limits<int>::max();
         expect_throw<std::overflow_error>([&] { invalid.ntotal(0); });
@@ -137,6 +356,7 @@ int main()
         }
         hd_core::MeshBlock built;
         built.build_mesh(cfg);
+        check_topology(built);
         CHECK(built.volume_cell.size() == built.cells.size());
         double active_volume = 0.0;
         for (std::size_t flat = 0; flat < built.cells.size(); ++flat)
@@ -241,7 +461,7 @@ int main()
         cfg.lower[0] = 0.0;
         cfg.upper[0] = 2.0;
         cfg.nactive[0] = 2;
-        cfg.boundary_lower[0] = "reflective";
+        cfg.boundary_lower[0] = cfg.boundary_upper[0] = "reflective";
         hd_core::MeshBlock sphere;
         if constexpr (hd_core::NDIM == 1)
         {

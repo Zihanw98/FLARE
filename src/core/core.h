@@ -16,7 +16,6 @@ namespace hd_core
     inline constexpr int NDIM  = HD_NDIM;
     inline constexpr int NCOMP = HD_NCOMP;
     inline constexpr int NUSER = HD_NUSER;
-    using VECDIM = std::array<double, NDIM>;
     using Index = std::array<int, NDIM>;
     inline Index Index_add_offset(const Index& index,const Index& offset)
     {

@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,10 @@ namespace hd_core
         Geometry geometry = Geometry::Cartesian;
         Index nactive{}; ///< Positive active-cell counts on each axis.
         Index nghost{};  ///< Nonnegative ghost-cell counts per side on each axis.
+
+        // Products over all axes, updated by each successful build_topology().
+        std::size_t total_count = 0;  ///< All stored cells, including ghosts.
+        std::size_t active_count = 0; ///< Active cells, excluding ghosts.
 
         /**
          * @brief Return the cell count on one axis, including both ghost regions.
@@ -75,8 +80,8 @@ namespace hd_core
         // full 4*pi shells, with signed-radius ghosts extended using r^2 dr.
         std::vector<double> volume_cell;
 
-        std::array<boundary::BoundaryCondition,NDIM> bc_upper; ///< Upper boundary condition on each axis.
-        std::array<boundary::BoundaryCondition,NDIM> bc_lower; ///< Lower boundary condition on each axis.
+        std::array<boundary::BoundaryCondition,NDIM> bc_upper{}; ///< Upper boundary condition on each axis; defaults to periodic.
+        std::array<boundary::BoundaryCondition,NDIM> bc_lower{}; ///< Lower boundary condition on each axis; defaults to periodic.
 
         /**
          * @brief Create uniformly spaced faces on one axis, including ghost faces.
@@ -169,14 +174,78 @@ namespace hd_core
         void synchronize_dual_energy();
 
         /**
-         * @brief Validate geometry and resize cell storage to include all ghost cells.
-         * @pre nactive, nghost, and faces are initialized on every axis.
+         * @brief Validate geometry, resize cell storage, and rebuild mesh topology.
+         * @pre nactive, nghost, faces, and boundary conditions are initialized on every axis.
          * @throws std::length_error If the cell count exceeds the container capacity.
          * @note Preserves existing elements when resizing and default-constructs new cells. Does not fill initial states; geometry validation errors propagate.
          */
         void allocate();
 
+        /**
+         * @brief Update cell counts, cell-index maps, and cell-face connectivity.
+         * @pre Cell storage matches the current nactive and nghost dimensions.
+         * @throws std::logic_error If storage and dimensions disagree.
+         * @throws std::invalid_argument If periodic boundaries are not paired.
+         * @note Called by allocate(). Rebuild after changing boundary conditions;
+         *       call allocate() after changing dimensions or ghost counts.
+         *       Does not require geometry caches or modify cell states. All topology
+         *       arrays and cell counts are replaced together only after construction succeeds.
+         */
+        void build_topology();
+
         std::vector<Cell> cells; ///< All cells including ghosts, with axis 0 varying fastest.
+
+        static constexpr std::size_t invalid_active_index =
+            std::numeric_limits<std::size_t>::max(); ///< Ghost-cell marker in storage_to_active.
+
+        /**
+         * @brief Map compact active-cell IDs to offsets in cells, including ghost offsets.
+         * @note Active IDs have axis 0 varying fastest: i + nx * (j + ny * k).
+         *       Built by allocate() and copied with the mesh. Call allocate() again
+         *       after changing nactive or nghost, even if cells.size() is unchanged.
+         */
+        std::vector<std::size_t> active_to_storage;
+
+        /**
+         * @brief Map offsets in cells to compact active-cell IDs.
+         * @note Has cells.size() entries. Ghost cells contain invalid_active_index.
+         *       Rebuilt together with active_to_storage by build_topology().
+         */
+        std::vector<std::size_t> storage_to_active;
+
+        /** @brief One independent face, oriented in the positive axis direction. */
+        struct FaceInfo
+        {
+            int direction = 0;
+            // Includes ghost offsets; usable with face_area[direction].at(...)
+            // and reconstruction.face(direction, ...). A periodic seam uses
+            // the lower boundary coordinate, including for the last cell's upper face.
+            Index storage_coordinates{};
+            // Compact active IDs. Physical boundary exteriors have no active cell.
+            std::size_t left_active = invalid_active_index;
+            std::size_t right_active = invalid_active_index;
+        };
+
+        struct CellFacePair
+        {
+            std::size_t lower = 0; ///< Face ID on the negative side of this cell.
+            std::size_t upper = 0; ///< Face ID on the positive side of this cell.
+        };
+
+        /**
+         * @brief Independent faces touching active cells, indexed by global face ID.
+         * @note Grouped by direction, then axis 0 fastest. Each periodic boundary
+         *       pair shares one face ID; outer ghost-only faces are excluded.
+         *       Neighbors are active IDs, not offsets in cells. Built by build_topology().
+         */
+        std::vector<FaceInfo> face_info;
+
+        /**
+         * @brief cell_faces[active_id][direction] gives the lower and upper face IDs.
+         * @note Internal and periodic neighbors share face IDs. For one active cell
+         *       on a periodic axis, lower and upper are the same face.
+         */
+        std::vector<std::array<CellFacePair, NDIM>> cell_faces;
 
         /**
          * @brief Access a cell using storage coordinates.
