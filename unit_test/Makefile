@@ -9,7 +9,7 @@ AR ?= ar
 CXXFLAGS ?= -O1 -g -std=c++17 -Wall -Wextra -pedantic
 DIMENSIONS ?= 1 2 3
 NDIM ?= 1
-AVAILABLE_TESTS := state mesh facefield godunov integrator rk2 lts_euler lts_rk2 source wave_timestep output_boundary limiter units initialization performance optimization reconstruction
+AVAILABLE_TESTS := state mesh facefield godunov integrator rk2 lts_euler lts_rk2 source wave_timestep output_boundary limiter units initialization performance optimization reconstruction species
 TESTS ?= $(AVAILABLE_TESTS)
 ifneq ($(filter-out $(AVAILABLE_TESTS),$(TESTS)),)
 $(error Unknown TESTS: $(filter-out $(AVAILABLE_TESTS),$(TESTS)))
@@ -22,7 +22,7 @@ BUILD_DIR := $(UNIT_DIR)/build/ndim$(NDIM)
 find_cpp = $(wildcard $(1)*.cpp) $(foreach dir,$(wildcard $(1)*/),$(call find_cpp,$(dir)))
 SOURCES := $(filter-out $(ROOT)/src/main.cpp,$(sort $(call find_cpp,$(ROOT)/src/)))
 OBJECTS := $(patsubst $(ROOT)/src/%.cpp,$(BUILD_DIR)/framework/%.o,$(SOURCES))
-INCLUDES := $(foreach dir,$(sort $(dir $(SOURCES))) $(ROOT)/src $(ROOT)/src/user,-I"$(dir)")
+INCLUDES := -I"$(ROOT)/third_party" $(foreach dir,$(sort $(dir $(SOURCES))) $(ROOT)/src $(ROOT)/src/user,-I"$(dir)")
 # Old tests use assert: always enable assertions, even if CXXFLAGS contains -DNDEBUG.
 FLAGS := $(INCLUDES) $(CPPFLAGS) $(CXXFLAGS) -DHD_NDIM=$(NDIM) -UNDEBUG
 LIBRARY := $(BUILD_DIR)/libflare.a

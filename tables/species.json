@@ -1,0 +1,219 @@
+{
+  "energy_reference": "Energy per particle in eV, relative to the ground state of the neutral isotope and free electrons at rest.",
+  "sources": {
+    "ionization_energies": "https://doi.org/10.18434/T4W30F",
+    "hydrogen_electron_affinity": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C12385136&Mask=20"
+  },
+  "species": [
+    {
+      "name": "H-", "name_base": "h1",
+      "A": 1, "Z": 1, "charge": -1, "energy_eV": -0.7542,
+      "ionization_lower": null, "ionization_upper": "HI"
+    },
+    {
+      "name": "HI", "name_base": "h1",
+      "A": 1, "Z": 1, "charge": 0, "energy_eV": 0,
+      "ionization_lower": "H-", "ionization_upper": "HII"
+    },
+    {
+      "name": "HII", "name_base": "h1",
+      "A": 1, "Z": 1, "charge": 1, "energy_eV": 13.598435,
+      "ionization_lower": "HI", "ionization_upper": null
+    },
+    {
+      "name": "He3_I", "name_base": "he3",
+      "A": 3, "Z": 2, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": "He3_II"
+    },
+    {
+      "name": "He3_II", "name_base": "he3",
+      "A": 3, "Z": 2, "charge": 1, "energy_eV": 24.586093,
+      "ionization_lower": "He3_I", "ionization_upper": "He3_III"
+    },
+    {
+      "name": "He3_III", "name_base": "he3",
+      "A": 3, "Z": 2, "charge": 2, "energy_eV": 79.001418,
+      "ionization_lower": "He3_II", "ionization_upper": null
+    },
+    {
+      "name": "He_I", "name_base": "he4",
+      "A": 4, "Z": 2, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": "He_II"
+    },
+    {
+      "name": "He_II", "name_base": "he4",
+      "A": 4, "Z": 2, "charge": 1, "energy_eV": 24.587389,
+      "ionization_lower": "He_I", "ionization_upper": "He_III"
+    },
+    {
+      "name": "He_III", "name_base": "he4",
+      "A": 4, "Z": 2, "charge": 2, "energy_eV": 79.005155,
+      "ionization_lower": "He_II", "ionization_upper": null
+    },
+    {
+      "name": "neut", "name_base": "neut",
+      "A": 1, "Z": 0, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "D", "name_base": "h2",
+      "A": 2, "Z": 1, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "C12", "name_base": "c12",
+      "A": 12, "Z": 6, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "C13", "name_base": "c13",
+      "A": 13, "Z": 6, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "N14", "name_base": "n14",
+      "A": 14, "Z": 7, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "N15", "name_base": "n15",
+      "A": 15, "Z": 7, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "O16", "name_base": "o16",
+      "A": 16, "Z": 8, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "O17", "name_base": "o17",
+      "A": 17, "Z": 8, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "O18", "name_base": "o18",
+      "A": 18, "Z": 8, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ne20", "name_base": "ne20",
+      "A": 20, "Z": 10, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ne22", "name_base": "ne22",
+      "A": 22, "Z": 10, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Na23", "name_base": "na23",
+      "A": 23, "Z": 11, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Mg24", "name_base": "mg24",
+      "A": 24, "Z": 12, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Mg25", "name_base": "mg25",
+      "A": 25, "Z": 12, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Mg26", "name_base": "mg26",
+      "A": 26, "Z": 12, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Al27", "name_base": "al27",
+      "A": 27, "Z": 13, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Si28", "name_base": "si28",
+      "A": 28, "Z": 14, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "S32", "name_base": "s32",
+      "A": 32, "Z": 16, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ar36", "name_base": "ar36",
+      "A": 36, "Z": 18, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ca40", "name_base": "ca40",
+      "A": 40, "Z": 20, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ti44", "name_base": "ti44",
+      "A": 44, "Z": 22, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ti48", "name_base": "ti48",
+      "A": 48, "Z": 22, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Cr48", "name_base": "cr48",
+      "A": 48, "Z": 24, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Cr52", "name_base": "cr52",
+      "A": 52, "Z": 24, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Cr60", "name_base": "cr60",
+      "A": 60, "Z": 24, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Mn55", "name_base": "mn55",
+      "A": 55, "Z": 25, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Fe52", "name_base": "fe52",
+      "A": 52, "Z": 26, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Fe54", "name_base": "fe54",
+      "A": 54, "Z": 26, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Fe56", "name_base": "fe56",
+      "A": 56, "Z": 26, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Co56", "name_base": "co56",
+      "A": 56, "Z": 27, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Co59", "name_base": "co59",
+      "A": 59, "Z": 27, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ni56", "name_base": "ni56",
+      "A": 56, "Z": 28, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    },
+    {
+      "name": "Ni58", "name_base": "ni58",
+      "A": 58, "Z": 28, "charge": 0, "energy_eV": 0,
+      "ionization_lower": null, "ionization_upper": null
+    }
+  ]
+}

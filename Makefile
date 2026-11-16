@@ -48,7 +48,7 @@ DEPS := $(OBJECTS:.o=.d)
 # The framework's config is a template, not a fallback include directory.
 # Headers such as user/user_api.h remain accessible through the src include path.
 FRAMEWORK_INCLUDE_DIRS := $(filter-out $(FLARE_ROOT)/src/user,$(sort $(patsubst %/,%,$(dir $(FRAMEWORK_SOURCES)))))
-INCLUDE_FLAGS := -I"$(PROBLEM_DIR)" $(foreach dir,$(FRAMEWORK_INCLUDE_DIRS),-I"$(dir)")
+INCLUDE_FLAGS := -I"$(PROBLEM_DIR)" -I"$(FLARE_ROOT)/third_party" $(foreach dir,$(FRAMEWORK_INCLUDE_DIRS),-I"$(dir)")
 override USER_CONFIG := $(PROBLEM_DIR)/user_config.h
 override USER_CONFIG_FLAGS := -include "$(USER_CONFIG)"
 # Also reject missing configs after setup, even when an old executable exists.

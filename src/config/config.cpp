@@ -215,7 +215,17 @@ namespace config
             }},
             {"mesa_radius_outer",[&cfg](const std::string& v){
                 cfg.mesa_radius_outer = parse_value<double>(v);
-            }}
+            }},
+            {"enable_composition",[&cfg](const std::string& v){
+                cfg.enable_composition = parse_value<bool>(v);
+            }},
+            {"composition_activate_file",[&cfg](const std::string& v){
+                cfg.composition_activate_file = v;
+            }},
+            {"equation_of_state",[&cfg](const std::string& v){
+                cfg.equation_of_state = v;
+            }
+            }
         };
 
         constexpr std::array<const char*, 3> axes{"x", "y", "z"};
@@ -304,6 +314,7 @@ namespace config
         validate_cfg(cfg,seen);
         return cfg;
     }
+
     void validate_cfg(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
     {
         hydro::parse_limiter(cfg.limiter);

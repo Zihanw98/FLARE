@@ -1,4 +1,5 @@
 #include "config/config.h"
+#include "microphysics/composition/species.h"
 #include "hydro/riemann/factory.h"
 #include "hydro/spatial.h"
 #include "time/integrator.h"
@@ -16,6 +17,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+
 /**
  * @brief The main entry of this code
  * @details What we do in this main code? This gives an outline of how the code works. 
@@ -92,6 +94,7 @@ int main(int argc, char* argv[])
             parameter_file = "parameters.txt";
         }
         auto cfg_temp = config::ReadParameters(parameter_file);
+        const auto active_species = hd_microphysics::load_run_species(cfg_temp, parameter_file);
         std::cout << "Loaded parameters from: "
                   << parameter_file << '\n';
         auto hooks = hd_user::make_user_hooks();

@@ -88,6 +88,11 @@ namespace config
         double mesa_radius_outer = -1.0;
         double mesa_radius_inner = -1.0;
 
+        bool enable_composition = false;
+
+        std::string composition_activate_file = "composition.txt"; ///< Relative to the parameter file.
+
+        std::string equation_of_state = "IdealGas_Default";
     };
     /**
      * @brief Read and validate a key=value simulation parameter file.

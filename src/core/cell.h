@@ -11,6 +11,11 @@ namespace hd_core
     {
         Conserved U;
         double gamma = 5.0/3;
+        double temperature = 1.0;
+        double n_e_free;              //number density of free electron
+        double Y_e_free;             //free electron per baryon
+        double n_b;                 //number density of baryon
+        double mean_molecular_weight;   //mu, mean molecular weight
         // Accumulated density of energy added/removed by cold-cell synchronization.
         double dual_energy_correction = 0.0;
         void synchronize_dual_energy()
