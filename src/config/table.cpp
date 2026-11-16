@@ -6,9 +6,47 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
+#include <utility>
 
 namespace config
 {
+    CompositionTable read_composition_table(const std::string& filename)
+    {
+        std::ifstream file(filename);
+        if (!file.is_open())
+            throw std::runtime_error("Cannot open table: " + filename);
+
+        CompositionTable table;
+        std::string line;
+        for (std::size_t line_number = 1; std::getline(file, line); ++line_number)
+        {
+            const auto comment = line.find('#');
+            if (comment != std::string::npos)
+                line.erase(comment);
+
+            std::istringstream fields(line);
+            CompositionRow row;
+            if (!(fields >> row.name_base))
+                continue;
+
+            // 先按空白分列，再完整解析整数，避免把 0+1、1.5 等误读成合法电荷。
+            std::string lower, upper, extra;
+            const auto parse_charge = [](const std::string& token, int& charge) {
+                std::istringstream number(token);
+                return (number >> charge) && number.eof();
+            };
+            if (!(fields >> lower >> upper) || (fields >> extra) ||
+                !parse_charge(lower, row.q_min) || !parse_charge(upper, row.q_max))
+                throw std::runtime_error(filename + ":" + std::to_string(line_number)
+                    + ": expected name_base q_min q_max with integer charges");
+
+            table.data.push_back(std::move(row));
+        }
+        if (file.bad())
+            throw std::runtime_error("Failed to read table: " + filename);
+        return table;
+    }
+
     Table read_table(const std::string& filename,
                     std::size_t skip_rows,
                     bool has_header)

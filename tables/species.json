@@ -1,53 +1,57 @@
 {
   "energy_reference": "Energy per particle in eV, relative to the ground state of the neutral isotope and free electrons at rest.",
+  "ground_weight_reference": "Dimensionless electronic ground-state statistical weight g = 2J+1 for Saha ionization of h1, he3 and he4; bare nuclei have electronic weight 1. Nuclear-spin factors are omitted because they cancel between ionization stages of the same isotope. Other species are not yet tabulated; the reader retains the default weight of 1 for missing values.",
   "sources": {
+    "hydrogen_ground_state": "https://physics.nist.gov/PhysRefData/Handbook/Tables/hydrogentable1.htm",
+    "helium_ground_states": "https://physics.nist.gov/PhysRefData/Handbook/Tables/heliumtable1.htm",
+    "hydrogen_anion_ground_state": "https://arxiv.org/abs/1506.06487",
     "ionization_energies": "https://doi.org/10.18434/T4W30F",
     "hydrogen_electron_affinity": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C12385136&Mask=20"
   },
   "species": [
     {
       "name": "H-", "name_base": "h1",
-      "A": 1, "Z": 1, "charge": -1, "energy_eV": -0.7542,
+      "A": 1, "Z": 1, "charge": -1, "energy_eV": -0.7542, "ground_weight": 1,
       "ionization_lower": null, "ionization_upper": "HI"
     },
     {
       "name": "HI", "name_base": "h1",
-      "A": 1, "Z": 1, "charge": 0, "energy_eV": 0,
+      "A": 1, "Z": 1, "charge": 0, "energy_eV": 0, "ground_weight": 2,
       "ionization_lower": "H-", "ionization_upper": "HII"
     },
     {
       "name": "HII", "name_base": "h1",
-      "A": 1, "Z": 1, "charge": 1, "energy_eV": 13.598435,
+      "A": 1, "Z": 1, "charge": 1, "energy_eV": 13.598435, "ground_weight": 1,
       "ionization_lower": "HI", "ionization_upper": null
     },
     {
       "name": "He3_I", "name_base": "he3",
-      "A": 3, "Z": 2, "charge": 0, "energy_eV": 0,
+      "A": 3, "Z": 2, "charge": 0, "energy_eV": 0, "ground_weight": 1,
       "ionization_lower": null, "ionization_upper": "He3_II"
     },
     {
       "name": "He3_II", "name_base": "he3",
-      "A": 3, "Z": 2, "charge": 1, "energy_eV": 24.586093,
+      "A": 3, "Z": 2, "charge": 1, "energy_eV": 24.586093, "ground_weight": 2,
       "ionization_lower": "He3_I", "ionization_upper": "He3_III"
     },
     {
       "name": "He3_III", "name_base": "he3",
-      "A": 3, "Z": 2, "charge": 2, "energy_eV": 79.001418,
+      "A": 3, "Z": 2, "charge": 2, "energy_eV": 79.001418, "ground_weight": 1,
       "ionization_lower": "He3_II", "ionization_upper": null
     },
     {
       "name": "He_I", "name_base": "he4",
-      "A": 4, "Z": 2, "charge": 0, "energy_eV": 0,
+      "A": 4, "Z": 2, "charge": 0, "energy_eV": 0, "ground_weight": 1,
       "ionization_lower": null, "ionization_upper": "He_II"
     },
     {
       "name": "He_II", "name_base": "he4",
-      "A": 4, "Z": 2, "charge": 1, "energy_eV": 24.587389,
+      "A": 4, "Z": 2, "charge": 1, "energy_eV": 24.587389, "ground_weight": 2,
       "ionization_lower": "He_I", "ionization_upper": "He_III"
     },
     {
       "name": "He_III", "name_base": "he4",
-      "A": 4, "Z": 2, "charge": 2, "energy_eV": 79.005155,
+      "A": 4, "Z": 2, "charge": 2, "energy_eV": 79.005155, "ground_weight": 1,
       "ionization_lower": "He_II", "ionization_upper": null
     },
     {

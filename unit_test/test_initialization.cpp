@@ -2,6 +2,7 @@
 #include "config/config.h"
 #include "config/read_profile.h"
 #include "config/read_mesa_profile.h"
+#include "config/table.h"
 #include "physcon/unit.h"
 #include "utils/hdmath.h"
 #include "user/user_api.h"
@@ -10,10 +11,58 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <unordered_set>
 
 namespace
 {
+void composition_table(const std::filesystem::path& directory)
+{
+    const auto path = (directory / "composition.txt").string();
+    {
+        std::ofstream out(path);
+        out << "# name_base q_min q_max\r\n\n"
+               "  \t# indented comment\n"
+               "h1 -1 +1 # include H-\n"
+               "\t he4\t0\t2# inline comment without a space\r\n"
+               "  \t \n# comment between rows\n"
+               "he3 0 0";
+    }
+    const auto table = config::read_composition_table(path);
+    CHECK(table.data.size() == 3);
+    CHECK(table.data[0].name_base == "h1" && table.data[0].q_min == -1 && table.data[0].q_max == 1);
+    CHECK(table.data[1].name_base == "he4" && table.data[1].q_min == 0 && table.data[1].q_max == 2);
+    CHECK(table.data[2].name_base == "he3" && table.data[2].q_min == 0 && table.data[2].q_max == 0);
+
+    for (const char* invalid : {"h1", "h1 0", "h1 0 1 extra", "h1 0+1", "h1 0 1.5",
+                                "h1 -0.5 1", "h1 0 1e2", "h1 0 bad"})
+    {
+        std::ofstream(path) << invalid;
+        expect_throw<std::runtime_error>([&] { config::read_composition_table(path); });
+    }
+    {
+        std::ofstream out(path);
+        out << "h1 " << std::numeric_limits<int>::min() << ' ' << std::numeric_limits<int>::max();
+    }
+    const auto limits = config::read_composition_table(path);
+    CHECK(limits.data[0].q_min == std::numeric_limits<int>::min());
+    CHECK(limits.data[0].q_max == std::numeric_limits<int>::max());
+    {
+        std::ofstream out(path);
+        out << "h1 0 " << static_cast<long long>(std::numeric_limits<int>::max()) + 1;
+    }
+    expect_throw<std::runtime_error>([&] { config::read_composition_table(path); });
+    {
+        std::ofstream out(path);
+        out << "# comments only\n  # another comment\n\t\n";
+    }
+    CHECK(config::read_composition_table(path).data.empty());
+    { std::ofstream out(path); }
+    CHECK(config::read_composition_table(path).data.empty());
+    std::filesystem::remove(path);
+    expect_throw<std::runtime_error>([&] { config::read_composition_table(path); });
+}
+
 config::SimulationConfig configuration()
 {
     config::SimulationConfig cfg;
@@ -184,10 +233,11 @@ void mesa(const std::filesystem::path& directory)
 
 int main(int argc, char** argv)
 {
-    return run_test("file and MESA initialization", [&] {
+    return run_test("composition tables, file and MESA initialization", [&] {
         CHECK(argc == 2);
         const std::filesystem::path directory(argv[1]);
         std::filesystem::create_directories(directory);
+        composition_table(directory);
         file_profile(directory);
         mesa(directory);
         CHECK(near(hdmath::interp_linear({0, 1, 2, 3}, {0, 1, 0, 1}, {0.25, 0.75}, 2), 1.75));
