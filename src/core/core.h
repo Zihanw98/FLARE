@@ -519,6 +519,10 @@ namespace hd_core
         W[INTERNAL_ENERGY] = data[PRE] / (gamma - 1);
         W[ENERGY] = W[INTERNAL_ENERGY] + 0.5 * W[RHO] * speed_squared;
         W.validate(gamma);
+        for(int k=0;k<NCOMP;k++)
+        {
+            W[COMP(k)] = data[COMP(k)] * data[RHO];
+        }
         return W;
     }
     inline Primitives Conserved::to_Primtivies(double gamma) const
@@ -540,6 +544,10 @@ namespace hd_core
         W[PRE] = (gamma - 1) * internal_energy();
         W.update_internal_energy(gamma);
         W.validate(gamma);
+        for(int k=0;k<NCOMP;k++)
+        {
+            W[COMP(k)] = data[COMP(k)] / data[RHO];
+        }
         return W;
     }
 }

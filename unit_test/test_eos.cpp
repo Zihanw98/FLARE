@@ -1,6 +1,5 @@
 #include "test_support.h"
 #include "core/cell.h"
-#include "microphysics/composition/species.h"
 #include "microphysics/eos/eos.h"
 #include <array>
 
@@ -23,7 +22,6 @@ int main()
             {"Ionized_Radiative", Equation_of_State::Ionized_Radiative},
         }};
         hd_core::Cell cell{};
-        const hd_microphysics::SpeciesTable species{};
         const auto initial_state = cell.U.data;
         const auto initial_gamma = cell.gamma;
         const auto initial_temperature = cell.temperature;
@@ -36,7 +34,7 @@ int main()
 
             // 调用公共指针必须到达选中的占位实现，并明确拒绝未实现的物理计算。
             bool unavailable = false;
-            try { eos(cell, species); }
+            try { eos(cell); }
             catch (const std::logic_error& error)
             {
                 unavailable = true;

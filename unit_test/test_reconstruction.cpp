@@ -151,6 +151,54 @@ void monotone_nonuniform(int direction)
         CHECK(fixed.second[hd_core::PRE] < 1.0); // Preserve the gradient.
     }
 }
+
+void species_faces(int direction)
+{
+    auto mesh = make_mesh();
+    auto index = mesh.nghost;
+    index[direction] = 3;
+    // Only the first species has a nonzero minmod slope in cell 3.
+    for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
+    {
+        const int i = mesh.coordinates(flat)[direction];
+        hd_core::Primitives w{};
+        w[hd_core::RHO] = 2.0;
+        w[hd_core::PRE] = 1.0;
+        w[hd_core::COMP(0)] = i < 3 ? 0.1 : i == 3 ? 0.4 : 0.5;
+        w[hd_core::COMP(1)] = i < 3 ? 0.2 : i == 3 ? 0.3 : 0.15;
+        w[hd_core::COMP(2)] = 1.0 - w[hd_core::COMP(0)] - w[hd_core::COMP(1)];
+        mesh.cells[flat] = hd_core::Cell(w, 1.4);
+    }
+    auto right = index;
+    ++right[direction];
+    const double spacing = mesh.cell_center(direction, right) - mesh.cell_center(direction, index);
+    const double change = (0.5 - 0.4) / spacing * mesh.cell_width(direction, index) / 2;
+    for (const auto method : {Reconstructor::PLM, Reconstructor::PLM_corrected})
+    {
+        hydro::ReconstructionCache cache(mesh, method, Limiter::minmod, 1.5);
+        for (int side : {-1, 1})
+        {
+            const auto& face_index = side < 0 ? index : right;
+            const auto cached = cache.face(direction, face_index);
+            const auto direct = hydro::Reconstruct(method, mesh, direction, face_index, Limiter::minmod);
+            CHECK(cached.first.data == direct.first.data && cached.second.data == direct.second.data);
+            const auto& face = side < 0 ? cached.second : cached.first;
+            const double sum = 1.0 + side * change;
+            CHECK(near(face[hd_core::COMP(0)], (0.4 + side * change) / sum));
+            CHECK(near(face[hd_core::COMP(1)], 0.3 / sum));
+            CHECK(near(face[hd_core::COMP(2)], 0.3 / sum));
+        }
+
+        // Change only the neighboring composition for the next stage.
+        auto next_stage = mesh;
+        next_stage.at(right).U = mesh.at(index).U;
+        cache.reset(next_stage, method, Limiter::minmod, 1.5);
+        const auto refreshed = cache.face(direction, right);
+        const auto direct = hydro::Reconstruct(method, next_stage, direction, right, Limiter::minmod);
+        CHECK(refreshed.first.data == direct.first.data);
+        CHECK(near(refreshed.first[hd_core::COMP(0)], 0.4));
+    }
+}
 }
 
 int main()
@@ -164,7 +212,10 @@ int main()
         for (double scale : {1.0, 1e-25})
             constrained(d, component, scale);
         for (int d = 0; d < hd_core::NDIM; ++d)
+        {
             monotone_nonuniform(d);
+            if constexpr (hd_core::NCOMP >= 3) species_faces(d);
+        }
         cache_and_unchanged();
     });
 }

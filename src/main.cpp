@@ -9,6 +9,7 @@
 #include "io/output.h"
 #include "config/read_mesa_profile.h"
 #include "utils/performance.h"
+#include "microphysics/composition/species.h"
 #include <cstddef>
 #include <exception>
 #include <fstream>
@@ -93,6 +94,7 @@ int main(int argc, char* argv[])
             parameter_file = "parameters.txt";
         }
         auto cfg_temp = config::ReadParameters(parameter_file);
+        hd_microphysics::initialize_species_table(cfg_temp);
         std::cout << "Loaded parameters from: "
                   << parameter_file << '\n';
         auto hooks = hd_user::make_user_hooks();

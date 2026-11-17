@@ -4,6 +4,7 @@
  */
 #include "read_profile.h"
 #include "table.h"
+#include "microphysics/composition/species.h"
 #include "core/mesh.h"
 #include <algorithm>
 #include <array>
@@ -40,7 +41,40 @@ void read_profile(const std::string& filename, hd_core::MeshBlock& mesh)
     const auto pre = column("pre");
     const auto gamma = column("gamma");
     const std::array<std::size_t, 3> velocity{column("vx"), column("vy"), column("vz")};
+    std::vector<std::pair<int,int>> column_species = {};
+    //Check if every species is set
+    if(HD_NCOMP!=0)
+    {
+        for (const auto& species : hd_microphysics::species_table.species_active)
+        {
+            const auto it = std::find(table.headers.begin(), table.headers.end(), species.name);
+            if (it == table.headers.end())
+                throw std::runtime_error("Missing species column: " + species.name);
+            const auto col = static_cast<int>(it - table.headers.begin());
+            const auto idx = static_cast<int>(hd_microphysics::species_table.find_species_from_available_table_index(species.name));
+            column_species.push_back({col,idx});
+        }
+        if(column_species.size()!=HD_NCOMP)
+        {
+            throw std::runtime_error("Number of species doesn't equal to NCOMP");
+        }
+        for (std::size_t i = 0; i < table.data.size(); ++i)
+        {
+            const auto& row = table.data[i];
+            double X_sum = 0.0;
 
+            for (const auto col : column_species)
+                X_sum += row[col.first];
+
+            if (std::abs(X_sum - 1.0) >= 1e-6)
+            {
+                throw std::runtime_error(
+                    "Profile data row " + std::to_string(i + 1) +
+                    ": mass fractions sum to " + std::to_string(X_sum));
+            }
+        }
+         
+    }
     std::vector<hd_core::Cell> states;
     states.reserve(active_count);
     for (const auto& row : table.data)
@@ -48,6 +82,13 @@ void read_profile(const std::string& filename, hd_core::MeshBlock& mesh)
         hd_core::Primitives state{};
         state[hd_core::RHO] = row[rho];
         state[hd_core::PRE] = row[pre];
+        if(HD_NCOMP!=0)
+        {
+            for(auto col: column_species)
+            {
+                state[hd_core::COMP(col.second)] = row[col.first];
+            }
+        }
         for (int d = 0; d < hd_core::NDIM; ++d)
             state[hd_core::VEL(d)] = row[velocity[d]];
         try

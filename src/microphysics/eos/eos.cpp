@@ -9,27 +9,27 @@ namespace hd_microphysics
 namespace
 {
     // 在下面对应函数中补充物理计算，保持 EoSFunction 的公共签名不变。
-    void ideal_gas_default(hd_core::Cell&, const SpeciesTable&)
+    void ideal_gas_default(hd_core::Cell&)
     {
         throw std::logic_error("EoS IdealGas_Default is not implemented");
     }
 
-    void ideal_gas_single(hd_core::Cell&, const SpeciesTable&)
+    void ideal_gas_single(hd_core::Cell&)
     {
         throw std::logic_error("EoS IdealGas_Single is not implemented");
     }
 
-    void ideal_gas_mixed(hd_core::Cell&, const SpeciesTable&)
+    void ideal_gas_mixed(hd_core::Cell&)
     {
         throw std::logic_error("EoS IdealGas_Mixed is not implemented");
     }
 
-    void ionized(hd_core::Cell&, const SpeciesTable&)
+    void ionized(hd_core::Cell&)
     {
         throw std::logic_error("EoS Ionized is not implemented");
     }
 
-    void ionized_radiative(hd_core::Cell&, const SpeciesTable&)
+    void ionized_radiative(hd_core::Cell&)
     {
         throw std::logic_error("EoS Ionized_Radiative is not implemented");
     }

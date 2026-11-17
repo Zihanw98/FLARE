@@ -11,6 +11,46 @@ namespace hydro
 {
     namespace
     {
+        void compute_species_slopes(const hd_core::Primitives& left, const hd_core::Primitives& center,
+                                    const hd_core::Primitives& right, double left_spacing, double right_spacing,
+                                    Limiter limiter, double beta, hd_core::Primitives& slope)
+        {
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+            {
+                const int j = hd_core::COMP(k);
+                slope[j] = limited_slope((center[j] - left[j]) / left_spacing,
+                                         (right[j] - center[j]) / right_spacing, limiter, beta);
+            }
+        }
+
+        void reconstruct_species_face(const hd_core::Primitives& center, const hd_core::Primitives& slope,
+                                      double offset, hd_core::Primitives& face)
+        {
+            if constexpr (hd_core::NCOMP == 0) return;
+            if (center[hd_core::RHO] == 0.0)
+            {
+                // A vacuum cell has no composition to supply to a gas face.
+                face = center;
+                return;
+            }
+
+            double sum = 0.0;
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+            {
+                const int j = hd_core::COMP(k);
+                face[j] = std::clamp(center[j] + offset * slope[j], 0.0, 1.0);
+                sum += face[j];
+            }
+            // Independent limiters can change the sum. Normalize this side of the face
+            // so its species fluxes add up to the Riemann solver's mass flux.
+            if (sum == 1.0) return;
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+            {
+                const int j = hd_core::COMP(k);
+                face[j] = sum > 0.0 ? face[j] / sum : center[j];
+            }
+        }
+
         // Limit both extrapolations W +/- slope*width/2 with the same factor.
         // Apply after the user's slope limiter; leave unconstrained slopes intact.
         void correct_positive_slope(const hd_core::Primitives& center,
@@ -103,10 +143,12 @@ namespace hydro
             const auto& right_state = primitive(cell_flat + strides_[direction]);
             const double left_spacing = centers_[direction][axis_index] - centers_[direction][axis_index - 1];
             const double right_spacing = centers_[direction][axis_index + 1] - centers_[direction][axis_index];
-            // Only independent rho,v,p have slopes; e/rho is derived at the face.
+            // Reconstruct rho, v, p and mass fractions. Derive e/rho at the face.
             for (int k = 0; k < hd_core::INTERNAL_ENERGY; ++k)
                 slopes_[direction][cell_flat][k] = limited_slope((center_state[k]-left_state[k])/left_spacing,
                     (right_state[k]-center_state[k])/right_spacing, limiter_, beta_);
+            compute_species_slopes(left_state, center_state, right_state, left_spacing, right_spacing,
+                                   limiter_, beta_, slopes_[direction][cell_flat]);
             if (method_ == Reconstructor::PLM_corrected)
                 correct_positive_slope(center_state, slopes_[direction][cell_flat],
                                        widths_[direction][axis_index]);
@@ -125,25 +167,31 @@ namespace hydro
             throw std::out_of_range("Invalid reconstruction left cell");
         const auto left_flat = right_flat - strides_[direction];
         // Face states are copies: extrapolation must not change cached cell centers.
-        auto left_state = primitive(left_flat);
-        auto right_state = primitive(right_flat);
+        const auto& left_center = primitive(left_flat);
+        const auto& right_center = primitive(right_flat);
+        auto left_state = left_center;
+        auto right_state = right_center;
         if (method_ == Reconstructor::PCM) return {left_state, right_state};
         if (right_index[direction] < 2 || right_index[direction] + 1 >= mesh_->ntotal(direction))
             throw std::out_of_range("Invalid PLM stencil");
         const auto& left_slope = slope(direction, left_flat, right_index[direction] - 1);
         const auto& right_slope = slope(direction, right_flat, right_index[direction]);
+        const double left_width = widths_[direction][right_index[direction] - 1];
+        const double right_width = widths_[direction][right_index[direction]];
         for (int k = 0; k < hd_core::INTERNAL_ENERGY; ++k)
         {
             // Preserve the original multiply/divide order for byte compatibility.
-            left_state[k] += left_slope[k] * widths_[direction][right_index[direction] - 1] / 2;
-            right_state[k] -= right_slope[k] * widths_[direction][right_index[direction]] / 2;
+            left_state[k] += left_slope[k] * left_width / 2;
+            right_state[k] -= right_slope[k] * right_width / 2;
         }
+        reconstruct_species_face(left_center, left_slope, left_width / 2, left_state);
+        reconstruct_species_face(right_center, right_slope, -right_width / 2, right_state);
         left_state.update_internal_energy(mesh_->cells[left_flat].gamma);
         right_state.update_internal_energy(mesh_->cells[right_flat].gamma);
         try { left_state.validate(mesh_->cells[left_flat].gamma); }
-        catch (const std::invalid_argument&) { left_state = primitive(left_flat); }
+        catch (const std::invalid_argument&) { left_state = left_center; }
         try { right_state.validate(mesh_->cells[right_flat].gamma); }
-        catch (const std::invalid_argument&) { right_state = primitive(right_flat); }
+        catch (const std::invalid_argument&) { right_state = right_center; }
         return {left_state, right_state};
     }
 
@@ -226,16 +274,22 @@ namespace hydro
             slope_left[i] = limited_slope((q_l[i]-q_ll[i])/dx_l,(q_r[i]-q_l[i])/dx_m,limiter,limiter_beta);
             slope_right[i] = limited_slope((q_r[i]-q_l[i])/dx_m,(q_rr[i]-q_r[i])/dx_r,limiter,limiter_beta);
         }
+        compute_species_slopes(q_ll, q_l, q_r, dx_l, dx_m, limiter, limiter_beta, slope_left);
+        compute_species_slopes(q_l, q_r, q_rr, dx_m, dx_r, limiter, limiter_beta, slope_right);
+        const double left_width = mesh.cell_width(direction, left_index);
+        const double right_width = mesh.cell_width(direction, right_index);
         if (corrected)
         {
-            correct_positive_slope(q_l, slope_left, mesh.cell_width(direction,left_index));
-            correct_positive_slope(q_r, slope_right, mesh.cell_width(direction,right_index));
+            correct_positive_slope(q_l, slope_left, left_width);
+            correct_positive_slope(q_r, slope_right, right_width);
         }
         for(int i=0 ; i<hd_core::INTERNAL_ENERGY; i++)
         {
-            WL[i] += slope_left[i] * mesh.cell_width(direction,left_index)/2;
-            WR[i] -= slope_right[i] * mesh.cell_width(direction,right_index)/2;
+            WL[i] += slope_left[i] * left_width/2;
+            WR[i] -= slope_right[i] * right_width/2;
         }
+        reconstruct_species_face(q_l, slope_left, left_width / 2, WL);
+        reconstruct_species_face(q_r, slope_right, -right_width / 2, WR);
         WL.update_internal_energy(gamma_L);
         WR.update_internal_energy(gamma_R);
         try

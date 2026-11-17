@@ -6,6 +6,7 @@
 #include "utils.h"
 #include "hydro/limiter/limiter.h"
 #include <array>
+#include <filesystem>
 #include <string>         // std::string、std::getline、std::to_string
 #include <sstream>        // std::istringstream
 #include <istream>        // std::ws
@@ -312,6 +313,9 @@ namespace config
         if (file.bad())
             throw std::runtime_error("Failed to read parameter file: " + filename);
         validate_cfg(cfg,seen);
+        if (cfg.enable_composition)
+            cfg.composition_activate_file = (std::filesystem::path(filename).parent_path()
+                                             / cfg.composition_activate_file).string();
         return cfg;
     }
 

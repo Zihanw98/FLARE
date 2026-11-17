@@ -8,8 +8,6 @@ namespace hd_core
 
 namespace hd_microphysics
 {
-    struct SpeciesTable;
-
     enum struct Equation_of_State
     {
         IdealGas_Default,
@@ -19,9 +17,8 @@ namespace hd_microphysics
         Ionized_Radiative
     };
 
-    // 所有 EoS 使用相同签名：更新当前 cell，物种表只读。
-    // 调用者保存此指针，之后直接 eos(cell, species)，无需再判断 EoS 类型。
-    using EoSFunction = void (*)(hd_core::Cell& cell, const SpeciesTable& species);
+    // EOS implementations that need composition read the shared species_table.
+    using EoSFunction = void (*)(hd_core::Cell& cell);
 
     // 启动时解析配置名称（忽略大小写），未知名称抛出 invalid_argument。
     Equation_of_State parse_equation_of_state(const std::string& name);

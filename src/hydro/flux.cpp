@@ -31,6 +31,11 @@ namespace hydro
         }
         F[hd_core::INTERNAL_ENERGY] = U[hd_core::INTERNAL_ENERGY] * v_n;
         F[hd_core::ENERGY] = (U[hd_core::ENERGY] + p) * v_n;
+        for (int k = 0; k < hd_core::NCOMP; ++k)
+        {
+            const int idx = hd_core::COMP(k);
+            F[idx] = F[hd_core::RHO] * W[idx];
+        }
         return F;
     }
 }

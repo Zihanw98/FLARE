@@ -46,6 +46,7 @@ namespace hydro
         double beta_;
         std::vector<hd_core::Primitives> primitives_;
         std::vector<std::uint64_t> primitive_epoch_;
+        // Both faces of a cell reuse its hydro and mass-fraction slopes in this direction.
         std::array<std::vector<hd_core::Primitives>, hd_core::NDIM> slopes_;
         std::array<std::vector<std::uint64_t>, hd_core::NDIM> slope_epoch_;
         std::uint64_t epoch_ = 0;
