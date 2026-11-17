@@ -7,6 +7,7 @@
 #include "core/mesh.h"
 #include "user/user_api.h"
 #include "physcon/unit.h"
+#include "microphysics/composition/species.h"
 #include "utils/performance.h"
 #include <algorithm>
 #include <array>
@@ -70,6 +71,14 @@ namespace io
                 << "# unit_length=" << physcon::units.unit_length << '\n'
                 << "# unit_time=" << physcon::units.unit_time << '\n'
                 << "# unit_temperature=" << physcon::units.unit_temperature << '\n';
+            // Keep comp_k columns backward compatible, but identify their physical
+            // species and mass-number convention for independent post-processing.
+            const auto& species = hd_microphysics::species_table.species_active;
+            if (species.size() == static_cast<std::size_t>(hd_core::NCOMP))
+                for (int k = 0; k < hd_core::NCOMP; ++k)
+                    csv << "# comp_" << k << "_name=" << species[k].name << '\n'
+                        << "# comp_" << k << "_A=" << species[k].A << '\n'
+                        << "# comp_" << k << "_charge=" << species[k].charge << '\n';
             csv << "x,y,z,gamma,rho,vx,vy,vz,p";
             for (int k = 0; k < hd_core::NCOMP; ++k)
                 csv << ",comp_" << k;

@@ -1,0 +1,39 @@
+# Uniform 50 x 50 grid; left H (rho=1, P=1), right He (rho=4, P=0.1).
+# Equal initial nucleus number densities; primitive states come from profile.dat.
+geometry = Cartesian
+nxa = 50
+nya = 50
+nxg = 2
+nyg = 2
+x_lower = 0.0
+x_upper = 1.0
+y_lower = 0.0
+y_upper = 1.0
+init_mesh_from_file = false
+init_mesh_uniform_type = linear
+init_profile_from_file = true
+init_profile_file_name = profile.dat
+
+gamma = 1.6666666666666667
+enable_composition = true
+composition_activate_file = composition.txt
+
+boundary_x_lower = periodic
+boundary_x_upper = periodic
+boundary_y_lower = periodic
+boundary_y_upper = periodic
+
+t_end = 10
+cfl = 0.35
+maxsteps = 10000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
+
+output_step_every = 20
+output_directory = output
+output_suffix = hhe_profile

@@ -93,6 +93,7 @@ namespace config
         std::string composition_activate_file = "composition.txt"; ///< Relative to the parameter file.
 
         std::string equation_of_state = "IdealGas_Default";
+        double mean_molecular_weight_default = 1.0;
     };
     /**
      * @brief Read and validate a key=value simulation parameter file.

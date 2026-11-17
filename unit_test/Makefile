@@ -9,8 +9,9 @@ AR ?= ar
 CXXFLAGS ?= -O1 -g -std=c++17 -Wall -Wextra -pedantic
 DIMENSIONS ?= 1 2 3
 NDIM ?= 1
-AVAILABLE_TESTS := state mesh facefield godunov integrator rk2 lts_euler lts_rk2 source wave_timestep output_boundary limiter units initialization performance optimization reconstruction species eos
-TESTS ?= $(AVAILABLE_TESTS)
+AVAILABLE_TESTS := state mesh facefield godunov integrator rk2 lts_euler lts_rk2 source wave_timestep output_boundary limiter units initialization performance optimization reconstruction species eos profile_composition
+# The dedicated isotope fixture requires HD_NCOMP=10; see README.md.
+TESTS ?= $(filter-out profile_composition,$(AVAILABLE_TESTS))
 ifneq ($(filter-out $(AVAILABLE_TESTS),$(TESTS)),)
 $(error Unknown TESTS: $(filter-out $(AVAILABLE_TESTS),$(TESTS)))
 endif

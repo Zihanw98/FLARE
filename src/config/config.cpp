@@ -225,7 +225,11 @@ namespace config
             }},
             {"equation_of_state",[&cfg](const std::string& v){
                 cfg.equation_of_state = v;
+            }},
+            {"mean_molecular_weight_default",[&cfg](const std::string& v){
+                cfg.mean_molecular_weight_default = parse_value<double>(v);
             }
+
             }
         };
 

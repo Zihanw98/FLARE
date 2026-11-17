@@ -39,5 +39,6 @@ namespace physcon
         sigma_SB = sigma_SB_ * unit_time * std::pow(unit_length,2)
                  * std::pow(unit_temperature,4) / unit_energy;
         a_Rad = 4.0 * sigma_SB / c;
+        R_g = k_B / m_u;
     }
 }

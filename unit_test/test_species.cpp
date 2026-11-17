@@ -61,6 +61,16 @@ int main(int argc, char** argv)
         expect_throw<std::out_of_range>([&] { active.find_species_from_available_table_index(12, 6, 0); });
         CHECK(!active.find_species_from_available_table(4, 2, 0));
 
+        CHECK(active.find_ionization_state_indices(2, 3) == std::vector<int>({3, 2}));
+        CHECK(active.find_ionization_state_indices(2, 4) == std::vector<int>({1}));
+        CHECK(active.find_ionization_state_indices(6, 12).empty());
+        CHECK(hd_microphysics::SpeciesTable{}.find_ionization_state_indices(1, 1).empty());
+        // Charge ordering must not depend on table ordering; include the negative ion.
+        active.species_active = {all[2], all[0], all[1], all[7], all[3], all[6], all[4], all[8], all[5]};
+        CHECK(active.find_ionization_state_indices(1, 1) == std::vector<int>({1, 2, 0}));
+        CHECK(active.find_ionization_state_indices(2, 3) == std::vector<int>({4, 6, 8}));
+        CHECK(active.find_ionization_state_indices(2, 4) == std::vector<int>({5, 3, 7}));
+
         // 换一个文件顺序：map 的 key 跟随全表下标，邻居仍保存名称，整数索引仍为空。
         const auto custom_file = directory / "custom.json";
         auto reordered = document;

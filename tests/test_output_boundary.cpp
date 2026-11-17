@@ -5,6 +5,7 @@
 #include "io/output.h"
 #include "user/user_api.h"
 #include "physcon/unit.h"
+#include "microphysics/composition/species.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -69,6 +70,8 @@ namespace
             hd_core::Primitives W{};
             W[hd_core::RHO] = 1.0 + 0.01 * f;
             W[hd_core::PRE] = 2.0 + 0.02 * f;
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+                W[hd_core::COMP(k)] = 2.0*(k+1)/(hd_core::NCOMP*(hd_core::NCOMP+1.0));
             for (int d = 0; d < hd_core::NDIM; ++d)
                 W[hd_core::VEL(d)] = -0.1 * (d + 1);
             mesh.cells[f] = hd_core::Cell(W, 1.4 + 0.0001 * f);
@@ -227,8 +230,22 @@ namespace
             assert(line.rfind(prefix, 0) == 0);
             assert(std::stod(line.substr(prefix.size())) == entry.second);
         }
+        const auto& species = hd_microphysics::species_table.species_active;
+        if (species.size() == static_cast<std::size_t>(hd_core::NCOMP))
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+                for (const auto& entry : std::vector<std::pair<std::string, std::string>>{
+                    {"name", species[k].name}, {"A", std::to_string(species[k].A)},
+                    {"charge", std::to_string(species[k].charge)}})
+                {
+                    assert(std::getline(file, line));
+                    assert(line == "# comp_" + std::to_string(k) + "_" + entry.first + "=" + entry.second);
+                }
+        std::string header = "x,y,z,gamma,rho,vx,vy,vz,p";
+        for (int k = 0; k < hd_core::NCOMP; ++k) header += ",comp_" + std::to_string(k);
+        for (int k = 0; k < hd_core::NUSER; ++k) header += ",user_" + std::to_string(k);
+        header += ",is_ghost,internal_energy,total_energy,dual_energy_correction";
         assert(std::getline(file, line));
-        assert(line == "x,y,z,gamma,rho,vx,vy,vz,p,is_ghost,internal_energy,total_energy,dual_energy_correction");
+        assert(line == header);
         std::size_t f = 0;
         while (std::getline(file, line))
         {
@@ -237,7 +254,7 @@ namespace
             std::vector<double> fields;
             std::string field;
             while (std::getline(row, field, ',')) fields.push_back(std::stod(field));
-            assert(fields.size() == 13);
+            assert(fields.size() == 13 + hd_core::NCOMP + hd_core::NUSER);
             const auto index = mesh.coordinates(f);
             const auto& cell = mesh.cells[f];
             const auto W = cell.U.to_Primtivies(cell.gamma);
@@ -249,10 +266,15 @@ namespace
             assert(near(fields[3], cell.gamma));
             assert(near(fields[4], W[hd_core::RHO]));
             assert(near(fields[8], W[hd_core::PRE]));
-            assert(fields[9] == (active(mesh, index) ? 0.0 : 1.0));
-            assert(fields[10] == cell.U[hd_core::INTERNAL_ENERGY]);
-            assert(fields[11] == cell.U[hd_core::ENERGY]);
-            assert(fields[12] == cell.dual_energy_correction);
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+                assert(near(fields[9+k], W[hd_core::COMP(k)]));
+            for (int k = 0; k < hd_core::NUSER; ++k)
+                assert(near(fields[9+hd_core::NCOMP+k], W[hd_core::CONUSR(k)]));
+            const int extra = hd_core::NCOMP + hd_core::NUSER;
+            assert(fields[9+extra] == (active(mesh, index) ? 0.0 : 1.0));
+            assert(fields[10+extra] == cell.U[hd_core::INTERNAL_ENERGY]);
+            assert(fields[11+extra] == cell.U[hd_core::ENERGY]);
+            assert(fields[12+extra] == cell.dual_energy_correction);
             ++f;
         }
         assert(f == mesh.cells.size());
@@ -261,6 +283,13 @@ namespace
     void output_tests(hd_core::MeshBlock& mesh, const std::filesystem::path& directory)
     {
         config::SimulationConfig cfg;
+        if constexpr (hd_core::NCOMP == 2 || hd_core::NCOMP == 3)
+        {
+            cfg.enable_composition = true;
+            cfg.composition_activate_file = (directory / "composition.txt").string();
+            std::ofstream(cfg.composition_activate_file) << (hd_core::NCOMP == 2 ? "h1 0 1\n" : "h1 -1 1\n");
+            hd_microphysics::initialize_species_table(cfg);
+        }
         cfg.output_directory = (directory / "snapshots").string();
         cfg.output_suffix = "check";
         physcon::units.init_unitsystem_MLT(2.5e33, 7.25e10, 1600.5, 2.0e4);

@@ -1,0 +1,30 @@
+# Smooth periodic H/He Kelvin-Helmholtz double shear layer.
+nxa = 128
+nya = 128
+nxg = 2
+nyg = 2
+x_lower = 0.0
+x_upper = 1.0
+y_lower = 0.0
+y_upper = 1.0
+gamma = 1.6666666666666667
+enable_composition = true
+composition_activate_file = composition.txt
+
+t_end = 3.0
+cfl = 0.35
+maxsteps = 20000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
+boundary_x_lower = periodic
+boundary_x_upper = periodic
+boundary_y_lower = periodic
+boundary_y_upper = periodic
+step_every = 60
+output_directory = output
+output_suffix = hhe_mixing

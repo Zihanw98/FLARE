@@ -153,6 +153,65 @@ double error(const MeshBlock& a, const MeshBlock& b)
     return result;
 }
 
+void multidimensional_equivalence()
+{
+    // LTS RK2 now supports multidimensional meshes. Exercise real transverse
+    // variation instead of retaining the old "NDIM != 1 must throw" assertion.
+    MeshBlock initial;
+    for (int d = 0; d < hd_core::NDIM; ++d)
+    {
+        initial.nactive[d] = 8 - 2*d;
+        initial.nghost[d] = 2;
+        initial.bc_lower[d] = initial.bc_upper[d] = boundary::BoundaryCondition::Periodic;
+        initial.set_linear_uniform_faces(d, 0.0, 1.0);
+    }
+    initial.allocate();
+    initial.build_geometry();
+    for (std::size_t flat = 0; flat < initial.cells.size(); ++flat)
+    {
+        if (!initial.is_active(flat)) continue;
+        const auto index = initial.coordinates(flat);
+        double phase = 0.0;
+        hd_core::Primitives w{};
+        for (int d = 0; d < hd_core::NDIM; ++d)
+        {
+            phase += 6.283185307179586 * initial.cell_center(d, index);
+            w[hd_core::VEL(d)] = 0.2 * (d+1) * (d % 2 == 0 ? 1 : -1);
+        }
+        w[hd_core::RHO] = 1.0 + 0.1*std::sin(phase);
+        w[hd_core::PRE] = 1.0;
+        if constexpr (hd_core::NCOMP >= 2)
+        {
+            w[hd_core::COMP(0)] = 0.5 + 0.2*std::cos(phase);
+            w[hd_core::COMP(1)] = 1.0 - w[hd_core::COMP(0)];
+        }
+        initial.cells[flat] = hd_core::Cell(w, 1.4);
+    }
+    boundary::FillBoundary(initial, 0.0, {});
+    hydro::ExactSolver solver(1e-10, 200);
+    for (const std::string reconstruction : {"PCM", "PLM", "PLM_corrected"})
+    {
+        config::SimulationConfig cfg;
+        cfg.cfl = 0.2; cfg.reconstructor = reconstruction; cfg.limiter = "MC";
+        auto local = initial, global = initial;
+        const double h = step(local, solver, cfg, 0.0, 1e-4);
+        CHECK(h == step(global, solver, cfg, 0.0, h, {}, hd_time::TimeIntegrator::RK2));
+        same(local, global);
+        cfg.lts_max_levels = 4;
+        local = initial;
+        const auto before = integral(local);
+        CHECK(step(local, solver, cfg, 0.0, 0.05) > 0.0);
+        const auto after = integral(local);
+        for (int v = 0; v < hd_core::NVAR; ++v)
+            CHECK(near(before[v], after[v], 2e-12));
+        double motion = 0.0;
+        for (std::size_t flat = 0; flat < local.cells.size(); ++flat)
+            if (local.is_active(flat))
+                motion += std::abs(local.cells[flat].U[hd_core::RHO] - initial.cells[flat].U[hd_core::RHO]);
+        CHECK(motion > 1e-6);
+    }
+}
+
 void equivalence(const std::string& reconstruction)
 {
     hydro::ExactSolver solver(1e-10, 200);
@@ -461,8 +520,7 @@ int main(int argc, char** argv)
         }
         if (hd_core::NDIM != 1)
         {
-            auto mesh = make_mesh(false); Transport solver;
-            expect_throw<std::invalid_argument>([&] { step(mesh, solver, {}, 0.0, 1.0); });
+            multidimensional_equivalence();
             return;
         }
         for (const std::string method : {"PCM", "PLM", "PLM_corrected"})

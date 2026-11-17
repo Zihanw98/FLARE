@@ -31,5 +31,6 @@ namespace physcon
 
     inline double a_Rad = 4.0 * sigma_SB_ / c_;
 
+    inline double R_g = k_B / m_u;
     
 }

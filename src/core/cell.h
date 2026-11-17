@@ -13,9 +13,11 @@ namespace hd_core
         double gamma = 5.0/3;
         double temperature = 1.0;
         double n_e_free;              //number density of free electron
-        double Y_e_free;             //free electron per baryon
-        double n_b;                 //number density of baryon
-        double mean_molecular_weight;   //mu, mean molecular weight
+        double Y_e_free;             //mu_e ---> how much molecular weight does the gas has when it has one electron, or baryons per electron    Y_e = 1/ mu_e : free electron per mean molecular weight(per baryon)
+        //mu_e can be blow up if it's purely neutral gas so instead we store Y_e which is its inverse
+        double n_Ion;                 //number density of ion
+        double mu_Ion;               //  
+        double mean_molecular_weight = 1.0;   //mu, mean molecular weight
         // Accumulated density of energy added/removed by cold-cell synchronization.
         double dual_energy_correction = 0.0;
         void synchronize_dual_energy()

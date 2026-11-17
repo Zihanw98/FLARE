@@ -1,0 +1,3 @@
+# name_base q_min q_max
+h1 0 1
+he4 0 0

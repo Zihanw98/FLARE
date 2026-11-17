@@ -11,6 +11,7 @@ Examples (run from the project root):
   python3 animate.py tests/sod_tube/output mesh_sod --output figures/sod.html
   python3 animate.py tests/Spherical_Sod_1D/output spherical_sod --plot spherical
   python3 animate.py tests/CCSN_MESA_day13/output ccsn_mesa --plot spherical --cgs --log --rmax 1.4e13
+  python3 animate.py tests/Hydrogen_Profile_2D/output hydrogen_profile --composition
 
 Requires numpy, matplotlib, Pillow (ffmpeg additionally for MP4).
 Interactive HTML requires numpy and plotly: python3 -m pip install plotly
@@ -29,6 +30,9 @@ range; color scales and profile y limits still use all cells and selected frames
 2D: rho/vx/vy/pressure maps, with x profiles at the nearest --slice-y row
 (default: domain midpoint), or y profiles at the nearest --slice-x column.
 These options are mutually exclusive. A dashed line marks the cut on each map.
+--composition adds every comp_<index> mass fraction, labeled by the CSV
+comp_<index>_name metadata (for example HI, HII, He_I). These dimensionless
+fields use a fixed linear [0,1] scale, including all-zero species, with --cgs/--log too.
 --streamlines overlays instantaneous velocity streamlines on 2D rho/pressure
 maps, including HTML output. Nonuniform grids are interpolated for tracing.
 Scales are fixed over selected frames; ghost cells are excluded. Stride counts
@@ -52,7 +56,7 @@ Files are discovered once at startup; rerun to include new simulation output.
 """
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 import re
 
@@ -74,6 +78,7 @@ class Snapshot:
     xlabel: str = "x"
     units: tuple = ()  # Base-unit values in g, cm, s, K; None for missing entries.
     cgs: bool = False
+    metadata: dict = dataclass_field(default_factory=dict)
 
 
 def signature(path):
@@ -103,7 +108,8 @@ def find_files(directory, prefix, stride):
     return selected
 
 
-def read_snapshot(path, step, cgs=False):
+def read_snapshot(path, step, cgs=False, fields=None, composition=False):
+    """Read standard fields, or caller-selected (column, label, colormap) tuples."""
     before = signature(path)
     metadata = {}
     with path.open() as stream:
@@ -171,6 +177,8 @@ def read_snapshot(path, step, cgs=False):
             factors = {"x": length, "y": length, "z": length,
                        "rho": mass / length**3, "p": mass / (length * duration**2),
                        "vx": length / duration, "vy": length / duration, "vz": length / duration}
+            for key in ("internal_energy", "total_energy", "dual_energy_correction"):
+                factors[key] = factors["p"]  # Energy densities, not specific energies.
             if any(not np.isfinite(value) or value <= 0 for value in factors.values()):
                 raise ValueError("Invalid derived CGS conversion factor")
             with np.errstate(over="raise", invalid="raise"):
@@ -192,11 +200,21 @@ def read_snapshot(path, step, cgs=False):
         raise ValueError(f"3D snapshots are not supported: {path}")
     x, ix = np.unique(columns["x"], return_inverse=True)
     y, iy = np.unique(columns.get("y", np.zeros_like(columns["x"])), return_inverse=True)
-    fields = tuple(field for field in FIELDS if len(y) > 1 or field[0] != "vy")
+    if fields is None:
+        fields = FIELDS
+        if composition:
+            components = sorted((key for key in columns if re.fullmatch(r"comp_\d+", key)),
+                                key=lambda key: int(key.split("_")[1]))
+            if not components:
+                raise ValueError(f"--composition requires comp_<index> columns: {path}")
+            fields += tuple((key, f"{metadata.get(key + '_name', key)} mass fraction", "viridis")
+                            for key in components)
+    fields = tuple(field for field in fields
+                   if len(y) > 1 or field[0] != "vy")
     required = ["x", *[field[0] for field in fields]]
     required += [key for key in ("y", "z") if key in columns]
     if any(key not in columns for key in required):
-        raise ValueError(f"2D snapshots require vy: {path}")
+        raise ValueError(f"Missing requested field columns: {path}")
     if any(not np.isfinite(columns[key]).all() for key in required):
         raise ValueError(f"Non-finite coordinates or field values: {path}")
     if len(x) < 2 or len(ix) != len(x) * len(y) or len(np.unique(iy * len(x) + ix)) != len(ix):
@@ -205,13 +223,15 @@ def read_snapshot(path, step, cgs=False):
     for k, (key, _, _) in enumerate(fields):
         values[k, iy, ix] = columns[key]
     return Snapshot(step, time, x, y, values, fields,
-                    "active cell index" if path.suffix == ".txt" else "x", units, cgs)
+                    "active cell index" if path.suffix == ".txt" else "x", units, cgs, metadata)
 
 
 def check_grid(snapshot, reference):
     if snapshot.units != reference.units or snapshot.cgs != reference.cgs:
         raise ValueError("Units changed between snapshots; use files from a single unit system")
-    if snapshot.fields != reference.fields or snapshot.xlabel != reference.xlabel or any(
+    if snapshot.fields != reference.fields:
+        raise ValueError("Fields or species changed between snapshots; check for files from older runs")
+    if snapshot.xlabel != reference.xlabel or any(
         a.shape != b.shape or not np.allclose(a, b, rtol=0, atol=1e-13)
         for a, b in ((snapshot.x, reference.x), (snapshot.y, reference.y))
     ):
@@ -259,7 +279,7 @@ def spherical_values(values, projection):
 def display_label(name, label, spherical, cgs=False):
     label = "radial velocity" if spherical and name == "vx" else label
     unit = {"rho": "g/cm^3", "vx": "cm/s", "vy": "cm/s", "p": "dyn/cm^2"}
-    return f"{label} [{unit[name]}]" if cgs else label
+    return f"{label} [{unit[name]}]" if cgs and name in unit else label
 
 
 def coordinate_label(label, cgs):
@@ -275,13 +295,13 @@ def logarithmic_limits(lower, upper):
     return lower, upper
 
 
-def prepare(files, cgs=False, log=False):
+def prepare(files, cgs=False, log=False, composition=False):
     reference = None
     records = []
     previous_time = -np.inf
     for i, (step, path) in enumerate(files):
         stamp = signature(path)
-        snapshot = read_snapshot(path, step, cgs=cgs)
+        snapshot = read_snapshot(path, step, cgs=cgs, composition=composition)
         if log:
             for k, (name, _, _) in enumerate(snapshot.fields):
                 if name in ("rho", "p") and np.any(snapshot.values[k] <= 0):
@@ -405,6 +425,8 @@ def animate(reference, records, lower, upper, args):
         logarithmic = args.log and name in ("rho", "p")
         if logarithmic:
             lo, hi = logarithmic_limits(lo, hi)
+        elif name.startswith("comp_"):
+            lo, hi = 0.0, 1.0
         elif name in ("vx", "vy"):
             hi = max(abs(lo), abs(hi), 1e-12)
             lo = -hi
@@ -429,10 +451,14 @@ def animate(reference, records, lower, upper, args):
             left.set_yticks([])
             left.set_ylabel("repeated 1D")
         line, = right.plot(profile_axis, profile_values(reference, k), linewidth=1.5)
+        if name.startswith("comp_"):
+            # Keep X=0 and X=1 curves visible on the fixed range's boundary.
+            line.set(zorder=3, clip_on=False)
         pad = max((upper[k] - lower[k]) * 0.05, max(abs(lower[k]), abs(upper[k])) * 0.01, 1e-12)
         if logarithmic:
             right.set_yscale("log")
-        right.set(xlim=(profile_edges[0], profile_edges[-1]), ylim=(lo, hi) if logarithmic else (lower[k] - pad, upper[k] + pad),
+        right.set(xlim=(profile_edges[0], profile_edges[-1]),
+                  ylim=(lo, hi) if logarithmic or name.startswith("comp_") else (lower[k] - pad, upper[k] + pad),
                   xlabel=profile_label, ylabel=label,
                   title=f"{label}({'r' if spherical else 'y' if along_y else 'x'})" + cut_label)
         right.grid(alpha=0.25)
@@ -451,7 +477,8 @@ def animate(reference, records, lower, upper, args):
         step, path, stamp = records[index]
         if signature(path) != stamp:
             raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
-        snapshot = read_snapshot(path, step, cgs=reference.cgs)
+        snapshot = read_snapshot(path, step, cgs=reference.cgs,
+                                 composition=any(name.startswith("comp_") for name, _, _ in reference.fields))
         check_grid(snapshot, reference)
         if signature(path) != stamp:
             raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
@@ -630,7 +657,8 @@ def save_plotly(reference, records, lower, upper, args):
         titles.extend((label + (" (spherical slice)" if spherical else ""),
                        f"{label}({'r' if spherical else 'y' if along_y else 'x'}){cut_label}"))
     fig = make_subplots(rows=len(reference.fields), cols=2, horizontal_spacing=0.18,
-                        vertical_spacing=0.09, subplot_titles=titles)
+                        vertical_spacing=min(0.09, 0.5 / max(len(reference.fields) - 1, 1)),
+                        subplot_titles=titles)
     xedges = edges(projection[0]).tolist() if spherical else edges(reference.x).tolist()
     yedges = xedges if spherical else (edges(reference.y).tolist() if is_2d else [0, 0.5, 1])
     profile_edges = edges(profile_axis)
@@ -651,6 +679,8 @@ def save_plotly(reference, records, lower, upper, args):
                 ticks = np.linspace(lo, hi, 3)
             color_ticks = dict(tickmode="array", tickvals=ticks.tolist(),
                                ticktext=[f"{10.0**tick:.2g}" for tick in ticks])
+        elif name.startswith("comp_"):
+            lo, hi = 0.0, 1.0
         elif name in ("vx", "vy"):
             hi = max(abs(lo), abs(hi), 1e-12)
             lo = -hi
@@ -694,7 +724,8 @@ def save_plotly(reference, records, lower, upper, args):
         fig.update_xaxes(title_text=profile_label, range=[float(profile_edges[0]), float(profile_edges[-1])],
                          autorange=False, row=row, col=2)
         fig.update_yaxes(title_text=label, type="log" if logarithmic else "linear",
-                         range=[lo, hi] if logarithmic else [float(lower[k]) - pad, float(upper[k]) + pad],
+                         range=[lo, hi] if logarithmic or name.startswith("comp_")
+                         else [float(lower[k]) - pad, float(upper[k]) + pad],
                          autorange=False, row=row, col=2)
     # Append overlays after all heatmap/profile pairs to preserve their indices.
     if args.streamlines:
@@ -734,7 +765,8 @@ def save_plotly(reference, records, lower, upper, args):
         for index, (step, path, stamp) in enumerate(records):
             if signature(path) != stamp:
                 raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
-            snapshot = read_snapshot(path, step, cgs=reference.cgs)
+            snapshot = read_snapshot(path, step, cgs=reference.cgs,
+                                     composition=any(name.startswith("comp_") for name, _, _ in reference.fields))
             check_grid(snapshot, reference)
             if signature(path) != stamp:
                 raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
@@ -769,6 +801,8 @@ def main():
                         help="Spherical map/profile outer radius (cm with --cgs, otherwise code units)")
     parser.add_argument("--cgs", action="store_true",
                         help="Convert plots to CGS using CSV unit metadata; slice coordinates are then in cm")
+    parser.add_argument("--composition", action="store_true",
+                        help="Add all species mass fractions, labeled from CSV metadata, on a fixed [0,1] scale")
     parser.add_argument("--log", action="store_true",
                         help="Logarithmic color scales and profile y axes for positive rho/pressure; velocity stays linear")
     parser.add_argument("--plotly", action="store_true", help="Save an offline interactive HTML viewer")
@@ -798,7 +832,8 @@ def main():
         parser.error("--plotly requires HTML output and cannot be combined with --show")
     try:
         files = find_files(args.directory, args.prefix, args.stride)
-        reference, records, lower, upper = prepare(files, cgs=args.cgs, log=args.log)
+        reference, records, lower, upper = prepare(files, cgs=args.cgs, log=args.log,
+                                                  composition=args.composition)
         if args.plotly or (args.output and args.output.suffix.lower() == ".html"):
             save_plotly(reference, records, lower, upper, args)
         else:

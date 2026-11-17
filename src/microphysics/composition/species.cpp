@@ -140,6 +140,22 @@ namespace hd_microphysics
         return static_cast<int>(it - species_active.begin());
     }
 
+    std::vector<int> SpeciesTable::find_ionization_state_indices(int Z, int A) const
+    {
+        std::vector<int> indices;
+        auto it = std::lower_bound(species_active.begin(), species_active.end(), Z,
+            [](const Species& species, int target_Z) { return species.Z < target_Z; });
+        for (; it != species_active.end() && it->Z == Z; ++it)
+        {
+            if (it->A == A)
+                indices.push_back(static_cast<int>(it - species_active.begin()));
+        }
+        std::stable_sort(indices.begin(), indices.end(), [&](int left, int right) {
+            return species_active[left].charge < species_active[right].charge;
+        });
+        return indices;
+    }
+
     SpeciesTable read_species_table(const std::string& filename)
     {
         const auto path = resolve_species_table(filename);

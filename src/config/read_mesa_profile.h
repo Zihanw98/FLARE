@@ -64,8 +64,13 @@ namespace config
      *            count and radial limits derived from the profile.
      * @param[in] initialize_state If true, convert MESA density, total pressure and radial
      *            velocity to code units and construct each populated cell with cfg.gamma.
+     *            If cfg.enable_composition is true, read each active isotope's name_base
+     *            column (h1, he3, he4, c12, etc.) into its neutral species, leaving ions
+     *            zero. MESA prot is added to h1 (or used alone if h1 is absent).
+     *            Validate fractions in [0,1] and |sum(X)-1| < 1e-6 without normalization.
      *            If false, allocate default cells and skip the parameter table entirely.
      * @pre Build with HD_NDIM=1. Use the same unit system as when the profile was read.
+     *      Initialize the shared species table first when composition is enabled.
      * @return A mesh with mirrored ghost faces at reflective boundaries and linearly
      *         extrapolated ghost faces elsewhere, shell volumes and face areas. Ghost and
      *         exterior padding cells retain their default state for the caller to fill.

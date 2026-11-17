@@ -27,7 +27,7 @@ namespace hd_microphysics
         double ground_weight = 1.0;
     };
 
-    // 全表读取结果，仅存放数据，不包含筛选、排序或查询方法。
+    // Full species data and the simulation's active subset.
     struct SpeciesTable
     {
         std::vector<Species> species_full;  // 保持 JSON 文件中的顺序。
@@ -43,6 +43,10 @@ namespace hd_microphysics
         // if the species is absent. The name overload matches the exact Species::name.
         int find_species_from_available_table_index(const std::string& name) const;
         int find_species_from_available_table_index(int A, int Z, int charge) const;
+        // All active states of one isotope, including charge 0 and any negative ions.
+        // Returns indices into species_active sorted by charge; empty if absent.
+        // Argument order is explicitly (Z, A), unlike the single-state lookup above.
+        std::vector<int> find_ionization_state_indices(int Z, int A) const;
         void build_active_species_table(const config::SimulationConfig& cfg);
     };
 
