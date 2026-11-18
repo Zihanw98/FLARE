@@ -57,6 +57,9 @@ namespace
         double n_I = 0.0;
         double mu_e = 0.0;
         double mu_I = 0.0;
+        double n_baryon = rho / physcon::m_u;
+        double n_Ion = 0.0;
+        cell.n_baryon = n_baryon;
         for(int k=0; k<hd_core::NCOMP; k++)
         {
             const auto A_k = hd_microphysics::species_table.species_active[k].A;
@@ -65,9 +68,14 @@ namespace
             n_e += Z_k*X_k/A_k;
             mu_inv += (1+Z_k)*X_k/A_k;
             //1/mu = \Sigma (1+Z_k)*X_k/A_k
+            n_Ion += X_k/A_k;
         }
+        n_Ion *= rho / physcon::m_u;
         cell.mean_molecular_weight = 1.0/mu_inv;
-        
+        cell.n_e_free = n_e;
+        cell.Y_e_free = n_e*physcon::m_u/rho;
+        cell.n_Ion = n_Ion;
+        cell.mu_Ion = rho / ( physcon::m_u * n_Ion);
         
     }
 Equation_of_State parse_equation_of_state(const std::string& name)

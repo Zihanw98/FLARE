@@ -12,6 +12,7 @@ namespace hd_core
         Conserved U;
         double gamma = 5.0/3;
         double temperature = 1.0;
+        double n_baryon;
         double n_e_free;              //number density of free electron
         double Y_e_free;             //mu_e ---> how much molecular weight does the gas has when it has one electron, or baryons per electron    Y_e = 1/ mu_e : free electron per mean molecular weight(per baryon)
         //mu_e can be blow up if it's purely neutral gas so instead we store Y_e which is its inverse
