@@ -1,7 +1,10 @@
 #include "species.h"
 #include "config.h"
 #include "table.h"
+#include "core.h"
+#include "cell.h"
 #include "utils.h"
+#include "physcon/constants.h"
 #include <algorithm>
 #include <optional>
 #include <nlohmann/json.hpp>
@@ -266,5 +269,92 @@ namespace hd_microphysics
             throw std::runtime_error("HD_NCOMP parameter doesn't equal to the number of species!");
         }
 
+    }
+    void validate_cell_composition(const hd_core::Cell& cell)
+    {
+        if constexpr (hd_core::NCOMP == 0) return;
+
+        const double rho = cell.U[hd_core::RHO];
+        if (!std::isfinite(rho) || rho < 0.0)
+            throw std::invalid_argument(
+                "validate_cell_composition: rho must be finite and nonnegative");
+
+        constexpr double fraction_tolerance = 1e-12;
+        constexpr double sum_tolerance = 1e-6;
+        double sum = 0.0;
+        for (int k = 0; k < hd_core::NCOMP; ++k)
+        {
+            const double partial_density = cell.U[hd_core::COMP(k)];
+            if (!std::isfinite(partial_density))
+                throw std::invalid_argument(
+                    "validate_cell_composition: nonfinite partial density at component "
+                    + std::to_string(k));
+            if (rho == 0.0)
+            {
+                if (partial_density != 0.0)
+                    throw std::invalid_argument(
+                        "validate_cell_composition: vacuum has nonzero partial density at component "
+                        + std::to_string(k));
+                continue;
+            }
+
+            const double fraction = partial_density / rho;
+            if (!std::isfinite(fraction) || fraction < -fraction_tolerance ||
+                fraction > 1.0 + fraction_tolerance)
+                throw std::invalid_argument(
+                    "validate_cell_composition: mass fraction outside [0, 1] at component "
+                    + std::to_string(k));
+            sum += fraction;
+        }
+        if (rho > 0.0 && (!std::isfinite(sum) || std::abs(sum - 1.0) >= sum_tolerance))
+            throw std::invalid_argument(
+                "validate_cell_composition: mass fractions sum to "
+                + std::to_string(sum) + "; expected one");
+    }
+
+    void evaluate_cell_density(hd_core::Cell& cell)
+    {
+        const double rho = cell.U[hd_core::RHO];
+
+        if (!std::isfinite(rho) || rho <= 0.0)
+        {
+            throw std::invalid_argument(
+                "evaluate_cell_density: rho must be finite and positive"
+            );
+        }
+
+        const auto& active = species_table.species_active;
+
+        if (active.empty() ||
+            active.size() != static_cast<std::size_t>(hd_core::NCOMP))
+        {
+            throw std::logic_error(
+                "evaluate_cell_density: active species must be nonempty "
+                "and match NCOMP"
+            );
+        }
+
+        double mu_inv=0.0;
+        //Calculate mu first for every three EoS left
+        double Y_e_free = 0.0;
+        double Y_Ion = 0.0;
+        double n_baryon = rho / physcon::m_u;
+        cell.n_baryon = n_baryon;
+        for(int k=0; k<hd_core::NCOMP; k++)
+        {
+            const auto A_k = hd_microphysics::species_table.species_active[k].A;
+            const auto Z_k = hd_microphysics::species_table.species_active[k].charge;
+            const auto X_k = cell.U[hd_core::COMP(k)]/rho;
+            Y_e_free += Z_k*X_k/A_k;
+            mu_inv += (1+Z_k)*X_k/A_k;
+            //1/mu = \Sigma (1+Z_k)*X_k/A_k
+            Y_Ion += X_k/A_k;
+        }
+        cell.mean_molecular_weight = 1.0/mu_inv;
+        cell.Y_e_free = Y_e_free;
+        cell.Y_Ion = Y_Ion;
+        cell.n_e_free = n_baryon * Y_e_free;
+        cell.n_Ion = n_baryon * Y_Ion;
+        return;
     }
 }

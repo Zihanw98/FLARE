@@ -10,6 +10,7 @@
 #include "config/read_mesa_profile.h"
 #include "utils/performance.h"
 #include "microphysics/composition/species.h"
+#include "microphysics/eos/eos.h"
 #include <cstddef>
 #include <exception>
 #include <fstream>
@@ -94,6 +95,8 @@ int main(int argc, char* argv[])
             parameter_file = "parameters.txt";
         }
         auto cfg_temp = config::ReadParameters(parameter_file);
+        hd_microphysics::eos_type =
+            hd_microphysics::parse_equation_of_state(cfg_temp.equation_of_state);
         hd_microphysics::initialize_species_table(cfg_temp);
         std::cout << "Loaded parameters from: "
                   << parameter_file << '\n';

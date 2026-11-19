@@ -40,5 +40,6 @@ namespace physcon
                  * std::pow(unit_temperature,4) / unit_energy;
         a_Rad = 4.0 * sigma_SB / c;
         R_g = k_B / m_u;
+        eV = eV_ / unit_energy;
     }
 }

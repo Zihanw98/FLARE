@@ -1,11 +1,18 @@
 #pragma once
-#include "config.h"
 #include <cstddef>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
+namespace config
+{
+    struct SimulationConfig;
+}
 
+namespace hd_core
+{
+    struct Cell;
+}
 namespace hd_microphysics
 {
     inline constexpr char DEFAULT_SPECIES_TABLE[] = "tables/species.json";
@@ -57,4 +64,10 @@ namespace hd_microphysics
     // Shared by all cells in this simulation. Empty when composition is disabled.
     extern const SpeciesTable& species_table;
     void initialize_species_table(const config::SimulationConfig& cfg);
+    // Read-only check of rho*X: finite values, fractions in [0,1] within 1e-12,
+    // and sum(X) within 1e-6 of one (the profile input tolerance).
+    // Vacuum requires every rho*X to be zero. NCOMP == 0 is a no-op.
+    // Does not require the species table; throws std::invalid_argument on failure.
+    void validate_cell_composition(const hd_core::Cell& cell);
+    void evaluate_cell_density(hd_core::Cell& cell);
 }

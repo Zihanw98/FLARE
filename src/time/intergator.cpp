@@ -5,6 +5,7 @@
 #include "integrator.h"
 #include "implicit.h"
 #include "core/mesh.h"
+#include "microphysics/composition/species.h"
 #include "utils.h"
 #include "limiter.h"
 #include "reconstruction.h"
@@ -49,7 +50,7 @@ namespace hd_time
                 continue;
 
             next_cells[flat].U += dt * rhs[flat];
-            next_cells[flat].U.validate(next_cells[flat].gamma);
+            next_cells[flat].U.validate();
         }
         mesh.cells.swap(next_cells);
     }
@@ -148,23 +149,41 @@ namespace hd_time
                 dt = advance_lts_euler(mesh, time, dt_limit, spatial_scheme, solver,
                                        source_list, cfg, hooks, cfl, star_pressure_cache);
                 dt_next = std::numeric_limits<double>::infinity();
-                return dt; // LTS commits only after the synchronized boundary fill.
+                break; // LTS commits only after the synchronized boundary fill.
             case TimeIntegrator::LTSRK2:
                 dt = advance_lts_rk2(mesh, time, dt_limit, spatial_scheme, solver,
                                      source_list, cfg, hooks, cfl, star_pressure_cache);
                 dt_next = std::numeric_limits<double>::infinity();
-                return dt;
+                break;
             case TimeIntegrator::Implicit:
                 if (!implicit_workspace)
                     throw std::invalid_argument("Implicit integration requires a solver workspace");
                 dt = implicit_workspace->advance(mesh, time, dt_limit, spatial_scheme,
                                                   solver, source_list, cfg, hooks);
                 dt_next = implicit_workspace->suggested_dt();
-                return dt; // The converged candidate already has new-time boundaries.
+                break; // The converged candidate already has new-time boundaries.
             default:
                 throw std::invalid_argument("Invalid time integrator");
         }
-        boundary::FillBoundary(mesh,time + dt,hooks);
+        // Check composition once after the complete step, for every integrator.
+        if (cfg.enable_composition)
+        {
+            for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
+            {
+                if (!mesh.is_active(flat)) continue;
+                try
+                {
+                    hd_microphysics::validate_cell_composition(mesh.cells[flat]);
+                }
+                catch (const std::invalid_argument& error)
+                {
+                    throw std::invalid_argument("advance_one_step: cell "
+                        + std::to_string(flat) + ": " + error.what());
+                }
+            }
+        }
+        if (integrator == TimeIntegrator::Euler || integrator == TimeIntegrator::RK2)
+            boundary::FillBoundary(mesh,time + dt,hooks);
         return dt;
     }
 }

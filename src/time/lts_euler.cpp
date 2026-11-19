@@ -116,7 +116,7 @@ private:
     double face_area(int face) const;
     int left_cell(int face) const;
     int right_cell(int face) const;
-    static bool is_physical(const Conserved& state, double gamma);
+    static bool is_physical(const Conserved& state);
 
     // ---------- 面重构、Riemann 求解与多维 CFL ----------
     FaceResult solve_face(const MeshBlock& stage, int face);
@@ -221,9 +221,10 @@ int LTSEulerStep::right_cell(int face) const
     return cell == MeshBlock::invalid_active_index ? -1 : static_cast<int>(cell);
 }
 
-bool LTSEulerStep::is_physical(const Conserved& state, double gamma)
+bool LTSEulerStep::is_physical(const Conserved& state)
 {
-    try { state.validate(gamma); }
+    // Generic conserved-state checks only; EoS admissibility is separate.
+    try { state.validate(); }
     catch (const std::invalid_argument&) { return false; }
     return true;
 }
@@ -470,7 +471,7 @@ bool LTSEulerStep::build_stage_view(int depth, double fraction, double stage_tim
         const double theta = linear_
             ? std::ldexp(fraction - step_fraction_[cell_index], level_[cell_index]) : 0.0;
         cell.U = (1.0 - theta) * step_start_[cell_index] + theta * candidate_[cell_index];
-        if (!is_physical(cell.U, cell.gamma)) return false;
+        if (!is_physical(cell.U)) return false;
     }
     boundary::FillBoundary(view_, stage_time, hooks_);
     return true;
@@ -538,7 +539,7 @@ bool LTSEulerStep::build_level_predictors(
         candidate = step_start_[cell_index] + flux_balance * (local_step / volume)
                   + source_[flat] * local_step;
         candidate[hd_core::INTERNAL_ENERGY] += local_step * pressure_work_[cell_index];
-        if (!is_physical(candidate, current_cell.gamma)) return false;
+        if (!is_physical(candidate)) return false;
     }
     return true;
 }
@@ -554,7 +555,7 @@ bool LTSEulerStep::commit_level(int depth, double local_step)
             + source_[flat] * local_step;
         cell.U[hd_core::INTERNAL_ENERGY] +=
             local_step * pressure_work_[cell_index];
-        if (!is_physical(cell.U, cell.gamma)) return false;
+        if (!is_physical(cell.U)) return false;
         cell.synchronize_dual_energy();
         pending_flux_integral_[cell_index] = Conserved{};
     }

@@ -219,7 +219,7 @@ void conservation_and_cost_tests(const std::string& method)
             }
             time += H;
             for (std::size_t k = 0; k < mesh.cells.size(); ++k)
-                if (mesh.is_active(k)) mesh.cells[k].U.validate(mesh.cells[k].gamma);
+                if (mesh.is_active(k)) mesh.cells[k].U.validate();
         }
         const auto final = integral(mesh);
         for (int v = 0; v < hd_core::NVAR; ++v) CHECK(near(final[v], initial[v], 1e-12));
@@ -411,7 +411,7 @@ void shock_test(const std::string& method, int levels = 2)
     for (std::size_t k = 0; k < mesh.cells.size(); ++k)
     {
         if (!mesh.is_active(k)) continue;
-        mesh.cells[k].U.validate(mesh.cells[k].gamma);
+        mesh.cells[k].U.validate();
         difference += mesh.volume_cell[k] * std::abs(mesh.cells[k].U[hd_core::RHO]
                                                     - reference.cells[k].U[hd_core::RHO]);
         mass += mesh.volume_cell[k] * reference.cells[k].U[hd_core::RHO];
@@ -833,7 +833,7 @@ void multidim_subcycling(const std::string& method, int axis, int narrow)
     double difference = 0.0, norm = 0.0;
     for (auto flat : mesh.active_to_storage)
     {
-        mesh.cells[flat].U.validate(mesh.cells[flat].gamma);
+        mesh.cells[flat].U.validate();
         difference += std::abs(mesh.cells[flat].U[hd_core::RHO] - reference.cells[flat].U[hd_core::RHO]) * mesh.volume_cell[flat];
         norm += reference.cells[flat].U[hd_core::RHO] * mesh.volume_cell[flat];
     }

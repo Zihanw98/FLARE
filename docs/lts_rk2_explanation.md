@@ -1,444 +1,426 @@
 # 多层守恒 RK2 局部时间步（`lts_rk2`）
-这份算法解释主要配合docs文件夹的lts_rk2.cpp使用,这是一个1D的旧版本,与源代码文件夹的3D新版本有一些细节差异，但算法思路一致。
-## 类实例化
 
+[English version](lts_rk2_explanation_en.md)
 
-independent_face_count_: 若第一维是周期边界,则独立面数为n_+1，否则为n_(第0个active_cell)
-### 与面有关的hints_和flux_
+本文配合 [一维参考代码](lts_rk2.cpp) 阅读，说明 LTS-RK2 如何分配时间层级、构造阶段状态、递归推进，并通过共享面通量积分保持跨层输运守恒。[当前多维实现](../src/time/lts_rk2.cpp) 沿用相同思路；涉及多维索引、邻域遍历和 CFL 检查的差异在相应位置说明。
 
-`hints_` 保存各个单元面上一次求解得到的**星区压力 \(p_*\)**，用于下一次求解该面黎曼问题时的迭代初猜，以加快收敛。缓存值为 `0` 表示没有可用的压力猜测。
+阅读主线是：**选择宏步 → 分配单元与面的层级 → 准备起点阶段 → 递归推进细层 → 结算本层 → 同步或重试**。
 
-它按法向方向分组，通过以下方式访问：
+## 1. 时间层级与基本记号
+
+设宏步从物理时刻 $t_0$ 开始，长度为 $H$。层级 $\ell$ 的局部步长为
+
+$$
+h_\ell = \frac{H}{2^\ell}.
+$$
+
+层级越高，步长越短；下文将其称为“细层”，将步长较长的层级称为“粗层”或“慢层”。一次宏步内层级固定，每次重新尝试宏步时重新分配。
+
+| 代码变量 | 含义 |
+| --- | --- |
+| `macro_step_` | 宏步长 $H$ |
+| `depth` | 当前递归层级 $\ell$ |
+| `fraction` | 当前局部步起点在宏步内的位置 $f$，对应时刻 $t_0+fH$ |
+| `span` | 当前局部步占宏步的比例 $2^{-\ell}$ |
+| `local_step` | 当前局部步长 $h_\ell=H\,\mathrm{span}$ |
+| `end_fraction` | 局部步终点位置 $f+2^{-\ell}$ |
+| `max_depth_` | 允许的最大层级编号，等于 `lts_max_levels - 1` |
+| `deepest_` | 本次分层实际使用的最高层级 |
+
+层级从 0 开始编号。因此，`lts_max_levels = 8` 表示允许层级 0–7，最大步长比为 $2^7=128:1$。只有 `max_depth_ = 8`（共 9 个层级）时，最大步长比才是 $256:1$。
+
+本文用 $U_i$ 表示单元的守恒状态密度，用 $F_f$ 表示面上的数值通量。两者之间还需要面积、体积和时间积分，不能直接把“面通量”视为“单元的时间导数”。
+
+## 2. 工作数组与索引
+
+### 2.1 起点、试算状态与阶段视图
+
+| 数组 | 保存的内容 |
+| --- | --- |
+| `start_` | 宏步起点的完整网格快照，重试时保持不变 |
+| `state_` | 各单元最近一次完成局部 RK2 步后的状态；不同单元可能对应不同时刻 |
+| `view_` | 为一次阶段计算构造的、对应同一物理时刻的近似网格状态 |
+| `base_[i]` | 单元 $i$ 当前局部步的起点状态 $U_i^0$ |
+| `slope_[i]` | 该局部步的起点时间导数 $k_{1,i}$，用于线性预测 |
+| `local_step_start_[i]` | 该局部步的起点分数位置 |
+| `source_start_[i]` | 该局部步起点的源项 |
+| `pressure_work_start_[i]` | 该局部步起点的内能压力功 |
+| `pending_flux_integral_[i]` | 已累计给单元 $i$、尚未结算的净面通量积分 |
+
+`state_` 保存的是状态，不是变化率；`slope_` 保存的是起点斜率，不是 RK2 两阶段平均后的斜率。线性预测只写入 `view_`，不会直接更新 `state_` 或正式网格。
+
+### 2.2 面量与星区压力缓存
+
+`flux_`、`speed_` 和 `face_velocity_` 分别保存面通量、CFL 波速和面速度。`first_flux_` 保存一个面在其所属层级当前局部步起点的通量，避免后续计算覆盖它。
+
+`hints_` 保存上一次黎曼求解得到的星区压力 $p_*$，作为下一次求解的迭代初猜；`0` 表示没有可用的压力初猜。多维访问方式为
 
 ```cpp
 hints_[d][face_flat]
 ```
 
-- `d`：面的法向方向，`0、1、2` 分别对应 x、y、z。
-- `face_flat`：该方向面场内部的展平索引，由面的完整多维坐标计算，包含切向位置的信息，**不是仅沿法向方向的坐标索引**。
+其中 `d` 是法向方向，`face_flat` 是该方向 active 面场的展平索引，包含切向位置。计算时先减去各方向的 ghost 偏移，再按面场尺寸展平；法向尺寸为 `nactive[d] + 1`，其余方向为对应的 `nactive`。
 
-计算 `face_flat` 时，先从面存储坐标中减去各方向的 ghost 偏移，再按 active 面场的尺寸展平。该面场的各方向尺寸为 `nactive`，其中法向方向多一个面位置。
-
-例如，二维网格包含 `2×2` 个 active cell。对于 x 向面，面场尺寸为：
-
-```text
-(nactive[0] + 1) × nactive[1] = 3 × 2
-```
-
-令 `(i,j)` 为减去 ghost 偏移后的面坐标，则：
+例如，二维 active 网格为 $2\times2$ 时，x 向面场尺寸为 $3\times2$。若 `(i, j)` 为减去 ghost 偏移后的面坐标，则
 
 ```cpp
 face_flat = i + 3 * j;
 ```
 
-同在 `x = x₁` 这条分界线上的两个面片，对应不同的缓存位置：
+| 面片 | 面坐标 | `face_flat` | 缓存位置 |
+| --- | --- | ---: | --- |
+| 下方一行的面片 | `(1, 0)` | 1 | `hints_[0][1]` |
+| 上方一行的面片 | `(1, 1)` | 4 | `hints_[0][4]` |
 
-| 面片 | 面坐标 `(i,j)` | `face_flat` | 缓存位置 |
-| --- | --- | --- | --- |
-| 下方一行的面片 | `(1,0)` | `1` | `hints_[0][1]` |
-| 上方一行的面片 | `(1,1)` | `4` | `hints_[0][4]` |
+两个面片虽然具有相同的 x 坐标，但连接不同的单元，因此使用不同的缓存位置。
 
-虽然两个面片的 x 坐标相同，但它们位于不同的行，连接不同的 cell，因此压力猜测分别存储。
+几套面索引需要区分：
 
-需要区分以下几套索引：
-
-| 数组 | 索引含义 |
+| 对象 | 索引布局 |
 | --- | --- |
-| `hints_[d][face_flat]` | 方向 `d` 内的 active 面场展平索引 |
-| <span style="color: red;">原Godunov</span> 的 `flux[d].faces[face_flat]`(注意不是LTS_RK2后面的flux_) | 与 `hints_` 使用相同的索引布局 |
-| LTS 的 `flux_[face_id]`、`face_velocity_[face_id]`、`speed_[face_id]` | 所有方向的独立面统一编号，与 `mesh.face_info[face_id]` 对应 |
-| `mesh.face_area[d].faces[flat]` | 包含 ghost 区域的完整面场展平索引 |
+| `hints_[d][face_flat]` | 按方向分组的 active 面场 |
+| 常规 Godunov 的 `flux[d].faces[face_flat]` | 与压力缓存对应的 active 面场布局 |
+| 多维 LTS 的 `flux_[face_id]`、`speed_[face_id]`、`face_velocity_[face_id]` | 所有方向的独立面统一编号，对应 `mesh.face_info[face_id]` |
+| `mesh.face_area[d].faces[flat]` | 含 ghost 区域的完整面场 |
 
-此外，`hints_` 的布局保留周期边界的两个端点槽位，而 `face_info` 将周期边界两端合并为一个独立面。因此，访问压力缓存时需要将 `face_id` 转换为对应的方向和 `face_flat`。
+一维有 $n$ 个 active 单元时，非周期边界有 $n+1$ 个独立面，周期边界有 $n$ 个独立面。旧版一维面数组仍保留 $n+1$ 个槽位，但周期端点代表同一个面，只独立求解和累计一次。多维版本直接用 `mesh.face_info.size()` 得到独立面数。
 
-flux_的索引同理,其保存的是黎曼问题求解出来的通量。
+压力缓存仍保留周期边界的两个端点槽位，而 `face_info` 将它们合并为一个独立面。因此，LTS 的 `face_id` 不能直接当作 `hints_` 的 `face_flat`；求解时需要转换索引，并同步周期端点的压力缓存。
 
+## 3. `run()`：选择宏步并准备一次尝试
 
-## 入口
-## run函数
-### 第一步:初始扫描
+### 3.1 初始扫描
+
+首先在同步起点求解所有独立面，并计算源项：
+
 ```cpp
-    solve_faces(start_, all_faces_);
-    initial_flux_ = flux_;
-    initial_speed_ = speed_;
-    initial_velocity_ = face_velocity_;
-    initial_hints_ = hints_;
-    const double source_limit = evaluate_sources(start_, time_, 0.0);
-    initial_source_ = source_;
-
-    double minimum_local_dt = inf;
-    hydro::max_inverse_dt = 0.0;
-    for (int cell = 0; cell < n_; ++cell)
-    {
-        const double rate =
-            std::max(speed_[cell], speed_[cell + 1])
-            / mesh_.cell_width(0, ng_ + cell);
-        if (!std::isfinite(rate)) throw std::runtime_error("Non-finite LTS RK2 CFL rate");
-        hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
-        local_dt_[cell] = rate > 0.0 ? cfl_ / rate : inf;
-        minimum_local_dt = std::min(minimum_local_dt, local_dt_[cell]);
-    }
+solve_faces(start_, all_faces_);
+initial_flux_ = flux_;
+initial_speed_ = speed_;
+initial_velocity_ = face_velocity_;
+initial_hints_ = hints_;
+const double source_limit = evaluate_sources(start_, time_, 0.0);
+initial_source_ = source_;
 ```
-   这里我们遍历所有活跃区,然后为每一cell通过cfl计算局部dt，找出最小值，为接下来初始大步做准备。注意在这里我们用初始状态(0时刻)解了一次黎曼问题,将所有的面通量(还有面上的波速等等)存在了flux_[]数组里,接下来我们要用.
-### 第二步: 选取完整步macro_step
+
+这些结果既用于选步，也供最初的 RK 阶段复用；`initial_*` 则用于失败后的恢复。
+
+在一维中，单元 $i$ 的 CFL 变化率和允许步长为
+
+$$
+r_i=\frac{\max(a_{i-1/2},a_{i+1/2})}{\Delta x_i},
+\qquad
+\Delta t_i^{\mathrm{CFL}}=
+\begin{cases}
+\mathrm{CFL}/r_i, & r_i>0,\\
+\infty, & r_i=0.
+\end{cases}
+$$
+
+这里 $a_f$ 对应 `speed_[f]`。当前多维版本将各坐标方向的贡献相加：
+
+$$
+r_i=\sum_d\frac{\max(a_{i,d,-},a_{i,d,+})}{\Delta x_{i,d}}.
+$$
+
+遍历所有 active 单元后，得到 `local_dt_[i]` 及其最小值 $\Delta t_{\min}$。
+
+### 3.2 选择宏步
+
 ```cpp
-    macro_step_ = std::min({
-        dt_limit_, std::ldexp(minimum_local_dt, max_depth_), source_limit});
+macro_step_ = std::min({
+    dt_limit_, std::ldexp(minimum_local_dt, max_depth_), source_limit});
 ```
-完整步选取的逻辑是取下列项的最小值:
-1. dt_limit(硬性结束时间限制)
-2. 源项限制
-3. $\mathrm{dt_{min}\times 2^{d_{max}}}$,对于8层即$256\mathrm{dt_{min}}$
 
-### 第三步: 尝试推进
-- 首先检查macro_step合法性
-- 接着进行重置(reset_attempt)
-- 分配面的层级
-- 推进一步
+即
 
+$$
+H=\min\left(\mathrm{dt\_limit},\;2^{\ell_{\max}}\Delta t_{\min},\;H_{\mathrm{source}}\right).
+$$
 
+三项分别对应外部给定的步长上限、允许层数能够容纳的流体步长，以及源项步长限制。`dt_limit_` 可用于保证不越过指定的结束时刻。
 
+### 3.3 重置、推进与重试
 
-#### 重置(reset_attempt)逻辑
-- 首先设置时间步层级,若CFL步长小于二分后的结果,就再次升级,直到大于为止
-- 然后我们需要扩展同级缓冲区，将周围的低等级邻居(宽度由buffer参数指定)提升到与中心cell同等级，然后再平滑过渡到更远处的低层级处，使得邻居之间最多只相差1级，不会出现超过1级的跳跃。
-- **先扩展同层缓冲区，覆盖重构所需的邻域。**
+每次尝试先检查 $H$ 是否能够推进时间，再调用 `reset_attempt()`：重新分配单元和面的层级，将试算状态和阶段缓存恢复到同步起点，并清空待结算的面通量积分。随后调用
 
-  根据每个 cell 的 CFL 要求确定其层级 `depth`，然后将自身及沿各坐标方向、距离不超过 `level_buffer_` 的邻居提升到**至少 `depth` 层**。已经处于更高层级的单元保持原样。
-
-  使用 **PCM** 时，`level_buffer_ = 1`，需要提升两侧一格的邻居。虽然 PCM 不计算空间斜率，但一个面的黎曼问题需要左右两个 cell 分别提供状态，因此计算当前 cell 的面通量仍然需要相邻 cell。
-
-  使用 **PLM / PLM_corrected** 时，`level_buffer_ = 2`，需要提升两侧各两格的邻居。除了面两侧的 cell，还需要它们各自的邻居来计算重构斜率。例如，计算 cell `i` 右侧面的通量，需要重构 cell `i` 和 `i+1` 的状态，其中 cell `i+1` 的斜率还会用到 cell `i+2`。
-
-  多维情况下，沿每个坐标方向分别进行上述扩展。
-
-- **再从最高层向下逐层处理，使层级平滑过渡。**
-
-  对每个处于 `depth` 层的 cell，将缓冲范围内的邻居提升到**至少 `depth - 1` 层**。例如，3 级单元周围至少为 2 级，随后处理 2 级单元，使其周围至少为 1 级。这里使用的缓冲宽度同样由 `level_buffer_` 决定，已有的更高层级不会被降低。
-
-  两个步骤都通过面拓扑寻找邻居：周期边界的首尾 active cell 已经连接，会自动绕到另一侧；遇到非周期边界外不存在的 active 邻居，则停止沿该侧扩展。当前多维版本不需要在这个函数中手动取模。
-
-注意，**扩展同层级区域**和**平滑层级过渡**都在 `assign_time_levels()` 中通过调用 `promote_neighbors(cell, depth)` 完成，区别在于传入的目标层级。
-
-- **第一步：扩展同层级区域。**
-
-  根据当前 cell 的 CFL 限制计算所需层级 `depth`，然后调用：
-
-  ```cpp
-  promote_neighbors(cell, depth);
-  ```
-
-  将当前 cell 及缓冲范围内的邻居提升到至少 `depth` 层。
-
-- **第二步：平滑层级过渡。**
-
-  从最高层向下遍历，对于当前处于 `depth` 层的 cell，调用：
-
-  ```cpp
-  promote_neighbors(cell, depth - 1);
-  ```
-
-  将其缓冲范围内的邻居提升到至少 `depth - 1` 层。例如，3 级单元周围至少为 2 级，随后处理 2 级单元，使其周围至少为 1 级。
-
-两次调用都通过 `std::max` 更新层级，因此只会提升层级，已有的更高层级不会降低。
-
-
-- 更新：兼容多维后,promote_neighbor的实现方式修改，因为每一个cell有2个/3个维度与其他cell相邻,每个维度通常有2个方向的邻居(非周期边界只有一个active邻居)：
 ```cpp
-void LTSRK2Step::promote_neighbors(int cell, int depth)
-{
-    level_[cell] = std::max(level_[cell], depth);
+advance_level(0, 0.0, true);
+```
 
-    for (int d = 0; d < hd_core::NDIM; ++d)
+若某个阶段返回 `false`，失败沿递归调用逐层返回，整个宏步作废；外层将 $H$ 减半，从同步起点重新尝试。所有层成功后，填充终点边界，再将 `state_` 和压力缓存提交给正式网格及外部缓存。超出重试次数或遇到直接抛出的异常时，程序报错。
+
+## 4. 分配单元层级与面所有权
+
+### 4.1 `assign_time_levels()`：先满足 CFL，再建立缓冲区
+
+对每个单元，从层级 0 开始，逐级缩短步长，直到满足
+
+$$
+H/2^\ell\leq\Delta t_i^{\mathrm{CFL}}.
+$$
+
+随后进行两次层级提升：
+
+1. **扩展同层缓冲区。** 根据该单元的 CFL 层级 `depth`，调用 `promote_neighbors(cell, depth)`，将中心单元和缓冲范围内的邻居提升到至少该层级。
+2. **平滑层级过渡。** 从最高层向下处理，对当前处于 `depth` 层的单元调用 `promote_neighbors(cell, depth - 1)`，使其周围至少达到下一较粗层级。
+
+两次操作都通过 `std::max` 更新层级，只提升，不降低已有层级。最终相邻单元的层级差不超过 1；缓冲宽度较大时，还会约束更远的邻居。
+
+缓冲宽度取决于重构模板：
+
+| 重构方法 | `level_buffer_` | 原因 |
+| --- | ---: | --- |
+| PCM | 1 | 一个面的黎曼问题需要左右两个单元的状态 |
+| PLM / PLM_corrected | 2 | 除面两侧单元外，计算其空间斜率还需要外侧邻居 |
+
+例如，计算单元 `i` 的右侧面时，要重构 `i` 和 `i+1`；后者的斜率还需要 `i+2`。
+
+### 4.2 多维邻域的遍历方式
+
+多维 `promote_neighbors()` 沿每个坐标轴的低侧和高侧分别向外行走，最多走 `level_buffer_` 格：
+
+```cpp
+for (int d = 0; d < hd_core::NDIM; ++d)
+    for (int side : {-1, 1})
     {
-        for (int side : {-1, 1})
+        int neighbor = cell;
+        for (int distance = 0; distance < level_buffer_; ++distance)
         {
-            int neighbor = cell;
-
-            for (int distance = 0; distance < level_buffer_; ++distance)
-            {
-                const auto& pair = mesh_.cell_faces[neighbor][d];
-
-                neighbor = side < 0
-                    ? left_cell(static_cast<int>(pair.lower))
-                    : right_cell(static_cast<int>(pair.upper));
-
-                if (neighbor < 0) break;
-
-                level_[neighbor] =
-                    std::max(level_[neighbor], depth);
-            }
+            const auto& pair = mesh_.cell_faces[neighbor][d];
+            neighbor = side < 0
+                ? left_cell(static_cast<int>(pair.lower))
+                : right_cell(static_cast<int>(pair.upper));
+            if (neighbor < 0) break;
+            level_[neighbor] = std::max(level_[neighbor], depth);
         }
     }
+```
+
+每处理一个新方向，`neighbor` 都从中心单元重新开始。周期边界通过面拓扑自动连接首尾；非周期边界外没有 active 邻居，返回负值后停止。
+
+以三维中心单元 `(i,j,k)`、缓冲宽度 2 为例：
+
+| 方向 | 第一个邻居 | 第二个邻居 |
+| --- | --- | --- |
+| x 低侧 / 高侧 | `(i±1,j,k)` | `(i±2,j,k)` |
+| y 低侧 / 高侧 | `(i,j±1,k)` | `(i,j±2,k)` |
+| z 低侧 / 高侧 | `(i,j,k±1)` | `(i,j,k±2)` |
+
+单次调用直接访问的是三条坐标轴上的邻域，不包含斜对角单元。远离边界且邻居不重复时，宽度 1 覆盖中心加 6 个邻居，宽度 2 覆盖中心加 12 个邻居；多次提升和平滑后，整体被提升区域可以更大。
+
+### 4.3 `assign_faces_to_levels()`：由细层负责积分
+
+每个面由两侧 active 单元中更高的层级负责：
+
+$$
+\ell_f=\max(\ell_{\mathrm{left}},\ell_{\mathrm{right}}).
+$$
+
+在非周期边界，缺失的一侧用负单元编号表示，面的层级取有效一侧的层级。
+
+| 层级表 | `depth` 对应的内容 |
+| --- | --- |
+| `cells_by_level_[depth]` | 层级恰好为 `depth` 的单元 |
+| `faces_owned_by_level_[depth]` | 负责层级恰好为 `depth` 的面 |
+| `faces_needed_by_level_[depth]` | 负责层级大于或等于 `depth` 的面 |
+
+三个表均有 `deepest_ + 1` 个层级槽位。`owned` 决定在哪一层进行面通量积分；`needed` 用于构造本层起点斜率，并为共享起点的细层准备通量。
+
+`needed` 可以包含不直接接触本层单元的面，因为后续细层也会复用这些起点结果。反之，负责层级低于 `depth` 的面不可能接触 `depth` 层单元，因此本层不需要它们。
+
+## 5. `build_stage_view()`：把不同层级放到同一时刻
+
+细层求解面通量时，邻近慢单元可能尚未完成自己的局部步，不能直接使用它在 `state_` 中的旧时刻状态。程序为它构造线性预测：
+
+$$
+\widetilde U_i(t)=U_i^0+(t-t_i)k_{1,i}.
+$$
+
+其中 $t_i$ 是该单元当前局部步的起点。用分数时间表示，就是
+
+```cpp
+const double elapsed =
+    (fraction - local_step_start_[cell_index]) * macro_step_;
+cell.U = base_[cell_index] + slope_[cell_index] * elapsed;
+```
+
+例如，设 A、B、C 分别属于层级 0、1、2，C 即将从 $3H/4$ 推进到 $H$。此时 A 的局部步仍从 0 开始，B 的局部步已从 $H/2$ 开始，则
+
+$$
+\widetilde U_A(3H/4)=U_A(0)+\frac{3H}{4}k_{1,A}(0),
+$$
+
+$$
+\widetilde U_B(3H/4)=U_B(H/2)+\frac{H}{4}k_{1,B}(H/2).
+$$
+
+这里省略了共同的物理起始时刻 $t_0$；层级分布仅作示意，不考虑缓冲区可能引起的进一步提升。C 已完成前一个细步，直接使用其 $3H/4$ 时刻的 RK2 更新状态。
+
+函数先把 `state_` 复制到 `view_`，再按以下规则覆盖需要预测的单元：
+
+| 阶段 | 更粗层 `level < depth` | 当前层 `level == depth` | 更细层 `level > depth` |
+| --- | --- | --- | --- |
+| 起点，`endpoint=false` | 线性预测到起点 | 使用已更新状态 | 使用已更新状态 |
+| 终点，`endpoint=true` | 线性预测到终点 | 用起点斜率预测终点 | 使用已到达终点的更新状态 |
+
+对应判断为
+
+```cpp
+const bool needs_prediction =
+    level_[cell_index] < depth || (endpoint && level_[cell_index] == depth);
+```
+
+为什么细层可以直接使用 `state_`？递归安排保证：进入本层局部步时，本层及所有更细层共享起点；本层构造终点阶段之前，更细层已经完成覆盖该时间区间的全部子步。
+
+预测后检查状态的物理有效性，并按目标物理时刻填充边界。由此得到的 `view_` 是同一时刻的近似状态，既可用于面重构，也可用于依赖整张网格的源项，如自引力。PLM 必须在这个阶段视图上重新计算空间斜率，不能混用不同时刻的邻居状态。
+
+## 6. `advance_level()`：一次局部 RK2 步
+
+调用
+
+```cpp
+advance_level(depth, fraction, reuse_start_stage);
+```
+
+将当前层单元从 $t_0+fH$ 推进到 $t_0+(f+2^{-\ell})H$，并通过递归把所有更细层推进到相同终点。流程分为起点准备、细层递归和本层结算三部分。
+
+### 6.1 第一阶段：准备起点通量、源项和预测斜率
+
+如果起点阶段不能复用，就重新构造阶段视图、求解所需面的通量并计算源项：
+
+```cpp
+if (!reuse_start_stage)
+{
+    if (!build_stage_view(depth, fraction, false)) return false;
+    solve_faces(view_, faces_needed_by_level_[depth]);
+    if (macro_step_ > evaluate_sources(
+            view_, time_ + fraction * macro_step_, macro_step_)) return false;
 }
 ```
-以三维为例
-1. 第一层for循环遍历三个维度
-2. 第二层for循环遍历向低侧和向高侧两个方向,ide=-1 表示向坐标减小的低侧移动，side=1 表示向坐标增大的高侧移动。每次开始处理一侧时，都将 neighbor 重置为中心 cell,
-3. 第三层循环先沿着低侧方向向外移动neighbor指向的cell,寻找邻居并将其promote,然后再向外移动neighbor,最多走到buffer格外的邻居处,或遇到非周期边界时,结束这一次循环,neighbor退回中间，退回到第二层循环。然后再沿高侧方向向外移动neighbour指向的cell,promote邻居,同理继续循环直到距离达到或遇到非周期边界。然后退回到第一层循环，更换维度继续重复2和3。
-4. 第一层所有维度循环结束后遍历了所有邻居。例如，中心 cell 的坐标为 `(i,j,k)`，当 `level_buffer_=2` 时，六个方向的访问顺序分别为：
 
-| 移动方向 | 第一次移动 | 第二次移动 |
-| --- | --- | --- |
-| x 低侧 | `(i-1,j,k)` | `(i-2,j,k)` |
-| x 高侧 | `(i+1,j,k)` | `(i+2,j,k)` |
-| y 低侧 | `(i,j-1,k)` | `(i,j-2,k)` |
-| y 高侧 | `(i,j+1,k)` | `(i,j+2,k)` |
-| z 低侧 | `(i,j,k-1)` | `(i,j,k-2)` |
-| z 高侧 | `(i,j,k+1)` | `(i,j,k+2)` |
+随后检查波速，并保存**本层负责的面**的起点通量：
 
-因此，扩展范围是**穿过中心 cell 的三条坐标轴上的邻域**，不包含斜对角单元。
-
-在远离边界、邻居互不重复的情况下：
-
-- `level_buffer_=1`：中心 cell 加上 6 个邻居，共 7 个 cell。
-- `level_buffer_=2`：中心 cell 加上 12 个邻居，共 13 个 cell。
-
-#### 分配面到不同层级逻辑(assign_faces_to_levels)
-- 开场的三个二维数组遵循相同结构,第一维是层级,第二维是面或cell的index(注意,层数从0开始,因此第一维是deepest_ + 1个层级)
-- cells_by_level 存储每个层级处理哪些cell
-- 对于每一个面,取其左右两侧cell中更高的层级,作为其owner的层级.特别地,left=-1或right=-1(小于0)表示这是非周期边界下的最左/最右面,没有左/右侧cell，取另一侧level
-- 面的owner层级表示在哪个层级积分这个面的通量
-- needed会在所有低于或等于这个面的owner层级的层级里注册这个面,或者说needed[depth]会记录所有层级大于或等于depth的面,方便复用逻辑。
-- 重置所有记录
-
-## 推进步逻辑 advance_level(depth,fraction,reuse)
-- 这个函数是将层级为depth的所有cell从起点$\mathrm{fraction}$积分推进到终点$\mathrm{fraction+ 2^{-depth}}$(cells_by_level[depth]),同时记录RK2最终计算出来的斜率,作为终点处的斜率临时保存在slope中,便于更低层级处进行预测。
-- 整个函数是递归执行，因此会在不同层级不同时刻呼叫这个函数。每一个层级会呼叫两次高一层级。参数 depth 代表本层的层级, fraction代表这次递归调用的起点在长步的几分之几处。而reuse_start_stage则是一个优化开关,表示是否要复用之前的计算结果,这个在后面会解释
-- 用到的几个数组: base_ 存储起点处所有cell的状态, view_ 存储所有cell处于同一时刻的状态用于面通量的计算,其中有一些cell的状态是RK2推进计算的准确状态，有一些来自RK2过程中计算的起点/终点斜率外推的预测值。state_里存储的是每一个cell经历过最近一个局部时间步用RK2计算出来的最终的变化率(起点终点斜率的平均值)进行推进得到的终点状态,不同cell其state_中存储的状态对应的时间可能是不一致的(步长不同)。
-
-- 计算本步span以及实际步长macro_step * span, 还有结束时的分数步end_fraction,然后进入RK2的逻辑: 
- 推进本层(level=depth)的cell,需要计算起点处cell守恒量状态U的时间变化率(通过解黎曼问题计算面通量),然后再预测终点处的状态U',再次计算终点处的时间变化率,取平均后乘上时间步dt,然后积分推进
-### RK2 Phase I——首先计算起点处cell状态的的时间变化率$\frac{dU}{dt}\Big|_{\mathrm{begin}}$
-- 首先检测是否为复用步。
 ```cpp
-
-    if (!reuse_start_stage)
-    {
-        if (!build_stage_view(depth, fraction, false)) return false;
-        solve_faces(view_, faces_needed_by_level_[depth]);
-        if (macro_step_ > evaluate_sources(
-                view_, time_ + fraction * macro_step_, macro_step_)) return false;
-    }
+if (!check_wave_speeds(faces_needed_by_level_[depth])) return false;
+for (int face : faces_owned_by_level_[depth])
+    first_flux_[face] = flux_[face];
 ```
 
-在这里复用的意思是,我们是否能够直接使用现在存在flux_数组里的面通量(以及源项贡献的通量,面波速等等,不过主要是通量)?是否能够复用是在后面的代码里决定的,具体来说就是在advance_level的第三个bool reuse参数里
+接着对本层单元保存 `base_`、`local_step_start_` 和 `source_start_`，计算起点斜率。在一维中，
 
-
-复用逻辑我们稍后讲解.
-
-
-如果不复用，那么进入一个build_stage_view函数。这个函数的作用在于,让层级比当前更低（步长更长的慢步）的面用他们之前计算的斜率临时预测到当前递归阶段的起点和终点(RK2需要起点和终点的斜率取平均)，参与后面的通量计算。在这里是预测起点。
-
-由于是用斜率进行预测,而不是再次算一次RHS+源项推进，消耗不大。
-
-示例:假如有三个cellA,B,C，分别处于层级0,1,2.当cell C需要从0.75推进到1.00时,此时B已经推进到0.5(层级1,步长为0.5),因此B用0.5处的斜率(之前计算的RHS+源项,临时保存)预测0.75处,而A则用0处的斜率预测0.75处,得到
 $$
-   U_A^*(0.75) = U(A,0) + 0.75 * \frac{dU_A}{dt}\Big |_{0}
+k_{1,i}=\frac{A_{i-1/2}F_{i-1/2}^{(0)}-A_{i+1/2}F_{i+1/2}^{(0)}}{V_i}
++S_i^{(0)}+Q_i^{(0)}.
 $$
+
+$Q_i$ 是仅在独立内能分量上非零的压力功项；代码使用
+
 $$
-   U_B^*(B,0.75) = U(B,0.5) + 0.25 * \frac{dU_B}{dt}\Big |_{0.5}
+Q_{i,e}=-(\gamma_i-1)e_i\,
+\frac{A_{i+1/2}v_{i+1/2}-A_{i-1/2}v_{i-1/2}}{V_i}.
 $$
-带*号表示这是根据斜率计算的中间临时预测值,而且这个值并不会真正更新到网格中。预测的状态会更新到数组view_中
 
-那为什么要计算？例如，如果B与C是相邻的网格，那么B、C之间存在相接面,由于RK2需要起点0.75处cell C左右两侧的通量,因此我们需要计算更低层级的cell在0.75处的值来解黎曼问题(理论上如果只有RHS,只需要算B---如果不是周期边界的话,否则也要算A。但有全局源项,比如自引力的话,那么需要计算所有低层级cell的变化)。而B的一个时间步是0.5,无法在其正常的时间步中计算到0.75处的状态,因此我们用0.5处的时间导数进行大致预测。
+这里 $e_i$ 是独立内能密度，$v_f$ 是黎曼求解得到的面速度。多维版本对各方向的通量差和面积加权面速度差分别求和。
 
-每一层advance_level的递归有depth参数和fraction参数,fraction为起点对应的分数步,在上面的例子里就是层级2,起点为0.75,我们计算所有层级0和层级1的cell在0.75处的预测值,而endpoint=false表示这里是起点处预测,我们不需要预测层级2的cell在这里的值
-```cpp
-        if (!build_stage_view(depth, fraction, false)) return false;
-```
-层级1(depth=1)的递归中,调用(2,0.5,true)后再调用(2,0.75,false),因此0.75->1.0这一步调用之前,必然已经完成了0.5->0.75,因此0.75处depth=2的所有cell状态已经计算好，不需要预测。
+所得 $k_{1,i}$ 写入 `slope_[i]`，用于本层的 Euler 终点预测和细层所需的慢区预测。程序还会检查 $U_i^0+h_\ell k_{1,i}$ 是否物理有效。此时尚未将本层单元更新到终点。
 
-更高层级的cell也不需要预测，因为它们必然在这一层到达fraction之前已经推进到fraction处,与这一层共用起点状态(递归的特性,可以看[下面](#recursion-feature-1))。比如层级0中执行advance_level(1,0),让层级1先从0推进到0.5,在这个过程中层级1会执行两次advance_level(2),把层级2从0推进到0.25,再从0.25推进到0.5。然后层级0再次执行下一行advance_level(1,0.5)(如上,在层级0中这两次advance是紧挨着的),让层级1从0.5推进到1,这个时候层级2以及更高层级必然已经推进到0.5,与层级1共享起点,因此不需要预测。
-在build_stage_view函数中,我们可以看到
-```cpp
-    view_.cells = state_.cells;
-    for (int cell_index = 0; cell_index < n_; ++cell_index)
-    {
-        const bool needs_prediction =
-            level_[cell_index] < depth || (endpoint && level_[cell_index] == depth);
-        if (!needs_prediction) continue;
+### 6.2 起点复用：复用的是阶段计算
 
-        auto& cell = view_.cells[ng_ + cell_index];
-        const double elapsed = (fraction - local_step_start_[cell_index]) * macro_step_;
-        cell.U = base_[cell_index] + slope_[cell_index] * elapsed;
-        if (!is_physical(cell.U, cell.gamma)) return false;
-    }
-    boundary::FillBoundary(view_, time_ + fraction * macro_step_, hooks_);
-    return true;
-```
-view_首先继承state_中存储的所有cell的状态。state_存储的是所有cell在各自上一个局部时间步推进后的状态,对于不同层级的cell,它们上一次经历的时间步可能不一样,推进的终点也可能不一样。但根据我们刚才的分析,此时所有level>=depth的cell都推进到了共同的终点,也是这一步的起点fraction处,其对应的state_中存储的状态就是fraction处的状态,只有层级更低的cell因为其步长不够精细没有办法推进到fraction处,因此在下面的for循环里我们为更低层级的cell进行外推预测,预测所用的是之前保存的RK2斜率。
+`reuse_start_stage=true` 表示所需面通量、波速、面速度和源项已经由同一个起点阶段计算得到，可以直接使用。
 
+- 宏步第一次调用复用 `run()` 的初始扫描。
+- 每层的第一个细半步与父层共享起点，复用父层准备好的结果。
+- 第二个细半步从新的时刻开始，必须重新构造阶段视图并求值。
 
-做完预测，接下来,用预测状态view_解这一层级的所有面的黎曼问题。
+复用并不意味着 `state_` 中所有单元都已同步。更粗层仍可能停留在较早时刻；它们在这个起点的预测状态已参与父层的阶段计算。
 
-    ```cpp
-        solve_faces(view_, faces_needed_by_level_[depth]);
-    ```
+此外，上一个子步的终点通量通常不能直接作为下一个子步的起点通量：前者使用本层的 Euler 预测状态，后者需要本层经过 RK2 修正后的状态。即使时刻相同，状态也不同。
 
-这个solve_faces函数解出来的面通量，保存在flux_[]数组内. 注意这里我们要计算的是所有needed的face,也就是owner是这一层以及更高层的面(时间步更短)。
-首先,为什么更低层级的面不用计算通量?因为我们的每个面的owner取的是这个面的两边cell中更高层级的那个,因此owner_level<escape><</escape>depth 的面必然不是更高level的cell拥有的面(相邻面),而advance(depth,fraction,reuse)这一层递归只会推进层级为depth的cell，所以这样的面没有影响，不用计算其通量。
-
-因此为什么要计算owner_level>=depth的面的通量也很显然了,因为它们有可能是当前level=depth的cell的所属面,而在这个共同起点这些面的flux还都没有计算.不过共同起点处所有面的flux只会计算一次,因为后面高层会由于reuse=true跳过这个if块内的solve_faces,直接用低层计算好的flux.比如在t=0.5处,层级1计算了所有层级1和高于层级1的面的flux,然后通过advance_level(2,0.5,true)和advance_level(2,0.75,false)呼叫层级2,由于0.5处是层级1和层级2的共同起点,而层级1已经把更高层级的面在0.5处的通量计算好了,因此第一个advance_level的reuse为true,而层级2在推进0.5->0.75时，就跳过了这个if块,直接复用在0.5处的flux,避免重复计算owner_depth>=2的面在0.5处的通量。
-
-最后再进行一次源项的检查,确认预测后的状态是否合法:
-```cpp
-        if (macro_step_ > evaluate_sources(
-                view_, time_ + fraction * macro_step_, macro_step_)) return false;
-```
-    
-- 如果可以复用,那么就跳过上面的过程.
-
-举例说明复用的逻辑:
-
-假设我们从depth=0,最低层级的递归出发,最开始fraction=0,也就是所有层级共同的起点,层级0运行完前面的计算逻辑后,让层级1运行fraction=0处的计算走到0.5,起点相同,所以不用重新预测网格,直接沿用之前计算的通量(对于t=0,我们最开始执行run的时候就计算了一次,请见run函数的第一步)。
-
-但接着层级0让层级1从0.5出发,再走一步到1.0达到共同终点,这一步的时候层级1与层级0不在一个起点了,这时候就要重新预测0.5处的所有层级0的cell的状态,然后计算所有owner层级大于等于1的面的通量，并进行接下来的逻辑(计算slope,推进).
-
-同理,层级1会呼叫更高一层的递归2次,第一次是在层级1的0->0.5的歩进中,会呼叫层级2的0->0.25和0.25->0.5,同样的,层级2从0->0.25也会复用0处的flux_,但0.25->0.5不会(需要预测0.25处所有低层级cell的值). 
-
-而在层级1 0.5->1.0的步进中,由于层级1的这次递归(被层级0呼叫的advance_level(1,0.5,false))不复用,因此它预测了一次view_并用其重新计算了一次flux_,所以现在flux_里保存的是0.5时所有面的通量。接下来这次递归会依照上面的代码呼叫层级2的0.5->0.75和0.75->1.0,因此0.5->0.75这步就可以复用,而0.75->1.0这步则不复用,重新用斜率预测.
-
-
-- 接下来,进行一次面的合法性检查，然后临时保存起点处的面通量。这是由于在RK2最后我们需要起点和终点处的通量取平均，再乘上面积作为最终的状态对时间的导数(斜率),然后乘上时间步得到cell的状态变化量。这里是不包含源项的。对于源项，我们只取终点处的值作为近似，而不用RK2处理。
-
-```cpp
-    if (!check_wave_speeds(faces_needed_by_level_[depth])) return false;
-
-    for (int face : faces_owned_by_level_[depth]) first_flux_[face] = flux_[face];
-```
-
-- 然后我们计算当前层级所拥有的cell在起点fraction处的斜率slope(即$\frac{dU}{dt}$),并记录其local起点为fraction,用于上文提到的在更高层级处的估算。
-```cpp
-    for (int cell_index : cells_by_level_[depth])
-    {
-        const auto& current_cell = state_.cells[ng_ + cell_index];
-        base_[cell_index] = current_cell.U;
-        local_step_start_[cell_index] = fraction;
-        source_start_[cell_index] = source_[ng_ + cell_index];
-
-        pressure_work_start_[cell_index] =
-            -(current_cell.gamma - 1.0) * base_[cell_index].internal_energy()
-            * (area_[cell_index + 1] * face_velocity_[cell_index + 1]
-               - area_[cell_index] * face_velocity_[cell_index])
-            / volume_[cell_index];
-        slope_[cell_index] =
-            (flux_[cell_index] * area_[cell_index]
-             - flux_[cell_index + 1] * area_[cell_index + 1])
-            / volume_[cell_index] + source_start_[cell_index];
-        slope_[cell_index][hd_core::INTERNAL_ENERGY] += pressure_work_start_[cell_index];
-
-        if (!is_physical(base_[cell_index] + local_step * slope_[cell_index],
-                         current_cell.gamma)) return false;
-    }
-```
-slope_[cell_index]保存的就是某个cell在当前步的RK2起点斜率,而不是RK2用于推进时间步的最终斜率。这个斜率可以用在后面对cell状态的预测中.
-### 向更高层递归
-- 接下来是递归的核心,
-```cpp
-
-    if (depth < deepest_)
-    {
-        if (!advance_level(depth + 1, fraction, true)) return false;    //将更高一层从fraction推进到fraction + span/2
-        if (!advance_level(depth + 1, fraction + span / 2.0, false)) return false;//将更高一层从fraction+span/2推进到fraction +span/2 + span/2,也就是end_fraction
-    }
-```
-因为反复提及多次了所以不再赘述，简而言之就是调用两次下一层级的步进. 如果步进结果为false那么也立刻返回false(最终会让外面的循环continue,再次尝试缩小一倍macro_step).
 <a id="recursion-feature-1"></a>
-注意,当执行完advance_level(depth + 1, fraction, true)后,所有高于depth的层级都必然推进到fraction+ span /2, 这是递归的特性决定的。
 
-我们举例说明,<span style="color: red;">记depth这一层的步长为span</span>, depth这一层执行depth+1层的第一个半步推进 advance_level(depth+1,fraction)后, 进入depth+1层的递归。
+### 6.3 递归：先让细层走完两个半步
 
-depth+1层在执行完最开始RK2 Phase I的逻辑后会再次执行到这两行(如果depth+1不是最高层的话), 呼叫更高一层 depth+2 的两个1/4步推进 advance_level(depth+2, fraction,true) 和 advance_level(depth+2,fraction + span / 4.0)
-
-同理呼叫的 depth+2 层推进在执行完RK2 Phase I的逻辑后也会继续呼叫更高层,直到递归到最高层后逐层下降返回。为了简化,我们假设 depth+2 就是最高层,那么 depth+2 就不会再呼叫 depth+3 , 接着执行完后面的RK2 Phase II逻辑后, depth+2 层就会返回到 depth+1 层。而我们可以注意到, depth+1 层中执行了两次 depth+2 层的1/4步推进, 第一次将depth+2推进到了fraction + span /4.0处, 第二次将depth+2推进到 fraction + span/4.0 + span/4.0 = fraction + span / 2.0处。 接着 depth+1 层会执行剩下的RK2 Phase II逻辑并返回 depth 层, 此时 depth+1 层也推进到了fraction + span / 2.0处。注意，这里是执行完 depth+1 层第一次半步推进
 ```cpp
-        if (!advance_level(depth + 1, fraction, true)) return false; 
-```
-之后。当有更多层级时也一样, depth+1层 呼叫的两次 depth+2 层推进会再次呼叫更高层并把它们逐步推进到 fraction + span/2.0处。所以depth + 2 以及更高层必然会比depth +1 先到fraction + span/2.0这第一个半步的终点处。
-
-同理,在执行完下一个半步推进
-```cpp
+if (depth < deepest_)
+{
+    if (!advance_level(depth + 1, fraction, true)) return false;
     if (!advance_level(depth + 1, fraction + span / 2.0, false)) return false;
+}
 ```
-之后,所有比 depth 高的层都推进到了 fraction + span/2.0 + span/2.0 = fraction +span = end_fraction,也即本层( depth 层)即将但还未到达的终点处,然后本层继续执行RK2 Phase II的逻辑,推进到 end_fraction 处。
-所以更高的层级一定比本层先推进到这次advance_level的终点,这是递归的特性保证的。
-某一层推进到某一个分数步处,意味着state_中属于那个层的cell状态更新到了处于这个分数步时的状态,flux_中属于那个层的面的通量也被更新到了处于这个分数步时的通量。
 
-进行一次跳过检测(本层是否有cell)之后
-```cpp
-    if (cells_by_level_[depth].empty()) return true;
-```
-我们进入到RK2的Phase II
-### RK2 Phase II——计算终点处cell状态的的时间变化率$\frac{dU}{dt}\Big|_{\mathrm{end}}$
+第一次调用把所有更细层推进到 $f+\mathrm{span}/2$；第二次调用再把它们推进到 $f+\mathrm{span}$。每个子调用内部也执行相同的两个半步，因此越细的层越早到达当前调用的终点。
+
+这保证了本层进入第二阶段时，所有更细层都已到达 `end_fraction`，而本层仍保留局部步起点状态。
+
+即使当前层没有单元，也必须先完成细层递归，之后才能通过
 
 ```cpp
-    if (!build_stage_view(depth, end_fraction, true)) return false;
+if (cells_by_level_[depth].empty()) return true;
 ```
-这里我们预测所有更低层以及当前层的cell在终点end_fraction处的状态,低层为何要预测同理。唯一不同的是这次我们令endpoint=true,在build_stage_view中
+
+跳过本层结算。
+
+### 6.4 第二阶段：构造终点视图，只求解本层负责的面
+
 ```cpp
-    view_.cells = state_.cells;
-    for (int cell_index = 0; cell_index < n_; ++cell_index)
-    {
-        const bool needs_prediction =
-            level_[cell_index] < depth || (endpoint && level_[cell_index] == depth);
-        if (!needs_prediction) continue;
-
-        auto& cell = view_.cells[ng_ + cell_index];
-        const double elapsed = (fraction - local_step_start_[cell_index]) * macro_step_;
-        cell.U = base_[cell_index] + slope_[cell_index] * elapsed;
-        if (!is_physical(cell.U, cell.gamma)) return false;
-    }
-    boundary::FillBoundary(view_, time_ + fraction * macro_step_, hooks_);
-    return true;
+if (!build_stage_view(depth, end_fraction, true)) return false;
+solve_faces(view_, faces_owned_by_level_[depth]);
+if (!check_wave_speeds(faces_owned_by_level_[depth]) ||
+    macro_step_ > evaluate_sources(
+        view_, time_ + end_fraction * macro_step_, macro_step_)) return false;
 ```
-意味着我们还要为当前层级预测终点状态,这是因为当前层级还没有推进到终点end_fraction,在普通的RK2中这也是需要的——从起点的斜率外推预测一个终点状态，再从这个预测终点状态得到终点斜率,最后与起点斜率取平均作为最终变化率推进。更高层级依然不需要预测终点状态，因为就在之前已经
 
-递归调用了两次下一层级的advance_level,已经将更高层级推进到了终点end_fraction,state_中存储的状态就是end_fraction处的状态,因此直接复制到view_中不用修改。
+终点视图中，当前层和更粗层使用线性预测，更细层使用已经完成子步的状态。源项也在这个终点视图上重新计算。
 
+此时只求解 `owned` 面，因为更细层负责的面已经在细层子步中完成了通量积分，并将贡献写入相邻单元的累积数组。本层无需再次积分这些面，否则会重复计入同一份输运。
 
-- 于是我们更新好了view_,其中存储的cell状态为预测的终点处的状态。接下来我们再用终点处的view_状态更新面通量flux_,
+`flux_` 是按面更新的工作缓存，并不始终代表整张网格在某一共同状态下的通量。起点 `needed` 集合的求解和复用规则保证当前斜率所需的通量有效；终点则只更新本层负责的面。
+
+### 6.5 共享面通量积分
+
+对本层负责的面 $f$，计算梯形积分
+
+$$
+I_f=A_f\frac{h_\ell}{2}\left(F_f^{(0)}+F_f^{(1)}\right).
+$$
+
+随后把同一份积分以相反符号写入两侧 active 单元：
+
 ```cpp
-    solve_faces(view_, faces_owned_by_level_[depth]);
+if (left >= 0) pending_flux_integral_[left] -= integral;
+if (right >= 0) pending_flux_integral_[right] += integral;
 ```
 
-- 再经过一个合法性检测后我们到达终点处的斜率计算以及最终推进时间步处
-```cpp
-    for (int face : faces_owned_by_level_[depth])
-    {
-        const auto integral =
-            (first_flux_[face] + flux_[face]) * (0.5 * local_step * area_[face]);
-        const int left = left_cell(face);
-        const int right = right_cell(face);
-        if (left >= 0) pending_flux_integral_[left] -= integral;
-        if (right >= 0) pending_flux_integral_[right] += integral;
-    }
+正向通量从左流向右，所以左单元减少、右单元增加。内部面的两份贡献在全域体积加权求和时相消；边界面只向存在的 active 单元记账。
 
-    for (int cell_index : cells_by_level_[depth])
-    {
-        auto& cell = state_.cells[ng_ + cell_index];
-        cell.U = base_[cell_index]
-            + pending_flux_integral_[cell_index] / volume_[cell_index]
-            + (source_start_[cell_index] + source_[ng_ + cell_index])
-                * (0.5 * local_step);
-        const double pressure_work_end =
-            -(cell.gamma - 1.0) * view_.cells[ng_ + cell_index].U.internal_energy()
-            * (area_[cell_index + 1] * face_velocity_[cell_index + 1]
-               - area_[cell_index] * face_velocity_[cell_index])
-            / volume_[cell_index];
-        cell.U[hd_core::INTERNAL_ENERGY] +=
-            0.5 * local_step * (pressure_work_start_[cell_index] + pressure_work_end);
-        if (!is_physical(cell.U, cell.gamma)) return false;
-        cell.synchronize_dual_energy();
-        pending_flux_integral_[cell_index] = Conserved{};
-    }
-```
-- 第一个循环,我们对owner为当前层级的所有面,计算RK2的最终推进值-通量积分,即面通量的平均值乘上再乘上面积(即RHS，或者说最终的RK2斜率),再乘上当前的时间步长(local_step = span * macrostep)。然后把通量积分的负值添加到面的左侧cell的累积通量积分pending_flux_integral_[left],正值添加到右侧的cell的累积通量pending_flux_integral_[right]中，这些pending_flux_integral_要一直逐层向下传递,直到这个cell的depth推进的那一层,在积分推进中将它加到对应cell的状态中作为积分步里的变化量。
+若一个面连接粗、细两个单元，细单元每完成一个子步就结算自己的累积量，粗单元则保留同一面贡献，直到自己的较长局部步结束。例如，粗步为 $H$、细步为 $H/2$ 时，粗单元收到
 
-这里的逻辑与前面稍有不同，在前面phase1我们求面通量黎曼问题的逻辑是求owner_level<escape>>=</escape>depth的本层和更高层级的flux,然后在更高层级处通过复用标记reuse flag跳过solve_face避免重复求解,复用低层求出的通量。当然,因为只有owner_level<escape>>=</escape>depth的通量会影响depth层级的cell的状态,我们复用的其实是这一部分。
-而在这里,我们前面求解黎曼问题的solve_face只求了owner为本层级的通量作为终点end_fraction处的通量,owner_level<escape><</escape>depth的面的通量不影响depth层级的cell,owner level等于当前层depth的通量由solve_faces求解。而在前面的两步更高一级的递归 advance_level(depth+1,fraction)和advance_level(depth+1,fraction + span/2.0)以及在这两步递归中更高层级的递归里(都推进到了end_fraction),一定把owner_level高于depth的面在终点end_fraction处的通量求了出来。这些面的通量会被加到右侧cell的pending_flux_integral_[right],以及其负值会被加到左侧cell的pending_flux_integral_[left]里,然后pending_flux逐层向下累积传播,到depth这一层再给pending_flux_integral_加上(右侧cell)/减去(左侧cell)刚刚算出的integral,就是所有owner层级大于等于depth的面对于这个cell的通量之和,而更低层owner的面又对这个cell没有影响,因此这就是这个cell的RHS。于是在后面的循环里我们把所有这一层的cell加上pending_flux_integral,就是RK2对这一层的所有cells最终推进结果。然后我们把这一层的cells的pending_flux_integral清空，因为这一depth的cell随这一个时间步的变化已经结算完了,下一步又需要用到新的通量。比如层级0调用两次层级1,第一次是0到0.5，第二次是0.5到1.0，那么层级1会在0到0.5结算一次pending_flux_integral_加到层级1的cell里,然后清空这些pending_flux_integral_(不影响层级0的cell的pending_flux向下传递),然后0.5到1.0又是新的一步,需要重新计算在这新一步里层级1的所有cell的RHS。
+$$
+I_f^{[0,H]}=I_f^{[0,H/2]}+I_f^{[H/2,H]}.
+$$
 
-- 一切正常进行,返回真,这就是整个LTSRK2的流程
+这些积分直接保存在共享的 `pending_flux_integral_` 中，并不需要在函数返回时逐层复制。递归只决定何时产生贡献、何时结算各单元。
+
+### 6.6 结算本层单元
+
+本层单元的所有相邻面贡献到齐后，更新
+
+$$
+U_i^{\mathrm{new}}=U_i^0
++\frac{J_i}{V_i}
++\frac{h_\ell}{2}\left(S_i^{(0)}+S_i^{(1)}\right)
++\frac{h_\ell}{2}\left(Q_i^{(0)}+Q_i^{(1)}\right),
+$$
+
+其中 $J_i=\mathrm{pending\_flux\_integral\_}[i]$ 是带符号的净面通量积分。$J_i/V_i$ 已经是状态增量，不能再乘一次时间步；压力功只加到独立内能分量。
+
+源项和压力功均使用起点、终点的两阶段平均。单层情况下，这对应普通 Heun/RK2 更新；跨层面则使用细层子步积分之和。
+
+更新后检查物理有效性、执行双能量同步，并仅清空**本层单元**的 `pending_flux_integral_`。更粗层单元的累积量继续保留，等待它们自己的局部步结束。
+
+共享面积分保证的是输运部分的离散守恒。源项可以改变全域守恒量，双能量同步也可能修正总能量；两者应与内部面的守恒抵消区分。
+
 ## 流程总结
 0. 外部run函数各种各种初始化,包括初始化数组,时间步的分配,cell和face的层级分配,计算出最大步长macro_step(由所有cell中最小的可行dt * $2^{\mathrm{max_depth}}$),然后开始尝试循环。
 1. 首先由外部advance_lts_rk2计算一次最初起点处的flux，然后呼叫advance_level(0,0,true).这是起点
@@ -467,619 +449,219 @@ C1属于第1层,C2属于第0层,C3属于第二层，f1的owner_level维1,f2的ow
 9. 返回真值，完成这一步的推进。递归回退到上一级后会逐层完成结算，除非合法性检查不通过，那所有的层级会快速返回false，退回run函数中的attempt循环，尝试0.5倍的宏步。
 
 
-## 四个 Cell、三个时间层级的 LTS-RK2 执行示例
-(这部分因为我太懒不想再写，因此是ChatGPT写的):
-假设有四个非周期边界 cell：
+## 7. 四个单元、三个层级的完整示例
+
+设四个单元采用非周期边界，层级已经确定为 `[0, 1, 2, 1]`：
 
 ```text
 边界 | f0 | C0 | f1 | C1 | f2 | C2 | f3 | C3 | f4 | 边界
-
-层级：      0          1          2          1
-时间步：    H         H/2        H/4        H/2
+层级：      0         1         2         1
+步长：      H        H/2       H/4       H/2
 ```
 
-也就是：
-
-```text
-C0：level 0，一个宏步内推进 1 次
-C1：level 1，一个宏步内推进 2 次
-C2：level 2，一个宏步内推进 4 次
-C3：level 1，一个宏步内推进 2 次
-```
-
-> 注意：当前实现会根据重构模板建立层级缓冲区，因此真实的 `assign_time_levels()` 可能继续提升相邻 cell。这里把 `[0, 1, 2, 1]` 当作已经确定的层级，用于说明 LTS-RK2 的递归执行过程。
+这个层级分布用于展示递归顺序；实际 `assign_time_levels()` 可能因缓冲区要求继续提升邻居。
 
 <a id="face-ownership"></a>
 
-### 1. 分配面的负责层级
+### 7.1 面的负责层级
 
-一个面由左右相邻 cell 中层级更高、时间步更小的一层负责积分。
+| 面 | 相邻 active 单元 | 负责层级 |
+| --- | --- | ---: |
+| `f0` | `C0` | 0 |
+| `f1` | `C0`、`C1` | 1 |
+| `f2` | `C1`、`C2` | 2 |
+| `f3` | `C2`、`C3` | 2 |
+| `f4` | `C3` | 1 |
 
-| 面 | 左侧 | 右侧 | 负责层级 |
-|---|---|---|---:|
-| `f0` | 非周期边界 | `C0`，level 0 | 0 |
-| `f1` | `C0`，level 0 | `C1`，level 1 | 1 |
-| `f2` | `C1`，level 1 | `C2`，level 2 | 2 |
-| `f3` | `C2`，level 2 | `C3`，level 1 | 2 |
-| `f4` | `C3`，level 1 | 非周期边界 | 1 |
+因此，各层的面集合为
 
-因此：
-
-```cpp
-faces_owned_by_level_[0] = {f0};
-faces_owned_by_level_[1] = {f1, f4};
-faces_owned_by_level_[2] = {f2, f3};
-```
-
-各层起点阶段需要准备的面为：
-
-```cpp
-faces_needed_by_level_[0] = {f0, f1, f2, f3, f4};
-faces_needed_by_level_[1] = {f1, f2, f3, f4};
-faces_needed_by_level_[2] = {f2, f3};
-```
-
-其中：
-
-```text
-faces_owned_by_level_：
-当前层真正负责进行时间积分的面。
-
-faces_needed_by_level_：
-当前层计算 cell 斜率以及为子层准备起点时，需要计算的面。
-```
+| 层级 | `faces_owned_by_level_` | `faces_needed_by_level_` |
+| --- | --- | --- |
+| 0 | `{f0}` | `{f0, f1, f2, f3, f4}` |
+| 1 | `{f1, f4}` | `{f1, f2, f3, f4}` |
+| 2 | `{f2, f3}` | `{f2, f3}` |
 
 <a id="initial-stage"></a>
-
-### 2. 宏步起点
-
-在宏步起点 $t=0$，所有 cell 都处于相同物理时刻。
-
-程序首先计算：
-
-```text
-f0、f1、f2、f3、f4 的初始通量
-所有面的波速和面速度
-所有 cell 在 t=0 的源项
-```
-
-对应：
-
-```cpp
-solve_faces(start_, all_faces_);
-evaluate_sources(start_, time_, 0.0);
-```
-
-然后进入最外层递归：
-
-```cpp
-advance_level(0, 0.0, true);
-```
-
 <a id="level-0-start"></a>
-
-### 3. Level 0：准备 C0 的局部步
-
-C0 的局部时间步为：
-
-```text
-C0：0 → H
-```
-
-首先保存 level 0 拥有的面 `f0` 的起点通量：
-
-```cpp
-first_flux_[f0] = flux_[f0];
-```
-
-然后使用 C0 的左右面 `f0、f1` 和起点源项计算斜率：
-
-$$
-\mathrm{slope}_{C0}(0)
-=
-\frac{
-F_{f0}(0)A_{f0}
--
-F_{f1}(0)A_{f1}
-}{
-V_{C0}
-}
-+
-S_{C0}(0)
-$$
-
-保存：
-
-```text
-base_[C0]  = C0 在 0 时刻的状态
-slope_[C0] = C0 在 0 时刻的变化率
-```
-
-C0 此时不会立即更新到 $H$。
-
-它必须等待更细层完成，并收集 `f1` 在整个宏步内的通量积分。
-
 <a id="level-1-first-step"></a>
 
-### 4. Level 1 第一步：C1、C3 从 0 推进到 H/2
+### 7.2 在共同起点准备各层
 
-进入：
+为简洁起见，将宏步起点记为 0。初始扫描计算所有面的通量、波速、面速度，以及所有单元的源项。随后依次进入
 
-```cpp
-advance_level(1, 0.0, true);
+```text
+advance_level(0, 0.0, true)
+└─ advance_level(1, 0.0, true)
+   └─ advance_level(2, 0.0, true)
 ```
 
-因为 `reuse_start_stage=true`，直接复用宏步起点已经计算好的通量和源项。
+三层复用同一份起点阶段结果，但分别保存自己负责的面通量和单元预测数据：
 
-保存 level 1 拥有的起点面通量：
+| 层级 | 保存的起点面通量 | 保存起点状态与斜率的单元 |
+| --- | --- | --- |
+| 0 | `f0` | `C0` |
+| 1 | `f1`、`f4` | `C1`、`C3` |
+| 2 | `f2`、`f3` | `C2` |
 
-```cpp
-first_flux_[f1] = flux_[f1];
-first_flux_[f4] = flux_[f4];
-```
-
-计算 C1 的起点斜率：
-
-$$
-\mathrm{slope}_{C1}(0)
-=
-\frac{
-F_{f1}(0)A_{f1}
--
-F_{f2}(0)A_{f2}
-}{
-V_{C1}
-}
-+
-S_{C1}(0)
-$$
-
-计算 C3 的起点斜率：
-
-$$
-\mathrm{slope}_{C3}(0)
-=
-\frac{
-F_{f3}(0)A_{f3}
--
-F_{f4}(0)A_{f4}
-}{
-V_{C3}
-}
-+
-S_{C3}(0)
-$$
-
-C1、C3 暂时不会提交到 $H/2$，因为它们需要等待 C2 完成两个 $H/4$ 小步。
+例如，`C1` 的起点斜率由左面 `f1`、右面 `f2` 的通量差除以体积，再加上源项和内能压力功得到。虽然 `f2` 归层级 2 负责积分，层级 1 仍需要它的起点通量来构造 `C1` 的预测斜率。
 
 <a id="level-2-first-step"></a>
-
-### 5. Level 2 第一步：C2 从 0 推进到 H/4
-
-进入：
-
-```cpp
-advance_level(2, 0.0, true);
-```
-
-保存 level 2 拥有的面 `f2、f3` 的起点通量：
-
-```cpp
-first_flux_[f2] = flux_[f2];
-first_flux_[f3] = flux_[f3];
-```
-
-使用 `f2、f3` 和源项计算 C2 的起点斜率：
-
-$$
-\mathrm{slope}_{C2}(0)
-=
-\frac{
-F_{f2}(0)A_{f2}
--
-F_{f3}(0)A_{f3}
-}{
-V_{C2}
-}
-+
-S_{C2}(0)
-$$
-
-为了计算 RK2 终点通量，程序构造 $H/4$ 时刻的预测状态：
-
-```text
-C0：使用 slope_C0(0) 预测到 H/4
-C1：使用 slope_C1(0) 预测到 H/4
-C2：使用 slope_C2(0) 预测到 H/4
-C3：使用 slope_C3(0) 预测到 H/4
-```
-
-预测公式为：
-
-$$
-U_i^*(H/4)
-=
-U_i(0)
-+
-\mathrm{slope}_i(0)\frac{H}{4}
-$$
-
-然后使用预测状态求解 `f2、f3` 在 $H/4$ 时刻的 Riemann 问题。
-
-得到终点通量后，对面通量进行 RK2 梯形积分：
-
-$$
-I_{f2}^{0\rightarrow H/4}
-=
-\frac{
-F_{f2}(0)+F_{f2}(H/4)
-}{2}
-A_{f2}\frac{H}{4}
-$$
-
-$$
-I_{f3}^{0\rightarrow H/4}
-=
-\frac{
-F_{f3}(0)+F_{f3}(H/4)
-}{2}
-A_{f3}\frac{H}{4}
-$$
-
-同一份面通量积分以相反符号写入左右 cell：
-
-```text
-f2：写入 C1 和 C2
-f3：写入 C2 和 C3
-```
-
-C2 的局部步已经结束，因此立即正式提交到 $H/4$。
-
-C1、C3 尚未完成自己的 $H/2$ 局部步，所以它们收到的通量暂存在：
-
-```cpp
-pending_flux_integral_[C1]
-pending_flux_integral_[C3]
-```
-
 <a id="level-2-second-step"></a>
 
-### 6. Level 2 第二步：C2 从 H/4 推进到 H/2
+### 7.3 `C2` 先走两个细步：$0\rightarrow H/4\rightarrow H/2$
 
-进入：
+第一个细步没有更细层可递归，直接构造 $H/4$ 的终点视图。此时四个单元都用各自的起点斜率预测到 $H/4$，求解 `f2`、`f3`，并计算
+
+$$
+I_f^{[0,H/4]}=A_f\frac{H}{8}\left(F_f^{(0)}+F_f^{(1)}\right),
+\qquad f\in\{f2,f3\}.
+$$
+
+其中阶段上标表示当前细步的起点和预测终点。累积符号为
+
+| 面 | 左单元贡献 | 右单元贡献 |
+| --- | --- | --- |
+| `f2` | `C1`：$-I_{f2}$ | `C2`：$+I_{f2}$ |
+| `f3` | `C2`：$-I_{f3}$ | `C3`：$+I_{f3}$ |
+
+`C2` 用自己的净积分、两阶段源项和压力功完成更新，并清空自己的累积量。`C1`、`C3` 尚未结束局部步，保留收到的贡献。
+
+第二个细步调用
 
 ```cpp
 advance_level(2, 0.25, false);
 ```
 
-因为 `reuse_start_stage=false`，需要重新构造 $H/4$ 时刻的阶段网格：
+在 $H/4$ 的起点视图中，`C2` 使用刚完成的 RK2 更新状态，其余单元仍使用慢区预测。因此必须重新计算 `f2`、`f3` 的起点通量，不能复用上一步基于预测终点得到的通量。
 
-```text
-C0：预测到 H/4
-C1：预测到 H/4
-C2：使用已经正式到达 H/4 的状态
-C3：预测到 H/4
-```
-
-然后重新求解 `f2、f3` 在 $H/4$ 的起点通量。
-
-之所以不能直接复用上一个小步的终点通量，是因为：
-
-```text
-上一个小步终点使用的是 C2 的 Euler 预测状态；
-当前小步起点使用的是 C2 的 RK2 修正状态。
-```
-
-随后：
-
-1. 计算 C2 在 $H/4$ 时刻的新斜率；
-2. 将相关 cell 预测到 $H/2$；
-3. 求解 `f2、f3` 在 $H/2$ 的终点通量；
-4. 对 $H/4\rightarrow H/2$ 的面通量做梯形积分；
-5. C2 正式提交到 $H/2$；
-6. C1、C3 继续累计来自 `f2、f3` 的通量。
-
-此时：
-
-```text
-C2：正式位于 H/2
-C1、C3：尚未提交，但已经收齐 0 → H/2 的细层界面通量
-```
+随后重复预测、求解、积分和更新，将 `C2` 推进到 $H/2$。至此，`C1`、`C3` 已收齐来自细层面的两个 $H/4$ 积分，但尚未更新到 $H/2$。
 
 <a id="level-1-first-commit"></a>
 
-### 7. Level 1 第一步结算：C1、C3 到达 H/2
+### 7.4 结算层级 1：`C1`、`C3` 到达 $H/2$
 
-C2 完成两个小步后，构造 level 1 在 $H/2$ 时刻的终点阶段：
+构造层级 1 的终点视图时，`C0`、`C1`、`C3` 预测到 $H/2$，`C2` 直接使用已更新的 $H/2$ 状态。接着求解本层负责的 `f1`、`f4`，计算它们在 $[0,H/2]$ 上的梯形积分。
 
-```text
-C0：使用 slope_C0(0) 预测到 H/2
-C1：使用 slope_C1(0) 预测到 H/2
-C2：直接使用正式的 H/2 状态
-C3：使用 slope_C3(0) 预测到 H/2
-```
-
-然后求解 level 1 拥有的面：
-
-```text
-f1、f4
-```
-
-计算梯形通量积分：
+记 $I_f^{[a,b]}$ 为该时间区间内已完成的面积分，则待结算的净积分为
 
 $$
-I_{f1}^{0\rightarrow H/2}
-=
-\frac{
-F_{f1}(0)+F_{f1}(H/2)
-}{2}
-A_{f1}\frac{H}{2}
+J_{C1}=I_{f1}^{[0,H/2]}
+-I_{f2}^{[0,H/4]}-I_{f2}^{[H/4,H/2]},
 $$
 
 $$
-I_{f4}^{0\rightarrow H/2}
-=
-\frac{
-F_{f4}(0)+F_{f4}(H/2)
-}{2}
-A_{f4}\frac{H}{2}
+J_{C3}=I_{f3}^{[0,H/4]}+I_{f3}^{[H/4,H/2]}
+-I_{f4}^{[0,H/2]}.
 $$
 
-此时 C1、C3 已经收齐自己的全部面通量：
-
-```text
-C1：左面 f1，加上右面 f2 的两个 H/4 积分
-C3：左面 f3 的两个 H/4 积分，加上右面 f4
-```
-
-因此 C1、C3 正式提交到 $H/2$。
-
-`f1` 给 C0 的通量贡献继续保存在：
-
-```cpp
-pending_flux_integral_[C0]
-```
-
-因为 C0 要等到整个宏步结束才正式结算。
+加上各自的源项和压力功后，`C1`、`C3` 更新到 $H/2$，并清空自己的累积量。`f1` 给 `C0` 的贡献 $-I_{f1}^{[0,H/2]}$ 继续保留。
 
 <a id="level-1-second-step"></a>
 
-### 8. Level 1 第二步：C1、C3 从 H/2 推进到 H
+### 7.5 后半个宏步：$H/2\rightarrow H$
 
-进入：
+调用 `advance_level(1, 0.5, false)` 时，`C1`、`C2`、`C3` 已同步到 $H/2$，只有 `C0` 需要从 0 预测到 $H/2$。层级 1 重新求解所需面 `f1`–`f4`，并保存 `C1`、`C3` 的新起点斜率。
+
+随后执行
 
 ```cpp
-advance_level(1, 0.5, false);
+advance_level(2, 0.5, true);   // H/2 -> 3H/4
+advance_level(2, 0.75, false); // 3H/4 -> H
 ```
 
-首先构造 $H/2$ 时刻的阶段状态：
-
-```text
-C0：从 0 预测到 H/2
-C1：使用正式的 H/2 状态
-C2：使用正式的 H/2 状态
-C3：使用正式的 H/2 状态
-```
-
-然后重新求解：
-
-```text
-f1、f2、f3、f4
-```
-
-并计算 C1、C3 在 $H/2$ 时刻的新斜率。
-
-接着让 C2 再走两个小步：
-
-```text
-C2：H/2 → 3H/4
-C2：3H/4 → H
-```
-
-每个小步都执行：
-
-1. 准备局部步起点状态；
-2. 计算起点面通量和源项；
-3. 计算 C2 的起点斜率；
-4. 将慢层和当前层预测到局部步终点；
-5. 求解 `f2、f3` 的终点 Riemann 问题；
-6. 对起点、终点通量进行梯形积分；
-7. 正式提交 C2；
-8. 把界面通量累计给 C1、C3。
-
-完成两个小步后：
-
-```text
-C2：正式位于 H
-C1、C3：已经收齐 H/2 → H 的细层界面通量
-```
-
-随后构造 level 1 在 $H$ 时刻的终点阶段：
-
-```text
-C0：预测到 H
-C1：预测到 H
-C2：直接使用正式的 H 状态
-C3：预测到 H
-```
-
-求解 `f1、f4` 在 $H$ 时刻的终点通量，并完成它们在 $H/2\rightarrow H$ 内的梯形积分。
-
-最后 C1、C3 正式提交到 $H$。
+第一个细步复用层级 1 刚准备的起点阶段，第二个细步重新求值。`C2` 到达 $H$ 后，层级 1 再构造终点视图，完成 `f1`、`f4` 的后半步积分，并将 `C1`、`C3` 更新到 $H$。
 
 <a id="level-0-commit"></a>
 
-### 9. Level 0 最终结算：C0 到达 H
+### 7.6 最后结算 `C0`
 
-此时：
+此时 `C1`、`C2`、`C3` 已到达 $H$，`C0` 的试算状态仍在 0，但已收到 `f1` 在两个半步中的贡献。
 
-```text
-C1、C2、C3：已经正式位于 H
-C0：正式状态仍然位于 0
-```
+层级 0 将 `C0` 预测到 $H$，其余单元直接使用已更新状态；求解 `f0` 的终点通量并完成其宏步积分。`C0` 的净积分为
 
-但是 C0 已经累计了 `f1` 的两段通量：
+$$
+J_{C0}=I_{f0}^{[0,H]}
+-I_{f1}^{[0,H/2]}-I_{f1}^{[H/2,H]}.
+$$
 
-```text
-f1：0 → H/2
-f1：H/2 → H
-```
-
-接下来构造 level 0 的 RK2 终点阶段：
-
-```text
-C0：使用 slope_C0(0) 预测到 H
-C1、C2、C3：使用正式的 H 时刻状态
-```
-
-求解 C0 所在层拥有的面：
-
-```text
-f0 在 H 时刻的通量
-```
-
-C0 最终使用：
-
-```text
-f0 在 0 → H 内的梯形通量积分
-+
-f1 累计的两个 H/2 通量积分
-+
-C0 起点和终点源项的平均积分
-```
-
-正式更新到 $H$。
-
-此时：
-
-```text
-C0、C1、C2、C3 全部同步在 H
-```
-
-最后填充边界，并将 `state_` 提交给正式网格。
+加入 `C0` 的两阶段源项和压力功后，四个单元全部同步到 $H$。最终填充边界，并提交整个宏步。
 
 <a id="execution-timeline"></a>
 
-### 10. 整体时间线
-
-```text
-C0：|----------------------- H -----------------------|
-
-C1：|---------- H/2 ---------|---------- H/2 ---------|
-
-C2：|-- H/4 --|-- H/4 --|-- H/4 --|-- H/4 --|
-
-C3：|---------- H/2 ---------|---------- H/2 ---------|
-```
-
-递归执行顺序为：
+### 7.7 递归执行顺序
 
 ```text
 准备 C0 在 0 时刻的斜率
 │
 ├─ 准备 C1、C3 在 0 时刻的斜率
-│  │
-│  ├─ C2：0 → H/4
-│  └─ C2：H/4 → H/2
-│
+│  ├─ C2：0 -> H/4
+│  └─ C2：H/4 -> H/2
 ├─ 结算 C1、C3 到 H/2
 │
 ├─ 准备 C1、C3 在 H/2 时刻的新斜率
-│  │
-│  ├─ C2：H/2 → 3H/4
-│  └─ C2：3H/4 → H
-│
+│  ├─ C2：H/2 -> 3H/4
+│  └─ C2：3H/4 -> H
 ├─ 结算 C1、C3 到 H
 │
 └─ 结算 C0 到 H
 ```
 
-<a id="core-principles"></a>
+## 8. 源项求值与步长检查
 
-### 11. 核心原则
+### 8.1 `evaluate_sources()`：分别检查，再检查合计
 
-整个 LTS-RK2 过程遵循以下原则：
+该函数读取阶段网格 `stage`，将各个源项的贡献累加到 `source_`，不会直接把源项加到 `stage` 的状态上。
 
-1. 每个 cell 根据自己的层级使用不同局部时间步。
-2. 每个面只由相邻 cell 中更细的一层负责时间积分。
-3. 每个局部步先计算起点斜率，再预测终点状态。
-4. 使用预测终点状态求解终点 Riemann 问题和终点源项。
-5. 使用起点与终点通量、源项的平均值完成 RK2 更新。
-6. 细层先完成多个小步，粗层等待细层界面通量全部到齐。
-7. 同一份界面通量以相反符号累计给左右 cell，保证守恒。
-8. 所有层最终重新同步在宏步终点 $H$。
+每次调用都会清空源项工作区并使尺度缓存失效，然后依次：求值一个源项、补齐所需的内能源项、检查回调给出的步长上限、检查该源项的状态变化限制，再将其累加。全部求值后，还要对源项总和检查一次。
 
+分别检查可以避免相抵源项掩盖过大的单项变化；合计检查可以发现多个同向源项叠加后超限的情况。
 
-## 一些细节和3D扩展
-- 在1D架构中, 我们通过cell_index从0~nactive-1遍历活跃区,cell_index为活跃区下标,再加上nghost的offset得到flat_index。拓展到3D情形,我们需要用Index进行变换
-- build_stage_view中
+### 8.2 允许变化量与阶段内缓存
+
+`scan_source_changes()` 使用硬编码的 10% 系数，为每个单元计算
+
+$$
+\mathcal A_\rho=0.1\rho,\qquad
+\mathcal A_{m_d}=0.1\rho(|v_d|+c),\qquad
+\mathcal A_e=0.1\frac{p}{\gamma-1},
+\qquad c=\sqrt{\frac{\gamma p}{\rho}}.
+$$
+
+这些量分别限制密度、各方向动量密度和独立内能密度的源项变化。动量尺度包含声速，因此不是简单地限制为当前动量的 10%。
+
+对于某个源项分量的变化率 $R$，检查条件为
+
+$$
+H|R|\leq\mathcal A.
+$$
+
+这里约束的是整个宏步 $H$，即使当前正在执行细层子步。它是基于阶段变化率的步长限制，并非对完整非线性演化变化量的严格保证。
+
+同一次 `evaluate_sources()` 中，第一个源项填充密度和允许变化量缓存，后续源项及合计检查复用这些尺度。下一次阶段求值会重新填充，不能因为仍使用同一个 `view_` 对象就沿用旧尺度。
+
+所有源项分量都要检查有限性；真空单元允许零源项，当前实现不支持通过非零源项从真空创造气体。
+
+### 8.3 初始选步与后续试步采用不同返回方式
+
+| 调用情形 | `source_change_limit()` 的行为 |
+| --- | --- |
+| 初始扫描，`trial_H = 0` | 对所有非零变化率取 $\min(\mathcal A/\lvert R\rvert)$，返回实际步长上限 |
+| 后续阶段，`trial_H > 0` | 检查当前 $H$ 是否超限：通过返回 $\infty$，超限返回 0 |
+
+初始上限参与宏步选择。后续阶段已经知道正在尝试的 $H$，只需要判断是否可接受，无需再计算精确的最小上限。源项回调自己给出的上限仍独立参与 `evaluate_sources()` 的最终限制。
+
+后续阶段使用
+
 ```cpp
-        auto& cell = view_.cells[ng_ + cell_index];
-```
-修改为
-```cpp
-
+scan_source_changes(stage, rates, [&](double allowance, double rate) {
+    exceeded |= source_change_exceeds(trial_H, twice_H, allowance, rate);
+});
 ```
 
-### 源项贡献和检查
-evaluate_sources函数会逐项将源项贡献加到网格stage上
+只要一个分量超限，`exceeded` 就保持为真。不过扫描仍继续，以免遗漏其他单元或源项的非法值。返回 0 后，上层拒绝本次宏步，并尝试减半后的 $H$。
 
-然后通过source_change_limit计算在给定allowance=0.1 下每个源项限制的最小dt,并且最后再取所有源项之和再计算一次，防止诸如多个加热源项单独计算dt限制那种情形。
+### 8.4 避免不必要除法的快速判断
 
-allowance的限制是,用源项对cell状态产生的单位时间变化率rate,乘上步长dt,要小于0.1*原状态,即一步之内状态不能因为源项产生超过10%的变化. 这个allowance目前是硬编码在scan_source_changes函数中的。
-
-source_change_limit里,输入的参数rate就是源项对每个cell的单位时间变化率(注意是在evaluate_sources里调用的,每个源项都会调用一次,此时rate是每个源项对cell产生的变化率,最后把源项求和再调用一次,rate是所有源项之和对cell产生的变化率)
-
-if(trial_H>0.0) 的分支就是正常循环里的分支(所有的步长都必然大于0),此时调用scan_source_changes,这个函数计算每个,这里采用一票否决机制,调用中的lambda函数Bound(第三个参数)
-```cpp
-    scan_source_changes(stage, rates, [&](double allowance, double rate) {
-        exceeded |= source_change_exceeds(trial_H, twice_H, allowance, rate);
-    });
-```
-会在scan_source_changes里被执行。scan_source_changes首先遍历每个网格,计算容许值,这里0.1是硬编码的
-
-```cpp
-for (int cell_index = 0; cell_index < n_; ++cell_index)
-    {
-        const auto& rate = rates[ng_ + cell_index];
-        for (double value : rate.data)
-            if (!std::isfinite(value)) throw std::runtime_error("Non-finite LTS RK2 source");
-
-        if (!source_cache_ready_)
-        {
-            const auto& cell = stage.cells[ng_ + cell_index];
-            const auto primitive = cell.U.to_Primtivies(cell.gamma);
-            const double rho = primitive[hd_core::RHO];
-            const double pressure = primitive[hd_core::PRE];
-            source_rho_[cell_index] = rho;
-            source_density_allowance_[cell_index] = 0.1 * rho;
-            source_momentum_allowance_[cell_index] = 0.0;
-            source_internal_allowance_[cell_index] = 0.0;
-            if (rho != 0.0)
-            {
-                const double velocity = primitive[hd_core::VEL(0)];
-                const double sound_speed = std::sqrt(cell.gamma * pressure / rho);
-                source_momentum_allowance_[cell_index] =
-                    0.1 * (rho * (std::abs(velocity) + sound_speed));
-                source_internal_allowance_[cell_index] =
-                    0.1 * (pressure / (cell.gamma - 1.0));
-            }
-        }
-
-        if (source_rho_[cell_index] == 0.0)
-        {
-            for (double value : rate.data)
-                if (value != 0.0)
-                    throw std::invalid_argument("LTS RK2 cannot create gas in vacuum");
-            continue;
-        }
-
-        bound(source_density_allowance_[cell_index], rate[hd_core::RHO]);
-        bound(source_momentum_allowance_[cell_index], rate[hd_core::MOMDEN(0)]);
-        bound(source_internal_allowance_[cell_index], rate[hd_core::INTERNAL_ENERGY]);
-    }
-```
-计算出的某个cell的三个容许变化量(密度,动量和内能)会传递给bound函数,在这里就是刚才的source_change_exceeds,scan_source_changes会把计算出的容许变化量和函数变化率传递给它,然后它还会使用一倍的步长和两倍的步长作为参数，这个函数的作用就是判断源项在这一格上产生的变化量是否超过了容许值
 ```cpp
 bool source_change_exceeds(double H, double twice_H, double allowance, double rate)
 {
@@ -1088,47 +670,47 @@ bool source_change_exceeds(double H, double twice_H, double allowance, double ra
     return rate != 0.0 && H > allowance / magnitude;
 }
 ```
-这里是一个优化浮点除法的小trick,如果两倍的步长产生的变化都没有超过容许值的话,那么必然没有超过,返回false. 否则再回退到原本的除法,即步长是否大于容许值/变化率,如果大于且变化率不等于0就说明超过，返回true,否则返回false表示不超过.
 
-所以前面source_change_limit内
+若 $2H|R|<\mathcal A$，当前步长显然没有超限，可以直接接受。否则回到原本的除法比较 $H>\mathcal A/|R|$；零变化率不限制步长。倍数 2 为快速判断留出余量，不改变 10% 的实际限制。
+
+## 9. 从一维代码读到多维实现
+
+原文的一维访问方式
+
 ```cpp
-    scan_source_changes(stage, rates, [&](double allowance, double rate) {
-        exceeded |= source_change_exceeds(trial_H, twice_H, allowance, rate);
-    });
+auto& cell = view_.cells[ng_ + cell_index];
 ```
-的含义也很明显,就是只要有任何一个cell的三个状态变化量中的任何一个超出了容许的变化量allowance,那么就会返回true, exceeded就会永远保持true,只有所有cell的所有容许值都没有被超过,那么exceeded才会保持false。
-接下来如果exceeded=true,有容许值被超过了，就返回0.0,这时候上级的advance推进函数会返回false,回到attempt循环里,会尝试缩小一半步长。如果exceeded=false,那么就继续执行。
 
-另一个分支,trial_H<=0.0的情形,只在一种情况发生,就是在run()函数做初始化的时候调用了一次evaluate_source,给的步长是0.0,这个时候的目的是试探一下初始条件下源项限制的步长
+在当前多维代码中对应
+
 ```cpp
-    const double source_limit = evaluate_sources(start_, time_, 0.0);
-    initial_source_ = source_;
-
-    double minimum_local_dt = inf;
-    hydro::max_inverse_dt = 0.0;
-    for (int cell = 0; cell < n_; ++cell)
-    {
-        const double rate =
-            std::max(speed_[cell], speed_[cell + 1])
-            / mesh_.cell_width(0, ng_ + cell);
-        if (!std::isfinite(rate)) throw std::runtime_error("Non-finite LTS RK2 CFL rate");
-        hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
-        local_dt_[cell] = rate > 0.0 ? cfl_ / rate : inf;
-        minimum_local_dt = std::min(minimum_local_dt, local_dt_[cell]);
-    }
-
-    macro_step_ = std::min({
-        dt_limit_, std::ldexp(minimum_local_dt, max_depth_), source_limit});
+const auto flat = storage_index(cell_index);
+auto& cell = view_.cells[flat];
 ```
-与后面从cell初状态得到的流体允许的最小步长$\times 2^{\mathrm{depth}}$ 以及外层大循环的dt_limit比较,取最小值得到最开始的macro_step尝试值，因此这里scan_source_changes的bound函数里写的是
+
+其中
+
 ```cpp
-    scan_source_changes(stage, rates, [&](double allowance, double rate) {
-        if (rate != 0.0) limit = std::min(limit, allowance / std::abs(rate));
-    });
+std::size_t LTSRK2Step::storage_index(int cell_id) const
+{
+    return mesh_.active_to_storage[cell_id];
+}
 ```
-它的作用是在遍历每个cell的过程中,对三个状态(密度,动量和内能)分别计算:
 
-$$\frac{\text{状态的容许变化量allowance}}{\text{源项产生的对应状态的变化率rate}}=\text{该状态上的源项步长限制}$$,
+`cell_index` 是 active 单元编号，`flat` 是包含 ghost 区域的完整存储编号。`base_`、`slope_` 和通量累积数组按 active 编号访问；`MeshBlock::cells`、`source_` 和单元体积按存储编号访问。多维中不能用一个固定 ghost 偏移代替这层映射。
 
-并逐步取更小的步长限制，遍历的最终效果就是取最小的源项步长限制并返回给调用者,参与初始步长的猜测和限制。
+其他主要对应关系为：
 
+| 一维参考实现 | 当前多维实现 |
+| --- | --- |
+| 面 `i` 和 `i+1` 是单元 `i` 的左右面 | `mesh.cell_faces[i][d]` 给出方向 `d` 的低侧面和高侧面 |
+| 使用一对面的通量差 | 对各方向的面积加权通量差求和 |
+| 使用一对面速度计算压力功 | 对各方向的面积加权面速度差求和 |
+| 用左右面波速和单元宽度计算 CFL 变化率 | 对各方向贡献求和；动态检查使用本次尝试中记录的面波速峰值 |
+| 通过一维邻接关系扩展缓冲区 | 沿面拓扑在各坐标方向遍历邻居 |
+
+波速检查使用相邻单元各自完整的局部步长，不能仅用当前面的细步长检查粗单元。若动态 CFL、源项限制或状态有效性检查失败，仍按同一套宏步回退逻辑处理。
+
+<a id="core-principles"></a>
+
+阅读代码时，把三个操作分开即可贯穿整个流程：**预测**为阶段计算提供同一时刻的状态；**面积分**为相邻单元提供共享的输运贡献；**局部结算**在贡献到齐后更新该层单元。递归安排它们的先后顺序，使所有层最终重新同步到宏步终点。

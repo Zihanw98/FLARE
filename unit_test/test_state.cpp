@@ -74,9 +74,48 @@ int main()
         expect_throw<std::invalid_argument>([&] { w.validate(1.0); });
         auto bad_energy = u;
         bad_energy[hd_core::ENERGY] = speed_squared;
-        bad_energy.validate(gamma); // E-K=0 is now recoverable from independent internal energy.
+        bad_energy.validate(); // E-K=0 is recoverable from independent internal energy.
         bad_energy[hd_core::INTERNAL_ENERGY] = 0.0;
-        expect_throw<std::invalid_argument>([&] { bad_energy.validate(gamma); });
+        bad_energy.validate(); // A finite state need not be admissible for the ideal-gas EoS.
+        expect_throw<std::invalid_argument>([&] { bad_energy.to_Primtivies(gamma); });
+
+        // Generic validation is read-only and does not choose an energy zero point.
+        hd_core::Conserved shifted{};
+        shifted[hd_core::RHO] = 1.0;
+        shifted[hd_core::ENERGY] = -2.0;
+        shifted[hd_core::INTERNAL_ENERGY] = -2.0;
+        const auto shifted_before = shifted.data;
+        shifted.validate();
+        CHECK(shifted.data == shifted_before);
+        shifted[hd_core::ENERGY] = shifted[hd_core::INTERNAL_ENERGY] = 0.0;
+        shifted.validate();
+
+        auto invalid_conserved = u;
+        invalid_conserved[hd_core::RHO] = -1.0;
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+        invalid_conserved = u;
+        invalid_conserved[hd_core::INTERNAL_ENERGY] = std::numeric_limits<double>::quiet_NaN();
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+        invalid_conserved = hd_core::Conserved{};
+        invalid_conserved.validate();
+        invalid_conserved[hd_core::MOMDEN(0)] = 1.0;
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+        invalid_conserved = hd_core::Conserved{};
+        invalid_conserved[hd_core::ENERGY] = 1.0;
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+
+        // Finite stored values can still overflow when deriving velocity or energy.
+        invalid_conserved = hd_core::Conserved{};
+        invalid_conserved[hd_core::RHO] = 1e-300;
+        invalid_conserved[hd_core::MOMDEN(0)] = 1e300;
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+        invalid_conserved[hd_core::RHO] = 1.0;
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+        invalid_conserved[hd_core::MOMDEN(0)] = 1e154;
+        invalid_conserved[hd_core::ENERGY] = invalid_conserved.kinetic_energy();
+        invalid_conserved[hd_core::INTERNAL_ENERGY] = std::numeric_limits<double>::max();
+        expect_throw<std::invalid_argument>([&] { invalid_conserved.validate(); });
+
         auto cold = w;
         cold[hd_core::VEL(0)] = 1.e8;
         cold[hd_core::PRE] = 1.e-8;
@@ -88,9 +127,12 @@ int main()
         CHECK(cell.dual_energy_correction == cell.U[hd_core::ENERGY] - energy_before);
         CHECK(near(cell.U.to_Primtivies(gamma)[hd_core::PRE], 1.e-8, 1.e-14));
         cell.U[hd_core::INTERNAL_ENERGY] = -1.0;
-        expect_throw<std::invalid_argument>([&] { cell.synchronize_dual_energy(); });
+        cell.U.validate(); // Thermodynamic rejection belongs to the EoS.
         hd_core::Cell hot(w, gamma);
         hot.U[hd_core::INTERNAL_ENERGY] = -1.0;
+        const auto hot_before = hot.U.data;
+        hot.U.validate();
+        CHECK(hot.U.data == hot_before);
         hot.synchronize_dual_energy();
         CHECK(near(hot.U[hd_core::INTERNAL_ENERGY], 7.5));
         CHECK(hot.dual_energy_correction == 0.0);

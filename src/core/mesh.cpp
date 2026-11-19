@@ -469,7 +469,7 @@ namespace
                 }
             }
             if (active)
-                cells[flat].U.validate(cells[flat].gamma);
+                cells[flat].U.validate();
         }
     }
 

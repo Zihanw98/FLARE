@@ -119,7 +119,9 @@ namespace hd_time
      * @throws std::invalid_argument If timestep/CFL settings or a required state are invalid.
      * @throws std::runtime_error If the timestep cannot advance time or RK2 exhausts its retries.
      * @note Euler/RK2 commit before the final boundary fill. LTS/implicit commit a
-     * boundary-filled candidate.
+     * boundary-filled candidate. When cfg.enable_composition is true, active-cell
+     * composition is checked once after the complete step has committed; failure
+     * throws without rolling back or retrying the step.
      */
     double advance_one_step(
         hd_core::MeshBlock& mesh,

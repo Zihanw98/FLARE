@@ -1,0 +1,40 @@
+# 2D pressure-balanced, stationary light bubble in a moving ambient wind.
+# rho_inside/rho_outside = 0.1; wind Mach = 0.8 using the outside sound speed.
+# Physical states and circle geometry: constants in user_problem.cpp.
+nxa = 768
+nya = 96
+nxg = 2
+nyg = 2
+x_lower = -6.0
+x_upper = 58.0
+y_lower = -4.0
+y_upper = 4.0
+geometry = Cartesian
+gamma = 1.6666666666666667
+
+# Fixed inflow at x_lower; zero-gradient outflow on the other three sides.
+# These are implemented by the case's user boundary callback.
+boundary_x_lower = user
+boundary_x_upper = user
+boundary_y_lower = user
+boundary_y_upper = user
+
+t_end = 40.0
+cfl = 0.4
+maxsteps = 20000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PLM
+limiter = MC
+time_integrator = rk2
+constant_gravity_enabled = false
+spherical_gravity_enabled = false
+spherical_self_gravity_enabled = false
+constant_heating_enabled = false
+enable_composition = false
+
+output_step_every = 40
+output_directory = output
+output_suffix = ram_pressure

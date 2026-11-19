@@ -1,6 +1,5 @@
 #pragma once
 #include <string>
-
 namespace hd_core
 {
     struct Cell;
@@ -22,18 +21,18 @@ namespace hd_microphysics
         RhoE    // 密度、比内能是已知量
     };
 
-    // EOS implementations that need composition read the shared species_table.
-    using EoSFunction = void (*)(hd_core::Cell& cell);
+    // 启动时从配置设置；演化期间保持不变，需要时显式传给 evaluate_eos。
+    extern Equation_of_State eos_type;
 
     // 启动时解析配置名称（忽略大小写），未知名称抛出 invalid_argument。
     Equation_of_State parse_equation_of_state(const std::string& name);
 
-    // 按枚举绑定具体实现；返回值非空，非法枚举抛出 invalid_argument。
-    // 当前五种物理实现均为占位函数，调用时抛出 logic_error，等待后续实现。
-    EoSFunction get_eos_function(Equation_of_State type);
+    // 唯一计算入口。RhoT/RhoE 输出 pressure；RhoP 读取 pressure，不修改它。
+    // 密度和组分来自 cell；RhoT 的温度来自 cell.temperature。
+    // 尚未实现的输入模式抛出 logic_error。
     void evaluate_eos(
         hd_core::Cell& cell,
         EoSInput input,
-        Equation_of_State model);
-    void evaluate_eos_rho_T(hd_core::Cell& cell, Equation_of_State model);
+        Equation_of_State model,
+        double& pressure);
 }

@@ -12,18 +12,18 @@ namespace hd_core
         Conserved U;
         double gamma = 5.0/3;
         double temperature = 1.0;
-        double n_baryon;
-        double n_e_free;              //number density of free electron
-        double Y_e_free;             //mu_e ---> how much molecular weight does the gas has when it has one electron, or baryons per electron    Y_e = 1/ mu_e : free electron per mean molecular weight(per baryon)
+        double n_baryon = 0.0;              //baryon number density  
+        double Y_e_free = 0.0;             //mu_e ---> how much molecular weight does the gas has when it has one electron, or baryons per electron    Y_e = 1/ mu_e : free electron per mean molecular weight(per baryon)
         //mu_e can be blow up if it's purely neutral gas so instead we store Y_e which is its inverse
-        double n_Ion;                 //number density of ion
-        double mu_Ion;               //  
+        double Y_Ion = 0.0;                 // number of ions per baryon(molecular weight)
+        double n_e_free = 0.0;
+        double n_Ion = 0.0;
         double mean_molecular_weight = 1.0;   //mu, mean molecular weight
         // Accumulated density of energy added/removed by cold-cell synchronization.
         double dual_energy_correction = 0.0;
         void synchronize_dual_energy()
         {
-            U.validate(gamma);
+            U.validate();
             if (U.total_energy_reliable())
                 U[INTERNAL_ENERGY] = U[ENERGY] - U.kinetic_energy();
             else
@@ -39,15 +39,15 @@ namespace hd_core
          */
         Cell() = default;
         /**
-         * @brief Construct and validate a cell from conserved variables.
+         * @brief Construct a cell and check its conserved-state arithmetic.
          * @param[in] state Conserved state to copy.
-         * @param[in] g Finite ideal-gas adiabatic index greater than one.
-         * @throws std::invalid_argument If the conserved state or adiabatic index is invalid.
+         * @param[in] g Adiabatic index to store; model-specific validation is separate.
+         * @throws std::invalid_argument If the conserved state fails the generic checks.
          */
         explicit Cell(const Conserved& state, double g = 5.0/3)
             : U(state), gamma(g)
         {
-            U.validate(gamma);
+            U.validate();
         }
         /**
          * @brief Construct a cell by converting primitive variables.

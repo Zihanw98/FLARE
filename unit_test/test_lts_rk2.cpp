@@ -302,7 +302,7 @@ void conservation_and_geometry(const std::string& reconstruction)
     evolve(spherical, solver, cfg, 0.02, {hd_source::make_geometric_source(),
         hd_source::make_spherical_self_gravity({0.01, true})});
     CHECK(near(integral(spherical)[hd_core::RHO], mass, 2e-12));
-    for (const auto& c : spherical.cells) c.U.validate(c.gamma);
+    for (const auto& c : spherical.cells) c.U.validate();
     Transport fast, global;
     auto a = make_mesh(true, 31, false, 2, 64, 0.001); contact(a); auto b = a;
     evolve(a, fast, cfg, 0.032);

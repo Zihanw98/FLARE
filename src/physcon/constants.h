@@ -32,5 +32,9 @@ namespace physcon
     inline double a_Rad = 4.0 * sigma_SB_ / c_;
 
     inline double R_g = k_B / m_u;
+
+    constexpr double eV_ = 1.602176634e-12;
+    
+    inline double eV = eV_;
     
 }

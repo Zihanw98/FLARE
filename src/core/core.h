@@ -137,7 +137,7 @@ namespace hd_core
          * @note Zero density returns an all-zero state before validation. Only hydrodynamic components are converted.
          * @throws std::invalid_argument If the resulting non-vacuum state fails validation.
          */
-        Conserved to_Conserved(double gamma) const;
+        Conserved to_Conserved_Default(double gamma) const;
         // Pressure is authoritative; call after changing rho/p in a primitive state.
         void update_internal_energy(double gamma)
         {
@@ -339,10 +339,10 @@ namespace hd_core
          * @param[in] gamma Finite ideal-gas adiabatic index greater than one.
          * @return Density, velocities, pressure and specific internal energy; composition/user fields remain zero.
          * @pre The input is a valid conserved state for gamma.
-         * @note Zero density returns an all-zero primitive state before validating momentum or energy. The existing API spelling to_Primtivies is retained.
+         * @note Zero density returns an all-zero primitive state before validating momentum or energy.
          * @throws std::invalid_argument If velocity extraction or validation of the converted gas state fails.
          */
-        Primitives to_Primtivies(double gamma) const;
+        Primitives to_Primitives_Default(double gamma) const;
         /**
          * @brief Compute velocity from momentum density and mass density.
          * @return An NDIM-component velocity vector, or a zero vector for a valid vacuum.
@@ -351,12 +351,11 @@ namespace hd_core
          */
         hdmath::Vector Velocity() const;
         /**
-         * @brief Validate conserved variables and the derived ideal-gas pressure.
-         * @param[in] gamma Finite adiabatic index greater than one.
-         * @throws std::invalid_argument If components are non-finite, density is negative, derived gas quantities are invalid, or vacuum has nonzero momentum or energy.
-         * @note Positive-density gas requires finite positive internal energy and pressure. Zero-density vacuum is permitted.
+         * @brief Check conserved-state arithmetic without assuming an equation of state.
+         * @throws std::invalid_argument If components are non-finite, density is negative, velocity/energy arithmetic is non-finite, or vacuum has nonzero momentum or energy.
+         * @note Does not modify the state. Energy signs, thermodynamic admissibility, and composition constraints are checked separately. Zero-density vacuum is permitted.
          */
-        void validate(double gamma) const;
+        void validate() const;
     };
 
     /**
@@ -406,11 +405,8 @@ namespace hd_core
             throw std::invalid_argument("Gas pressure must be positive");
     }
 
-    inline void Conserved::validate(double gamma) const
+    inline void Conserved::validate() const
     {
-        if (!std::isfinite(gamma) || gamma <= 1.0)
-            throw std::invalid_argument("Conserved: gamma must be finite and > 1");
-
         for (double value : data)
             if (!std::isfinite(value))
                 throw std::invalid_argument("Conserved: state contains NaN or infinity");
@@ -437,8 +433,6 @@ namespace hd_core
         if (rho < 0.0)
             throw std::invalid_argument("Negative density");
 
-        if (data[ENERGY] <= 0.0)
-            throw std::invalid_argument("Conserved: total energy must be positive");
         double kinetic = 0.0;
         for (int d = 0; d < NDIM; ++d)
         {
@@ -452,16 +446,13 @@ namespace hd_core
         if (!std::isfinite(kinetic))
             throw std::invalid_argument("Conserved: kinetic energy is not finite");
 
-        // A negative auxiliary stage value is recoverable only when E-K is reliable.
-        const double thermal = data[ENERGY] - kinetic;
-        const double internal = thermal > dual_energy_eta * std::max(std::abs(data[ENERGY]), kinetic)
-            ? thermal : data[INTERNAL_ENERGY];
-        if (!std::isfinite(internal) || internal <= 0.0 || !std::isfinite(kinetic + internal))
-            throw std::invalid_argument("Conserved: internal energy must be finite and positive");
-
-        const double pressure = (gamma - 1.0) * internal;
-        if (!std::isfinite(pressure) || pressure <= 0.0)
-            throw std::invalid_argument("Conserved: derived pressure must be finite and positive");
+        // Check arithmetic for the existing dual-energy choice without imposing
+        // an energy zero point or deriving pressure from a particular EoS.
+        const double internal_from_total = data[ENERGY] - kinetic;
+        const double internal = internal_from_total > dual_energy_eta * std::max(std::abs(data[ENERGY]), kinetic)
+            ? internal_from_total : data[INTERNAL_ENERGY];
+        if (!std::isfinite(internal) || !std::isfinite(kinetic + internal))
+            throw std::invalid_argument("Conserved: derived energy is not finite");
     }
 
     inline hdmath::Vector Primitives::Velocity() const
@@ -502,7 +493,7 @@ namespace hd_core
         return hdmath::Vector(part) / rho;
     }
 
-    inline Conserved Primitives::to_Conserved(double gamma) const
+    inline Conserved Primitives::to_Conserved_Default(double gamma) const
     {
         if (data[RHO] == 0.0)
         {
@@ -518,14 +509,14 @@ namespace hd_core
         }
         W[INTERNAL_ENERGY] = data[PRE] / (gamma - 1);
         W[ENERGY] = W[INTERNAL_ENERGY] + 0.5 * W[RHO] * speed_squared;
-        W.validate(gamma);
+        W.validate();
         for(int k=0;k<NCOMP;k++)
         {
             W[COMP(k)] = data[COMP(k)] * data[RHO];
         }
         return W;
     }
-    inline Primitives Conserved::to_Primtivies(double gamma) const
+    inline Primitives Conserved::to_Primitives_Default(double gamma) const
     {
         if (data[RHO] == 0.0)
         {

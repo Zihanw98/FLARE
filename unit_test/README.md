@@ -19,6 +19,7 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 
 | TESTS 名称 | 检查内容 |
 | --- | --- |
+| `newton` | 通用 Newton-Raphson：函数指针和捕获参数的 lambda、热能与辐射能反解、残差归一化、零导数、非有限值、停滞及迭代上限 |
 | `optimization` | 转换无堆分配及原公式逐位一致；非均匀网格所有 limiter 的缓存/直接重构一致；随机 exact 通量和波速对比、压力初值复用与无效初值回退、静止气体解析通量、近真空、失败统计 |
 | `reconstruction` | PLM_corrected 在非均匀网格上的密度/压力正性、共享斜率系数、阈值连续性、低密度、各方向缓存/直接接口一致及未受限状态逐位兼容 |
 | `state` | 原始量/守恒量转换、动能与压力、算术运算、真空、非法状态、各方向物理通量 |

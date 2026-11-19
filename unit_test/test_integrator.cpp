@@ -114,7 +114,7 @@ int dual_energy_physics(int argc, char** argv)
     double error=0, volume=0, correction=0, pmin=1.e300, shock_radius=0;
     for (std::size_t k=0; k<mesh.cells.size(); ++k) if(mesh.is_active(k))
     {
-        const auto& cell=mesh.cells[k]; cell.U.validate(cell.gamma);
+        const auto& cell=mesh.cells[k]; cell.U.validate();
         CHECK(cell.U[INTERNAL_ENERGY]>0);
         const auto w=cell.U.to_Primtivies(cell.gamma);
         pmin=std::min(pmin,w[PRE]); correction+=cell.dual_energy_correction*mesh.volume_cell[k];

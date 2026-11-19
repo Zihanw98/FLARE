@@ -107,7 +107,7 @@ public:
         result[hd_core::INTERNAL_ENERGY] += alpha*scale.residual[hd_core::INTERNAL_ENERGY]*dq[hd_core::INTERNAL_ENERGY];
         for (int k = hd_core::NHYDRO; k < hd_core::NVAR; ++k)
             result[k] += alpha*scale.residual[k]*dq[k];
-        result.validate(base.gamma);
+        result.validate();
         return result;
     }
 

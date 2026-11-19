@@ -5,12 +5,65 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <initializer_list>
+#include <stdexcept>
 #include <vector>
 
 namespace hdmath
 {
+
+    /**
+     * @brief Solve f(x) = 0 by Newton-Raphson using a caller-supplied derivative.
+     * @param[in] function Callable double(double); may capture equation parameters.
+     * @param[in] derivative Callable returning df/dx for the same equation.
+     * @param[in] initial_guess Finite starting value in the function's domain.
+     * @param[in] residual_tolerance Positive absolute tolerance in units of f.
+     * Normalize f and df/dx by the same physical scale for a relative residual.
+     * @param[in] max_iterations Positive maximum number of Newton updates.
+     * @return x for which abs(f(x)) <= residual_tolerance.
+     * @throws std::invalid_argument For invalid iteration settings.
+     * @throws std::runtime_error For nonfinite arithmetic, a zero derivative,
+     * stagnation above the residual tolerance, or exhaustion of the update limit.
+     * @note This is unbracketed Newton iteration; the caller chooses an appropriate
+     * starting value. Callback exceptions propagate. No cell or EoS state is owned
+     * or updated by this function; any callback side effects belong to the caller.
+     */
+    template<class Function, class Derivative>
+    double newton_raphson(Function&& function, Derivative&& derivative,
+                         double initial_guess, double residual_tolerance = 1e-10,
+                         int max_iterations = 100)
+    {
+        if (!std::isfinite(initial_guess) || !std::isfinite(residual_tolerance) ||
+            residual_tolerance <= 0.0 || max_iterations <= 0)
+            throw std::invalid_argument("newton_raphson: invalid initial guess, tolerance or iteration limit");
+
+        double x = initial_guess;
+        for (int iteration = 0; ; ++iteration)
+        {
+            const double residual = function(x);
+            if (!std::isfinite(residual))
+                throw std::runtime_error("newton_raphson: nonfinite residual");
+            if (std::abs(residual) <= residual_tolerance)
+                return x;
+            if (iteration == max_iterations)
+                break;
+
+            const double slope = derivative(x);
+            if (!std::isfinite(slope) || slope == 0.0)
+                throw std::runtime_error("newton_raphson: derivative must be finite and nonzero");
+            const double correction = residual / slope;
+            const double next = x - correction;
+            if (!std::isfinite(correction) || !std::isfinite(next))
+                throw std::runtime_error("newton_raphson: nonfinite Newton update");
+            // A small step alone does not establish that the equation is solved.
+            if (next == x)
+                throw std::runtime_error("newton_raphson: stagnated before residual convergence");
+            x = next;
+        }
+        throw std::runtime_error("newton_raphson: maximum iterations exceeded");
+    }
 
     // A dynamically sized mathematical vector of doubles.
     /** @brief Dynamically sized mathematical vector with checked component access. */

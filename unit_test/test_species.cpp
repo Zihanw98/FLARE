@@ -1,13 +1,90 @@
 #include "test_support.h"
 #include "microphysics/composition/species.h"
+#include "core/cell.h"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+
+namespace
+{
+void check_cell_composition()
+{
+    using namespace hd_core;
+    using hd_microphysics::validate_cell_composition;
+    Cell cell;
+    validate_cell_composition(cell); // Vacuum, or no compiled composition.
+    if constexpr (NCOMP == 0) return;
+
+    // The check needs no species table and must be independent of density units.
+    for (const double rho : {1e-200, 2.0, 1e200})
+    {
+        cell = Cell{};
+        cell.U[RHO] = rho;
+        cell.U[COMP(0)] = rho;
+        validate_cell_composition(cell);
+        if constexpr (NCOMP > 1)
+        {
+            cell.U[COMP(0)] = 0.25 * rho;
+            cell.U[COMP(1)] = 0.75 * rho;
+            const auto before = cell.U.data;
+            validate_cell_composition(cell);
+            CHECK(cell.U.data == before);
+        }
+    }
+
+    cell = Cell{};
+    cell.U[RHO] = 1.0;
+    cell.U[COMP(0)] = 1.0;
+    const Cell valid = cell;
+    for (const double bad : {-1e-5, 1.01, 0.0, 0.9,
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::quiet_NaN()})
+    {
+        cell = valid;
+        cell.U[COMP(0)] = bad;
+        expect_throw<std::invalid_argument>([&] { validate_cell_composition(cell); });
+    }
+    for (const double rho : {-1.0, std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::quiet_NaN()})
+    {
+        cell = valid;
+        cell.U[RHO] = rho;
+        expect_throw<std::invalid_argument>([&] { validate_cell_composition(cell); });
+    }
+    cell = valid;
+    cell.U[RHO] = std::numeric_limits<double>::min(); // Fraction overflow.
+    cell.U[COMP(0)] = std::numeric_limits<double>::max();
+    expect_throw<std::invalid_argument>([&] { validate_cell_composition(cell); });
+    cell = Cell{};
+    cell.U[COMP(0)] = 1e-200; // Vacuum cannot hide a finite partial density.
+    expect_throw<std::invalid_argument>([&] { validate_cell_composition(cell); });
+
+    cell = valid;
+    cell.U[COMP(0)] = 1.0 - 5e-7; // Match the existing profile sum tolerance.
+    const auto before = cell.U.data;
+    validate_cell_composition(cell);
+    CHECK(cell.U.data == before); // No renormalization, even within tolerance.
+    if constexpr (NCOMP > 1)
+    {
+        cell = valid;
+        cell.U[COMP(0)] = 1.0 + 5e-13;
+        cell.U[COMP(1)] = -5e-13;
+        const auto rounded = cell.U.data;
+        validate_cell_composition(cell);
+        CHECK(cell.U.data == rounded);
+        cell.U[COMP(0)] = 0.6;
+        cell.U[COMP(1)] = 0.6;
+        expect_throw<std::invalid_argument>([&] { validate_cell_composition(cell); });
+    }
+}
+}
 
 int main(int argc, char** argv)
 {
     using hd_microphysics::read_species_table;
     return run_test("species table and ionization name maps", [&] {
+        check_cell_composition();
         CHECK(argc == 2);
         const auto directory = std::filesystem::absolute(argv[1]);
         std::filesystem::create_directories(directory);

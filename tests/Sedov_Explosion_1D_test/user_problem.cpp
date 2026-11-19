@@ -41,7 +41,7 @@ namespace
             U[hd_core::ENERGY] =
                 (inner ? E_0 / V_inj : 0.0) + 1e-5 / (gamma - 1.0);
             U[hd_core::INTERNAL_ENERGY] = U[hd_core::ENERGY];
-            U.validate(gamma);
+            U.validate();
             mesh.at(index).U = U;
             mesh.at(index).gamma = gamma;
         }
