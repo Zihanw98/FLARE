@@ -12,7 +12,8 @@ namespace hd_microphysics
         IdealGas_Default,
         IdealGas_Mixed,
         Ionized,
-        Ionized_Radiative
+        Ionized_Radiative,
+        Nuclear         //to be implemented for CCSN core
     };
     enum class EoSInput
     {

@@ -72,7 +72,7 @@ namespace
                 ionization_energy += n_k * species.energy_eV;
             }
             const double radiation_energy = physcon::a_Rad * std::pow(temperature,4);
-            const auto internal_energy = thermal_energy + ionization_energy;
+            const auto internal_energy = thermal_energy + ionization_energy + radiation_energy;
             cell.U[hd_core::INTERNAL_ENERGY] = internal_energy;
             cell.U[hd_core::ENERGY] = internal_energy + kinetic;
             pressure = pre + radiation_energy / 3.0;
@@ -155,14 +155,68 @@ namespace
 
             const auto temperature = hdmath::newton_raphson(f,df,T0,1e-10,100);
             cell.temperature = temperature;
+            
+            const auto radiation_energy = physcon::a_Rad * std::pow(T,4);
+            const auto thermal_energy = pressure / (gamma - 1);
+            
+            const auto internal_energy = thermal_energy + ionization_energy + radiation_energy;
+            cell.U[hd_core::INTERNAL_ENERGY] = internal_energy;
+            cell.U[hd_core::ENERGY] = internal_energy + kinetic;
 
         }
         throw std::logic_error("EoS RhoP is not implemented");
     }
     void evaluate_eos_rho_internal_energy(hd_core::Cell& cell, Equation_of_State model, double& pressure)
     {
+        const auto rho = cell.U[hd_core::RHO];
+        const auto internal_energy = cell.U[hd_core::INTERNAL_ENERGY];
+        const double kinetic = cell.U.kinetic_energy();
+        if(model == Equation_of_State::IdealGas_Default)
+        {
+            const auto mu = cell.mean_molecular_weight;
+            const auto gamma = cell.gamma;
+            const auto pre = internal_energy * (gamma - 1);
+            pressure = pre;
+            const auto temperature = pressure * mu / (rho * physcon::R_g); 
+            cell.temperature = temperature;
+            cell.U[hd_core::ENERGY] = internal_energy + kinetic;
+            return;
+        }
+        hd_microphysics::evaluate_cell_density(cell);
+        if(model == Equation_of_State::IdealGas_Mixed)
+        {
+            const auto gamma = cell.gamma;
+            const auto mu = cell.mean_molecular_weight;
+            const auto pre= internal_energy * (gamma - 1);
+            pressure = pre;
+            const auto temperature = pre * mu / (rho * physcon::R_g); 
+            cell.temperature = temperature;
+            cell.U[hd_core::ENERGY] = internal_energy + kinetic;
+            return;
+        }
+        if(model == Equation_of_State::Ionized)
+        {
+            const auto gamma = cell.gamma;
+            const auto mu = cell.mean_molecular_weight;
+            double ionization_energy = 0.0;
+            for(int k=0; k<hd_core::NCOMP; k++)
+            {
+                const auto& species = species_table.species_active[k];
+                const double n_k = cell.U[hd_core::COMP(k)] / (species.A * physcon::m_u);
+                ionization_energy += n_k * species.energy_eV;
+            }
+            const auto thermal_energy = internal_energy - ionization_energy;
+            const auto pre = thermal_energy * (gamma - 1);
+            pressure = pre;
+            const auto temperature = pre * mu / (rho * physcon::R_g); 
+            cell.temperature = temperature;
+            cell.U[hd_core::ENERGY] = internal_energy + kinetic;
+            
+
+        }
         throw std::logic_error("EoS RhoE is not implemented");
     }
+
 }
 void evaluate_eos(hd_core::Cell& cell, EoSInput input,
                   Equation_of_State model, double& pressure)
@@ -203,6 +257,8 @@ Equation_of_State parse_equation_of_state(const std::string& name)
         return Equation_of_State::Ionized;
     if (utils::iequals(name, "Ionized_Radiative"))
         return Equation_of_State::Ionized_Radiative;
+    if(utils::iequals(name,"Nuclear"))
+        return Equation_of_State::Nuclear;
 
     throw std::invalid_argument("Unknown equation of state: " + name);
 }
