@@ -53,6 +53,7 @@ namespace
                 const double n_k = cell.U[hd_core::COMP(k)] / (species.A * physcon::m_u);
                 ionization_energy += n_k * species.energy_eV;
             }
+            ionization_energy *= physcon::eV;
             const auto internal_energy = thermal_energy + ionization_energy;
             cell.U[hd_core::INTERNAL_ENERGY] = internal_energy;
             cell.U[hd_core::ENERGY] = internal_energy + kinetic;
@@ -71,6 +72,7 @@ namespace
                 const double n_k = cell.U[hd_core::COMP(k)] / (species.A * physcon::m_u);
                 ionization_energy += n_k * species.energy_eV;
             }
+            ionization_energy *= physcon::eV;
             const double radiation_energy = physcon::a_Rad * std::pow(temperature,4);
             const auto internal_energy = thermal_energy + ionization_energy + radiation_energy;
             cell.U[hd_core::INTERNAL_ENERGY] = internal_energy;
@@ -123,6 +125,7 @@ namespace
                 const double n_k = cell.U[hd_core::COMP(k)] / (species.A * physcon::m_u);
                 ionization_energy += n_k * species.energy_eV;
             }
+            ionization_energy *= physcon::eV;
             const auto internal_energy = thermal_energy + ionization_energy;
 
             cell.U[hd_core::INTERNAL_ENERGY] = internal_energy;
@@ -152,11 +155,12 @@ namespace
                 const double n_k = cell.U[hd_core::COMP(k)] / (species.A * physcon::m_u);
                 ionization_energy += n_k * species.energy_eV;
             }
+            ionization_energy *= physcon::eV;
 
             const auto temperature = hdmath::newton_raphson(f,df,T0,1e-10,100);
             cell.temperature = temperature;
             
-            const auto radiation_energy = physcon::a_Rad * std::pow(T,4);
+            const auto radiation_energy = physcon::a_Rad * std::pow(temperature,4);
             const auto thermal_energy = pressure / (gamma - 1);
             
             const auto internal_energy = thermal_energy + ionization_energy + radiation_energy;
@@ -205,13 +209,13 @@ namespace
                 const double n_k = cell.U[hd_core::COMP(k)] / (species.A * physcon::m_u);
                 ionization_energy += n_k * species.energy_eV;
             }
+            ionization_energy *= physcon::eV;
             const auto thermal_energy = internal_energy - ionization_energy;
             const auto pre = thermal_energy * (gamma - 1);
             pressure = pre;
             const auto temperature = pre * mu / (rho * physcon::R_g); 
             cell.temperature = temperature;
             cell.U[hd_core::ENERGY] = internal_energy + kinetic;
-            
 
         }
         throw std::logic_error("EoS RhoE is not implemented");
