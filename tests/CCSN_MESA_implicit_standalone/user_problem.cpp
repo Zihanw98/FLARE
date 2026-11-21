@@ -74,7 +74,7 @@ void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
         const auto flat = mesh.flat_index({i}, true);
         const auto [a, b] = mesh.cell_face_pos(0, i + mesh.nghost[0]);
         const auto& cell = mesh.cells[flat];
-        const auto w = cell.U.to_Primtivies(cell.gamma);
+        const auto w = cell.Get_Primitives();
         const double volume = mesh.volume_cell[flat];
         (i < native_cells ? envelope_mass : atmosphere_mass) += w[hd_core::RHO] * volume;
         minimum_width = std::min(minimum_width, b - a);
@@ -137,7 +137,7 @@ void outer_boundary(hd_core::MeshBlock& mesh, double, int direction,
     if (direction != 0 || side != boundary::BoundarySide::Upper)
         throw std::invalid_argument("Only the outer radial boundary uses userbc");
     const int end = mesh.nghost[0] + mesh.nactive[0];
-    auto state = mesh.at({end - 1}).U.to_Primtivies(mesh.at({end - 1}).gamma);
+    auto state = mesh.at({end - 1}).Get_Primitives();
     state[hd_core::VEL(0)] = std::max(0.0, state[hd_core::VEL(0)]);
     for (int i = end; i < mesh.ntotal(0); ++i)
         mesh.at({i}) = hd_core::Cell(state, mesh.at({end - 1}).gamma);

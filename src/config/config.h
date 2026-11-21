@@ -88,9 +88,7 @@ namespace config
         double mesa_radius_outer = -1.0;
         double mesa_radius_inner = -1.0;
 
-        bool enable_composition = false;
-
-        std::string composition_activate_file = "composition.txt"; ///< Relative to the parameter file.
+        std::string composition_activate_file = "composition.txt"; ///< Used when HD_NCOMP > 0; relative to the parameter file.
 
         std::string equation_of_state = "IdealGas_Default";
         double mean_molecular_weight_default = 1.0;

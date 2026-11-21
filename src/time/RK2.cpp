@@ -4,6 +4,7 @@
  */
 #include "integrator.h"
 #include "core/mesh.h"
+#include "microphysics/eos/eos.h"
 #include "utils/performance.h"
 #include <algorithm>
 #include <cmath>
@@ -127,6 +128,19 @@ namespace hd_time
                 continue;
             }
             boundary::FillBoundary(mesh_trial,time+dt,hooks);
+            try {
+                hd_microphysics::refresh_thermodynamics(mesh_trial);
+            }
+            catch (const std::invalid_argument&) {
+                performance::count(performance::Counter::RK2Rejected);
+                dt *= 0.5;
+                continue;
+            }
+            catch (const std::runtime_error&) {
+                performance::count(performance::Counter::RK2Rejected);
+                dt *= 0.5;
+                continue;
+            }
 
             double rate1, source_limit1;
             // Every retry starts from stage 0, never the rejected stage's roots.

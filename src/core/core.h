@@ -138,11 +138,9 @@ namespace hd_core
          * @throws std::invalid_argument If the resulting non-vacuum state fails validation.
          */
         Conserved to_Conserved_Default(double gamma) const;
-        // Pressure is authoritative; call after changing rho/p in a primitive state.
-        void update_internal_energy(double gamma)
-        {
-            data[INTERNAL_ENERGY] = data[RHO] == 0.0 ? 0.0 : data[PRE] / (gamma - 1.0) / data[RHO];
-        }
+        // Recompute only specific internal energy through the global EoS (RhoP).
+        // Call after changing rho, pressure or composition; failed conversion leaves this unchanged.
+        void update_internal_energy(double gamma);
         /**
          * @brief Copy the stored primitive velocity components into a vector.
          * @return An NDIM-component velocity vector.
@@ -533,7 +531,8 @@ namespace hd_core
             speed_squared += W[VEL(i)] * W[VEL(i)];
         }
         W[PRE] = (gamma - 1) * internal_energy();
-        W.update_internal_energy(gamma);
+        // This explicit ideal-gas conversion must not depend on the global EoS.
+        W[INTERNAL_ENERGY] = W[PRE] / (gamma - 1.0) / W[RHO];
         W.validate(gamma);
         for(int k=0;k<NCOMP;k++)
         {

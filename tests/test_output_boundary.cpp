@@ -6,6 +6,7 @@
 #include "user/user_api.h"
 #include "physcon/unit.h"
 #include "microphysics/composition/species.h"
+#include "microphysics/eos/eos.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -137,6 +138,7 @@ namespace
         hd_core::Primitives W{};
         W[hd_core::RHO] = 90.0 + direction;
         W[hd_core::PRE] = 1.0;
+        if constexpr (hd_core::NCOMP > 0) W[hd_core::COMP(0)] = 1.0;
         mesh.at(index) = hd_core::Cell(W, 1.7);
     }
 
@@ -257,7 +259,7 @@ namespace
             assert(fields.size() == 13 + hd_core::NCOMP + hd_core::NUSER);
             const auto index = mesh.coordinates(f);
             const auto& cell = mesh.cells[f];
-            const auto W = cell.U.to_Primtivies(cell.gamma);
+            const auto W = cell.Get_Primitives();
             for (int d = 0; d < 3; ++d)
             {
                 assert(near(fields[d], d < hd_core::NDIM ? mesh.cell_center(d, index) : 0.0));
@@ -283,13 +285,6 @@ namespace
     void output_tests(hd_core::MeshBlock& mesh, const std::filesystem::path& directory)
     {
         config::SimulationConfig cfg;
-        if constexpr (hd_core::NCOMP == 2 || hd_core::NCOMP == 3)
-        {
-            cfg.enable_composition = true;
-            cfg.composition_activate_file = (directory / "composition.txt").string();
-            std::ofstream(cfg.composition_activate_file) << (hd_core::NCOMP == 2 ? "h1 0 1\n" : "h1 -1 1\n");
-            hd_microphysics::initialize_species_table(cfg);
-        }
         cfg.output_directory = (directory / "snapshots").string();
         cfg.output_suffix = "check";
         physcon::units.init_unitsystem_MLT(2.5e33, 7.25e10, 1600.5, 2.0e4);
@@ -365,8 +360,19 @@ namespace
             for (int d = 0; d < hd_core::NDIM; ++d)
                 file << 'n' << axes[d] << "a=2\nn" << axes[d] << "g=3\n"
                      << axes[d] << "_lower=0\n" << axes[d] << "_upper=1\n";
+            if constexpr (hd_core::NCOMP > 0)
+                file << "equation_of_state=IdealGas_Mixed\n";
             file << extra;
         };
+        for (const auto* model : {"IdealGas_Default", "IdealGas_Mixed", "Ionized", "Ionized_Radiative"})
+        {
+            write(std::string("equation_of_state=") + model + '\n');
+            const bool requires_composition = std::string(model) != "IdealGas_Default";
+            if (requires_composition == (hd_core::NCOMP > 0))
+                assert(config::ReadParameters(path.string()).equation_of_state == model);
+            else
+                expect_failure([&] { config::ReadParameters(path.string()); });
+        }
         write("output_step_every=7\n");
         assert(config::ReadParameters(path.string()).output_step_every == 7);
         write("step_every=4\n"); // Supported compatibility alias for output_step_every.
@@ -420,6 +426,15 @@ int main(int argc, char** argv)
     assert(argc == 2);
     const std::filesystem::path directory = argv[1];
     std::filesystem::create_directories(directory);
+    config::SimulationConfig species_cfg;
+    if constexpr (hd_core::NCOMP == 2 || hd_core::NCOMP == 3)
+    {
+        species_cfg.composition_activate_file = (directory / "composition.txt").string();
+        std::ofstream(species_cfg.composition_activate_file)
+            << (hd_core::NCOMP == 2 ? "h1 0 1\n" : "h1 -1 1\n");
+        hd_microphysics::eos_type = hd_microphysics::Equation_of_State::IdealGas_Mixed;
+    }
+    hd_microphysics::initialize_species_table(species_cfg);
     auto mesh = make_mesh();
     periodic_tests(mesh);
     for (std::size_t f = 0; f < mesh.cells.size(); ++f)

@@ -217,9 +217,6 @@ namespace config
             {"mesa_radius_outer",[&cfg](const std::string& v){
                 cfg.mesa_radius_outer = parse_value<double>(v);
             }},
-            {"enable_composition",[&cfg](const std::string& v){
-                cfg.enable_composition = parse_value<bool>(v);
-            }},
             {"composition_activate_file",[&cfg](const std::string& v){
                 cfg.composition_activate_file = v;
             }},
@@ -317,7 +314,7 @@ namespace config
         if (file.bad())
             throw std::runtime_error("Failed to read parameter file: " + filename);
         validate_cfg(cfg,seen);
-        if (cfg.enable_composition)
+        if constexpr (hd_core::NCOMP > 0)
             cfg.composition_activate_file = (std::filesystem::path(filename).parent_path()
                                              / cfg.composition_activate_file).string();
         return cfg;
@@ -325,6 +322,19 @@ namespace config
 
     void validate_cfg(const SimulationConfig& cfg, const std::unordered_set<std::string>& seen)
     {
+        if constexpr (hd_core::NCOMP > 0)
+        {
+            if (utils::iequals(cfg.equation_of_state, "IdealGas_Default"))
+                throw std::runtime_error("IdealGas_Default requires HD_NCOMP=0");
+        }
+        else
+        {
+            if (utils::iequals(cfg.equation_of_state, "IdealGas_Mixed") ||
+                utils::iequals(cfg.equation_of_state, "Ionized") ||
+                utils::iequals(cfg.equation_of_state, "Ionized_Radiative"))
+                throw std::runtime_error(cfg.equation_of_state + " requires HD_NCOMP>0");
+        }
+
         hydro::parse_limiter(cfg.limiter);
         if (!std::isfinite(cfg.limiter_beta) || cfg.limiter_beta < 1.0 || cfg.limiter_beta > 2.0)
             throw std::runtime_error("limiter_beta must be finite and in [1, 2]");

@@ -60,7 +60,7 @@ void constrained(int direction, int component, double scale)
 
     fill(0.5);
     const auto old_cells = mesh.cells;
-    const auto center = mesh.at(index).U.to_Primtivies(2.0);
+    const auto center = mesh.at(index).Get_Primitives();
     const auto old_faces = faces(Reconstructor::PLM);
     CHECK(old_faces.first.data == center.data); // Old whole-state fallback.
     const auto fixed = faces(Reconstructor::PLM_corrected);
@@ -138,7 +138,7 @@ void monotone_nonuniform(int direction)
     auto index = mesh.nghost;
     index[direction] = 3;
     const auto original = hydro::Reconstruct(Reconstructor::PLM, mesh, direction, index, Limiter::MC);
-    CHECK(original.second.data == mesh.at(index).U.to_Primtivies(2.0).data);
+    CHECK(original.second.data == mesh.at(index).Get_Primitives().data);
     for (auto limiter : {Limiter::none, Limiter::minmod, Limiter::MC,
                         Limiter::van_Leer, Limiter::MCbeta, Limiter::superbee})
     {

@@ -15,7 +15,7 @@ init_profile_from_file = true
 init_profile_file_name = profile.dat
 
 gamma = 1.6666666666666667
-enable_composition = true
+equation_of_state = IdealGas_Mixed
 composition_activate_file = composition.txt
 
 boundary_x_lower = periodic

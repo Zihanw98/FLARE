@@ -3,6 +3,7 @@
 namespace hd_core
 {
     struct Cell;
+    struct MeshBlock;
 }
 
 namespace hd_microphysics
@@ -36,4 +37,16 @@ namespace hd_microphysics
         EoSInput input,
         Equation_of_State model,
         double& pressure);
+
+    // 校验 U，并通过 RhoE 更新温度和模型需要的数密度、mu；不修改 U。
+    // 真空跳过 EoS；不做组分归一性检查，也不进行双能量同步。
+    void refresh_thermodynamics(
+        hd_core::Cell& cell,
+        Equation_of_State model = eos_type);
+
+    // 更新所有 cell（包括 ghost）；调用前应先填充当前阶段的边界。
+    // 状态校验或数值求解异常附带 flat 下标；已更新的热力学量不回滚。
+    void refresh_thermodynamics(
+        hd_core::MeshBlock& mesh,
+        Equation_of_State model = eos_type);
 }

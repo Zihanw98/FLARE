@@ -38,7 +38,7 @@ namespace hd_source
                     if (!is_active)
                         continue;  
                     const auto& cell = mesh.cells[flat];
-                    const auto W = cell.U.to_Primtivies(cell.gamma);
+                    const auto W = cell.Get_Primitives();
                     const double p = W[hd_core::PRE];
                     
                     

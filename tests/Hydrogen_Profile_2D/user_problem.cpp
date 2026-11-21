@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 static_assert(hd_core::NDIM == 2, "Hydrogen_Profile_2D requires HD_NDIM=2");
+static_assert(hd_core::NCOMP > 0, "Hydrogen_Profile_2D requires HD_NCOMP>0");
 
 namespace
 {
@@ -17,8 +18,8 @@ void initialize_units(physcon::Unit& units, const config::SimulationConfig&)
 
 void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
 {
-    if (!cfg.init_profile_from_file || !cfg.enable_composition)
-        throw std::invalid_argument("Hydrogen_Profile_2D requires profile input and composition");
+    if (!cfg.init_profile_from_file)
+        throw std::invalid_argument("Hydrogen_Profile_2D requires profile input");
     // read_profile has already populated all active cells. Edit profile.dat or
     // generate_profile.py to change the initial state; do not overwrite it here.
     // A future Saha initialization can be inserted here after reading the profile.

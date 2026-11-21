@@ -64,7 +64,7 @@ namespace hd_source
             if (!active) continue;
 
             const auto& cell = mesh.cells[flat];
-            const auto primitive = cell.U.to_Primtivies(cell.gamma);
+            const auto primitive = cell.Get_Primitives();
             const double rho = cell.U[hd_core::RHO];
             if (rho == 0.0) continue;
             const double internal_energy = primitive[hd_core::PRE] / (cell.gamma - 1.0);

@@ -20,8 +20,8 @@ namespace
 
     void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
     {
-        if (!cfg.enable_composition || std::abs(cfg.gamma - 5.0/3.0) > 1.e-14)
-            throw std::invalid_argument("H/He mixing requires composition and gamma=5/3");
+        if (std::abs(cfg.gamma - 5.0/3.0) > 1.e-14)
+            throw std::invalid_argument("H/He mixing requires gamma=5/3");
         for (int d = 0; d < 2; ++d)
             if (mesh.bc_lower[d] != boundary::BoundaryCondition::Periodic ||
                 mesh.bc_upper[d] != boundary::BoundaryCondition::Periodic)

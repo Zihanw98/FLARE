@@ -89,8 +89,7 @@ void heating(const hd_core::MeshBlock& mesh, const HeatingParams& params,
     {
         const auto flat = mesh.flat_index({i}, true);
         const auto& cell = mesh.cells[flat];
-        const auto primitive = cell.U.to_Primtivies(cell.gamma);
-        const double internal_energy = primitive[hd_core::PRE] / (cell.gamma - 1.0);
+        const double internal_energy = cell.U.internal_energy();
         const double energy_rate = cell.U[hd_core::RHO] * params.specific_heating_rate;
         rhs[flat][hd_core::ENERGY] += energy_rate; // A rate: do not multiply by dt.
         rhs[flat][hd_core::INTERNAL_ENERGY] += energy_rate;

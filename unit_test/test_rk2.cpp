@@ -51,6 +51,11 @@ void source(const hd_core::MeshBlock& mesh, double time,
     for (std::size_t i = 0; i < mesh.cells.size(); ++i)
     {
         CHECK(near(mesh.cells[i].U[hd_core::RHO], reference.U[hd_core::RHO]));
+        // The second-stage source must see thermodynamics matching its updated U,
+        // including the boundary cells, before it can use the cached-state getter.
+        if (time > 0.0)
+            CHECK(near(mesh.cells[i].Get_Pressure_From_Updated_State(),
+                       mesh.cells[i].Get_Primitives()[hd_core::PRE]));
         rhs[i][hd_core::RHO] += density_source;
         rhs[i][hd_core::ENERGY] += time_dependent_energy
             ? (time == 0.0 ? 0.0 : energy_source) : energy_source;

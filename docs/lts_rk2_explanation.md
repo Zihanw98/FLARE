@@ -39,7 +39,7 @@ $$
 | --- | --- |
 | `start_` | 宏步起点的完整网格快照，重试时保持不变 |
 | `state_` | 各单元最近一次完成局部 RK2 步后的状态；不同单元可能对应不同时刻 |
-| `view_` | 为一次阶段计算构造的、对应同一物理时刻的近似网格状态 |
+| `view_` | 为一次阶段计算构造的、对应同一物理时刻的近似网格状态；在 `build_stage_view()` 中复制并预测更新 |
 | `base_[i]` | 单元 $i$ 当前局部步的起点状态 $U_i^0$ |
 | `slope_[i]` | 该局部步的起点时间导数 $k_{1,i}$，用于线性预测 |
 | `local_step_start_[i]` | 该局部步的起点分数位置 |
@@ -48,6 +48,14 @@ $$
 | `pending_flux_integral_[i]` | 已累计给单元 $i$、尚未结算的净面通量积分 |
 
 `state_` 保存的是状态，不是变化率；`slope_` 保存的是起点斜率，不是 RK2 两阶段平均后的斜率。线性预测只写入 `view_`，不会直接更新 `state_` 或正式网格。
+
+每次宏步尝试开始时，`reset_attempt()` 执行 `state_.cells = start_.cells`。本层 Phase I 从 `state_` 取出局部步起点保存到 `base_`，并计算 `slope_`，此时不推进本层的 `state_`。递归进入细层后，细层会在自己的 Phase II 更新自己的 `state_`，所以不同层的状态可以对应不同时刻。
+
+本层 Phase II 结算单元时，`auto& cell = state_.cells[flat]` 引用的就是试算数组中的单元；对 `cell.U` 的赋值将本层状态更新到局部步终点。整个宏步成功后才通过 `mesh_.cells.swap(state_.cells)` 提交到正式网格；若尝试失败，下次 `reset_attempt()` 会从 `start_` 重新开始。
+
+`build_stage_view()` 每次先执行 `view_.cells = state_.cells`，再只在 `view_` 中把需要预测的单元外推到目标时刻：起点视图预测更粗层，终点视图预测当前层和更粗层。已经到达该时刻的细层单元直接使用复制过来的状态。
+
+面通量和源项由这个同步到目标时刻的 `view_` 计算。细层复用起点阶段时，直接读取已经算好的 `flux_`、`speed_`、`face_velocity_` 和 `source_`，其中已经包含粗层在目标起点的预测状态；粗层的 `state_` 可以继续停留在自己的局部步起点。
 
 ### 2.2 面量与星区压力缓存
 
@@ -325,15 +333,28 @@ $$
 
 所得 $k_{1,i}$ 写入 `slope_[i]`，用于本层的 Euler 终点预测和细层所需的慢区预测。程序还会检查 $U_i^0+h_\ell k_{1,i}$ 是否物理有效。此时尚未将本层单元更新到终点。
 
+这些保存、斜率计算和波速检查在复用步中也会执行。循环只遍历 `cells_by_level_[depth]`，因此 `base_` 和起点压力读取的是已经到达 `fraction` 的本层 `state_`；相邻粗层的影响通过由 `view_` 算好的面量和源项进入。本层仍需保存自己的 `first_flux_`、`source_start_`，并计算自己的 `pressure_work_start_` 和 `slope_`。
+
 ### 6.2 起点复用：复用的是阶段计算
 
 `reuse_start_stage=true` 表示所需面通量、波速、面速度和源项已经由同一个起点阶段计算得到，可以直接使用。
+
+| 复用数组 | 本层的用途 |
+| --- | --- |
+| `flux_` | 保存本层负责面的起点通量，并计算本层单元的通量散度 |
+| `speed_` | 检查本层所需面的 CFL 波速限制 |
+| `face_velocity_` | 计算本层起点压力功中的速度散度 |
+| `source_` | 保存本层 `source_start_`，参与起点斜率和最终两阶段积分 |
 
 - 宏步第一次调用复用 `run()` 的初始扫描。
 - 每层的第一个细半步与父层共享起点，复用父层准备好的结果。
 - 第二个细半步从新的时刻开始，必须重新构造阶段视图并求值。
 
-复用并不意味着 `state_` 中所有单元都已同步。更粗层仍可能停留在较早时刻；它们在这个起点的预测状态已参与父层的阶段计算。
+粗层的 `state_` 尚未推进到这个起点时，缓存仍然可用，因为准备缓存时已经先在 `view_` 中预测了粗层。复用跳过的是重新构造起点视图、重新求面量和源项；并不要求全部 `state_` 同步，也不会跳过本层的起点斜率计算。
+
+例如宏步从 0 开始，有 0、1、2 三层。进入 `advance_level(1, 0.5, false)` 时，0 层的 `state_` 仍在 0，1、2 层已经在 $H/2$。层级 1 先用 `build_stage_view()` 将 0 层在 `view_` 中预测到 $H/2$，再计算 `owner >= 1` 的面量和源项。随后调用 `advance_level(2, 0.5, true)` 时，这些缓存已经对应 $H/2$，并已包含粗层的预测状态，所以 2 层可以直接使用。2 层自己的 `base_` 和压力则从它已到达 $H/2$ 的 `state_` 读取。
+
+从父层准备起点阶段到调用第一个细半步之间，父层只保存局部步起点并计算斜率，没有推进单元或覆盖这些阶段缓存。父层的 `needed` 面集合又包含子层所需的面，因此缓存的时刻、状态和面覆盖范围都满足复用要求。
 
 此外，上一个子步的终点通量通常不能直接作为下一个子步的起点通量：前者使用本层的 Euler 预测状态，后者需要本层经过 RK2 修正后的状态。即使时刻相同，状态也不同。
 
@@ -350,6 +371,8 @@ if (depth < deepest_)
 ```
 
 第一次调用把所有更细层推进到 $f+\mathrm{span}/2$；第二次调用再把它们推进到 $f+\mathrm{span}$。每个子调用内部也执行相同的两个半步，因此越细的层越早到达当前调用的终点。
+
+第一次调用的 `true` 依赖父层已经准备好的起点阶段；较粗层即使尚未推进，其预测状态也已用于该阶段的面量和源项计算。第二次调用的起点已经改变，而且细层已经完成 RK2 更新，所以使用 `false` 重建起点视图和缓存。
 
 这保证了本层进入第二阶段时，所有更细层都已到达 `end_fraction`，而本层仍保留局部步起点状态。
 
@@ -372,6 +395,8 @@ if (!check_wave_speeds(faces_owned_by_level_[depth]) ||
 ```
 
 终点视图中，当前层和更粗层使用线性预测，更细层使用已经完成子步的状态。源项也在这个终点视图上重新计算。
+
+这里的 `build_stage_view()` 只更新 `view_`，当前层的 `state_` 仍保存本局部步的起点。后面的面循环也只累积通量积分；真正写入本层 `state_` 的操作在 6.6 节的单元结算循环中。
 
 此时只求解 `owned` 面，因为更细层负责的面已经在细层子步中完成了通量积分，并将贡献写入相邻单元的累积数组。本层无需再次积分这些面，否则会重复计入同一份输运。
 
@@ -417,36 +442,52 @@ $$
 
 源项和压力功均使用起点、终点的两阶段平均。单层情况下，这对应普通 Heun/RK2 更新；跨层面则使用细层子步积分之和。
 
+上式实际写入的是 `state_` 中的本层单元。当前多维代码中的对应赋值为：
+
+```cpp
+const auto flat = storage_index(cell_index);
+const double volume = mesh_.volume_cell[flat];
+auto& cell = state_.cells[flat];
+cell.U = base_[cell_index]
+    + pending_flux_integral_[cell_index] / volume
+    + (source_start_[cell_index] + source_[flat]) * (0.5 * local_step);
+cell.U[hd_core::INTERNAL_ENERGY] +=
+    0.5 * local_step * (pressure_work_start_[cell_index] + pressure_work_end);
+```
+
+其中 `pressure_work_end` 在累加前由终点 `view_` 的压力和终点面速度计算。由于 `cell` 是引用，赋值直接修改 `state_`；这不是把预测的 `view_` 整体复制回来。只遍历 `cells_by_level_[depth]`，因此当前层推进到 `end_fraction`，细层保留已经完成的更新，更粗层继续等待自己的 Phase II。
+
 更新后检查物理有效性、执行双能量同步，并仅清空**本层单元**的 `pending_flux_integral_`。更粗层单元的累积量继续保留，等待它们自己的局部步结束。
 
 共享面积分保证的是输运部分的离散守恒。源项可以改变全域守恒量，双能量同步也可能修正总能量；两者应与内部面的守恒抵消区分。
 
 ## 流程总结
+
 0. 外部run函数各种各种初始化,包括初始化数组,时间步的分配,cell和face的层级分配,计算出最大步长macro_step(由所有cell中最小的可行dt * $2^{\mathrm{max_depth}}$),然后开始尝试循环。
-1. 首先由外部advance_lts_rk2计算一次最初起点处的flux，然后呼叫advance_level(0,0,true).这是起点
-2. 每一层的advance_level有层数参数depth,起点参数fraction(分数步长)和是否复用reuse. 计算当前的分数步长span = $2^{-\mathrm{depth}}$和终点end_fraction = fraction + span.先检测是否为复用步,如果不是,复制RK2推进的cell状态结果state_到临时数组view_中,由于步长不一,每个cell在state_里的状态对应的时间是不一致的。通过此前存储的RK2第一部分斜率将所有更低层的cell(因为步长更长,没有推进到这一层的起点)在view_中的状态外推到当前层的起点fraction处。由于递归特性,当前层和更高层级的cell必然已经推进到当前起点fraction处,因此不用修改从state_处复制的值,于是整个view_同步。然后用view_里的cell状态去求一次黎曼问题,求出所有owner为当前层级和更高层级的面上的通量flux_,因为只有当前/更高层级owner的面才可能是当前层级的cell的所属面,通量才会对这些cell有影响。
+1. 首先由外部advance_lts_rk2计算一次最初起点处的flux，然后呼叫advance_level(0,0,true).这是起点。每次尝试在调用 `advance_level` 前，`reset_attempt()` 都会用 `state_.cells = start_.cells` 恢复宏步起点；失败尝试中的局部更新不会延续到下一次尝试。
+2. 每一层的advance_level有层数参数depth,起点参数fraction(分数步长)和是否复用reuse. 计算当前的分数步长span = $2^{-\mathrm{depth}}$和终点end_fraction = fraction + span.先检测是否为复用步,如果不是,调用 `build_stage_view(depth, fraction, false)`，在函数内复制RK2推进的cell状态结果state_到临时数组view_中,由于步长不一,每个cell在state_里的状态对应的时间是不一致的。通过此前存储的RK2第一部分斜率将所有更低层的cell(因为步长更长,没有推进到这一层的起点)在view_中的状态外推到当前层的起点fraction处。由于递归特性,当前层和更高层级的cell必然已经推进到当前起点fraction处,因此不用修改从state_处复制的值,于是整个view_同步。然后用view_里的cell状态去求一次黎曼问题,求出所有owner为当前层级和更高层级的面上的通量flux_,因为只有当前/更高层级owner的面才可能是当前层级的cell的所属面,通量才会对这些cell有影响。
 
-   如果是复用步,意味着state_中所有的cell处于共同起点,不需要外推,也不需要重新计算面的flux_(上一步已经算过)
-3. 保存起点处各个面的通量flux_到first_flux_下。 这个通量乘上时间步和面的面积后,就是起点处不含源项的cell状态U对时间的变化率,也就是RK2第一部分所需要的斜率$k_1$。我们对源项只采用终点处的值进行处理。
+   如果是复用步,意味着这个起点所需的flux_、speed_、face_velocity_和source_已经准备好,所以跳过build_stage_view、solve_faces和evaluate_sources。更低层级的state_虽然可能还在更早的时刻,但它们在当前起点的预测状态已经通过之前的view_参与了这些计算。因此不用为了本层再预测和求解一遍,后面仍然要保存本层自己的起点并计算slope_。
+3. 保存起点处由本层负责的各个面的通量flux_到first_flux_下。起点处各相邻面的通量乘上面积、按流入减流出求和后除以cell体积,得到不含源项和压力功的状态变化率；再加上源项和内能压力功,得到RK2第一部分的完整斜率$k_1$。最终积分时,源项和压力功都采用起点和终点值的平均。
 
- 然后遍历本层的所有cell,综合所有的流体通量和源项计算起点处cell的状态对时间的变化率(斜率)$\frac{dU}{dt}\Big |_{begin}$。这个斜率是包含源项的完整的变化率，我们还要存进slope里,为了第二步中提到的外推预测。
-4. 两次推进更高一层的递归,先执行第一次advance_level(depth+1,fraction,true),这是让更高一层从fraction走到fraction+span/2,因为共起点所以复用为true。注意这是递归,这里会由下一层advance_level(depth+1)跳转到步骤2继续执行这个流程,直到最高一层计算完毕,或某一层没有cell,才会逐层往上返回到这一层。因此,当执行完这一次advance_level返回后,所有高于depth的层级都推进到了fraction + span/2。
+ 然后遍历本层的所有cell,从state_保存当前局部步的起点到base_,从source_保存起点源项到source_start_,再用已有的flux_、face_velocity_和本层起点压力计算pressure_work_start_和slope_。这些在复用步中也要执行。因为只遍历cells_by_level_[depth],所以读取的state_和压力都属于已经到达fraction的本层cell,不会把更低层级尚未推进的状态当作本层起点。Phase I只保存起点和斜率,本层state_要等自己的Phase II才更新。
+4. 两次推进更高一层的递归,先执行第一次advance_level(depth+1,fraction,true),这是让更高一层从fraction走到fraction+span/2,因为父层已经准备好这个共同起点的面量和源项,且父层的needed集合包含细层所需的面,所以复用为true；更低层级的预测状态也已经包含在这些结果里。注意这是递归,这里会由下一层advance_level(depth+1)跳转到步骤2继续执行这个流程,直到最高一层计算完毕,再逐层返回到这一层；没有cell的层也要先完成更高层的递归,之后才跳过本层结算。因此,当执行完这一次advance_level返回后,所有高于depth的层级都推进到了fraction + span/2。
 
-接着这一层继续执行第二次advance_level(depth+1,fraction + span/2,true),这是让更高一层从fraction + span/2 走到end_fraction,由于这次推进起点是本层的起点向后走半个本层的步长,因此本层无法与这一次推进共起点,所以设置reuse=false。同理是递归呼叫,更高一层跳回步骤2继续执行流程，因此只有再所有更高层全部推进到end_fraction后,才会执行本层接下来的所有逻辑。
+接着这一层继续执行第二次advance_level(depth+1,fraction + span/2,false),这是让更高一层从fraction + span/2 走到end_fraction,由于这次推进起点是本层的起点向后走半个本层的步长,因此本层无法与这一次推进共起点,所以设置reuse=false。即使前一个细步计算过这个时刻的终点通量,那也是用预测终点状态得到的；现在细层已经完成RK2更新,需要用更新后的细层状态和重新预测的慢层状态构造新的起点view_。同理是递归呼叫,更高一层跳回步骤2继续执行流程，因此只有再所有更高层全部推进到end_fraction后,才会执行本层接下来的所有逻辑。
 
 注意以上过程没有讨论不合法的情形,如果出现合法性检查不通过的层,直接逐级return false,回到run函数里的尝试(attempt)循环中,将最大步长macro_step缩小一半再次尝试。
 
-5.  接下来进入RK2的Phase II。要计算终点处的cell状态对时间的变化率(终点斜率),我们首先通过build_stage_view预测终点end_fraction处的cell状态view_。将state_再次复制到view_中,由于上述提到的递归特性,更高层级的cell已经推进到了终点处,所以更高层级的cell不用修改。而当前层级还没有推进到终点,所以对于当前层级以及更低的层级的cell,都需要用slope外推到终点。
+5.  接下来进入RK2的Phase II。要计算终点处的cell状态对时间的变化率(终点斜率),我们首先通过build_stage_view预测终点end_fraction处的cell状态view_。将state_再次复制到view_中,由于上述提到的递归特性,更高层级的cell已经推进到了终点处,所以更高层级的cell不用修改。而当前层级还没有推进到终点,所以对于当前层级以及更低的层级的cell,都需要用slope外推到终点。 此处只更新 `view_`，本层 `state_` 仍保持局部步起点，直到第8步结算时才更新。
 
-6. 用view_中的cell状态计算solve_face,这一次只计算owner为当前层级的face的flux_。对于owner为更低层级的面,同理,对当前层级的cell的状态没有影响(不可能是其所属相邻面)。owner为更高层的面,其所属的层级已经推进到终点,在这些层级的推进过程中已经计算过终点处的flux_,我们通过一个逐层向下累积传递的pending_flux_integral_[cell_index]给低层级复用。
+6. 用view_中的cell状态计算solve_faces,这一次只计算owner为当前层级的face的终点flux_。owner更低的面不可能是本层cell的相邻面；owner更高的面已经在细层子步中完成积分,其贡献直接累计在共享的pending_flux_integral_里,等待对应cell结算。这里使用细层已累计的通量积分,和Phase I的reuse_start_stage复用起点面量、源项是两个不同的步骤。
 
-7. 计算owner为这一层的面产生的通量积分，这里用的是RK2在起点和终点计算的flux取平均值(即平均斜率$\frac{k_1+k_2}{2}$)作为通量，乘上面积和时间步得到通量积分,并把通量积分的负值添加到面的左侧cell的累积通量积分pending_flux_integral_[left],正值添加到右侧的cell的累积通量pending_flux_integral_[right]中，这些pending_flux_integral_要一直逐层向下传递,直到这个cell的depth推进的那一层,在积分推进中将它加到对应cell的状态中作为积分步里的变化量。
+7. 计算owner为这一层的面的通量积分,将起点first_flux_和终点flux_取平均,乘上面积和本层局部时间步,再把其负值加到pending_flux_integral_[left],正值加到pending_flux_integral_[right]。这些积分保存在共享数组里,直到对应cell的层级结算时,除以cell体积后作为状态增量使用,并不是随递归返回逐层复制。
 
-8. 积分推进步，遍历属于这一层的cell, 每个cell加上累积通量数组pending_flux_integral_中属于自己的那一个累积通量pending_flux_integral_[cell_index],这是从最高层一直累积到当前层depth的,累积给这个cell的RHS。再加上源项,就完成了这一步推进对这一层所有cell的积分。最后清理掉pending_flux_integral_中属于这一层cell的通量。这是由于后续更低层的积分推进中,已经用不到了(一个cell不可能属于两个层级)，这样所有层级完成后这个数组也全部清零。在中间步的计算中, 如果depth层级的某一次advance_level完成了的话,那么depth层和更高层的cell对应的pending_flux_integral_都会清零，计算更低层(如 depth-1 层)时也不会影响到更低层的cell。
+8. 积分推进步，遍历 `cells_by_level_[depth]`，通过 `auto& cell = state_.cells[flat]` 引用本层cell。执行 `cell.U = ...`，从 `base_[cell_index]` 出发，加上 `pending_flux_integral_[cell_index]` 除以体积以及两阶段源项积分，再给独立内能加上两阶段压力功。这些赋值直接把本层 `state_` 推进到 `end_fraction`；更高层级保留递归中已经完成的状态，更低层级继续等待自己的 Phase II。最后清理掉pending_flux_integral_中属于这一层cell的通量。这是由于后续更低层的积分推进中,已经用不到了(一个cell不可能属于两个层级)，这样所有层级完成后这个数组也全部清零。在中间步的计算中, 如果depth层级的某一次advance_level完成了的话,那么depth层和更高层的cell对应的pending_flux_integral_都会清零，计算更低层(如 depth-1 层)时也不会影响到更低层的cell。
 举例:   f1  C1  f2 C2  f3 C3 f4
 C1属于第1层,C2属于第0层,C3属于第二层，f1的owner_level维1,f2的owner_level也为1,f3和f4的owner_level为2。在层级2的时候会计算owner level为2的面f3和f4的通量,并把累积通量积分加给相邻cell C2(f3)和C3(f3和f4)的累积通量积分,然后层级2的推进步会令这一层的cell C3用得到的f3和f4给的累积通量积分推进状态，然后清零C3得到的累积通量积分。而C2属于层级0，因此f3给C2的通量不会清零。然后退到层级1，会把面f1和f2的累积通量积分加给C1(f1)和C2(f1,f2)的累积通量积分,然后层级1再令C1用从f1得到的累积通量积分推进状态，然后清零C1得到的累积通量积分，但C2得到的通量仍然不会清零,这时C2得到的累积通量积分已经是面f2和(负的)面f3之和。最后退回层级0,没有属于层级0的面,然后推进结算层级0的cell C2，这时就能结算在高层级逐层传递下来的累积通量积分pending_flux_integral_[C2],把相邻面f2和f3贡献的通量积分之和加载C2的cell状态中，这样尽管C2的相邻面属于更高层级，我们依然正确结算了C2的所有相邻面的贡献,并且每个面的贡献只需计算一次,不重复计算浪费性能。最后全部清零。
 
-9. 返回真值，完成这一步的推进。递归回退到上一级后会逐层完成结算，除非合法性检查不通过，那所有的层级会快速返回false，退回run函数中的attempt循环，尝试0.5倍的宏步。
+9. 返回真值，完成这一步的推进。递归回退到上一级后会逐层完成结算，除非合法性检查不通过，那所有的层级会快速返回false，退回run函数中的attempt循环，尝试0.5倍的宏步。 当最外层 `advance_level(0, 0, true)` 成功返回、所有层都走完宏步后，`run()` 填充 `state_` 的终点边界，再执行 `mesh_.cells.swap(state_.cells)` 提交到正式网格；否则下一次 `reset_attempt()` 重新从 `start_` 开始。
 
 
 ## 7. 四个单元、三个层级的完整示例
@@ -569,7 +610,9 @@ advance_level(2, 0.5, true);   // H/2 -> 3H/4
 advance_level(2, 0.75, false); // 3H/4 -> H
 ```
 
-第一个细步复用层级 1 刚准备的起点阶段，第二个细步重新求值。`C2` 到达 $H$ 后，层级 1 再构造终点视图，完成 `f1`、`f4` 的后半步积分，并将 `C1`、`C3` 更新到 $H$。
+第一个细步复用层级 1 刚准备的 `flux_`、`speed_`、`face_velocity_` 和 `source_`。此时 `C0` 的 `state_` 仍在 0，但上述缓存已经用包含 `C0` 在 $H/2$ 的预测状态的 `view_` 计算过。`C2` 从自己的 $H/2$ 更新态保存 `base_` 并计算起点斜率，无需再次预测 `C0` 或重算起点面量和源项。
+
+第二个细步从 $3H/4$ 开始，使用已更新的 `C2`，并在新 `view_` 中预测 `C0`、`C1` 和 `C3`，重新计算起点阶段。`C2` 到达 $H$ 后，层级 1 再构造终点视图，完成 `f1`、`f4` 的后半步积分，并将 `C1`、`C3` 更新到 $H$。
 
 <a id="level-0-commit"></a>
 

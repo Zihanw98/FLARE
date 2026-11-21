@@ -61,7 +61,7 @@ namespace hd_microphysics
     // 默认表路径也支持从算例目录启动时定位。
     SpeciesTable read_species_table(const std::string& filename = DEFAULT_SPECIES_TABLE);
 
-    // Shared by all cells in this simulation. Empty when composition is disabled.
+    // Shared by all cells in this simulation. Populated only when HD_NCOMP > 0.
     extern const SpeciesTable& species_table;
     void initialize_species_table(const config::SimulationConfig& cfg);
     // Read-only check of rho*X: finite values, fractions in [0,1] within 1e-12,

@@ -3,7 +3,7 @@
  * @brief Hydrodynamic spatial operators.
  */
 #include "flux.h"
-
+#include "core/cell.h"
 
 namespace hydro
 {
@@ -16,12 +16,29 @@ namespace hydro
         if (direction < 0 || direction >= hd_core::NDIM)
             throw std::out_of_range("Invalid flux direction");
         W.validate(gamma);
-        hd_core::Conserved F{};
         if(W[hd_core::RHO]==0.0)
         {
-            return F;
+            return hd_core::Conserved{};
         }
-        const hd_core::Conserved U = W.to_Conserved(gamma);
+        hd_core::Cell context;
+        context.gamma = gamma;
+
+        const hd_core::Conserved U = context.to_Conserved(W);
+        return physical_flux(W, U, direction);
+    }
+
+    hd_core::Conserved physical_flux(
+        const hd_core::Primitives& W,
+        const hd_core::Conserved& U,
+        int direction
+    )
+    {
+        if (direction < 0 || direction >= hd_core::NDIM)
+            throw std::out_of_range("Invalid flux direction");
+        U.validate();
+        hd_core::Conserved F{};
+        if (U[hd_core::RHO] == 0.0) return F;
+
         const double v_n = W[hd_core::VEL(direction)];
         const double p = W[hd_core::PRE];
         F[hd_core::RHO] = U[hd_core::RHO] * v_n;

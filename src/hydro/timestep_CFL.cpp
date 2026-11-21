@@ -54,7 +54,7 @@ namespace hydro
             
             double inverse_dt = 0.0;
             const auto gamma = mesh.cells[flat].gamma;
-            const auto& W = mesh.cells[flat].U.to_Primtivies(gamma);
+            const auto& W = mesh.cells[flat].Get_Primitives();
             if(W[hd_core::RHO] == 0.0)
             {
                 continue;

@@ -127,7 +127,7 @@ namespace hydro
         if (primitive_epoch_[cell_flat] != epoch_)
         {
             const auto& cell = mesh_->cells[cell_flat];
-            primitives_[cell_flat] = cell.U.to_Primtivies(cell.gamma);
+            primitives_[cell_flat] = cell.Get_Primitives();
             primitive_epoch_[cell_flat] = epoch_;
         }
         return primitives_[cell_flat];
@@ -186,11 +186,17 @@ namespace hydro
         }
         reconstruct_species_face(left_center, left_slope, left_width / 2, left_state);
         reconstruct_species_face(right_center, right_slope, -right_width / 2, right_state);
-        left_state.update_internal_energy(mesh_->cells[left_flat].gamma);
-        right_state.update_internal_energy(mesh_->cells[right_flat].gamma);
-        try { left_state.validate(mesh_->cells[left_flat].gamma); }
+        try
+        {
+            left_state.update_internal_energy(mesh_->cells[left_flat].gamma);
+            left_state.validate(mesh_->cells[left_flat].gamma);
+        }
         catch (const std::invalid_argument&) { left_state = left_center; }
-        try { right_state.validate(mesh_->cells[right_flat].gamma); }
+        try
+        {
+            right_state.update_internal_energy(mesh_->cells[right_flat].gamma);
+            right_state.validate(mesh_->cells[right_flat].gamma);
+        }
         catch (const std::invalid_argument&) { right_state = right_center; }
         return {left_state, right_state};
     }
@@ -222,8 +228,8 @@ namespace hydro
     {
         hd_core::Index left_index = right_index;
         left_index[direction]--;
-        auto WL = mesh.at(left_index).U.to_Primtivies(mesh.at(left_index).gamma);
-        auto WR = mesh.at(right_index).U.to_Primtivies(mesh.at(right_index).gamma);
+        auto WL = mesh.at(left_index).Get_Primitives();
+        auto WR = mesh.at(right_index).Get_Primitives();
         return {WL,WR};
 
         
@@ -254,18 +260,16 @@ namespace hydro
         
         auto gamma_L = mesh.at(left_index).gamma;
         auto gamma_R = mesh.at(right_index).gamma;
-        auto gamma_LL = mesh.at(left_left_index).gamma;
-        auto gamma_RR = mesh.at(right_right_index).gamma;
-        auto WL = mesh.at(left_index).U.to_Primtivies(gamma_L);
-        auto WR = mesh.at(right_index).U.to_Primtivies(gamma_R);
+        auto WL = mesh.at(left_index).Get_Primitives();
+        auto WR = mesh.at(right_index).Get_Primitives();
 
         hd_core::Primitives slope_left;
         hd_core::Primitives slope_right;
         
         const hd_core::Primitives q_l = WL;
         const hd_core::Primitives q_r = WR;
-        const hd_core::Primitives q_ll = mesh.at(left_left_index).U.to_Primtivies(gamma_LL);
-        const hd_core::Primitives q_rr = mesh.at(right_right_index).U.to_Primtivies(gamma_RR);
+        const hd_core::Primitives q_ll = mesh.at(left_left_index).Get_Primitives();
+        const hd_core::Primitives q_rr = mesh.at(right_right_index).Get_Primitives();
         const double dx_l = mesh.cell_center(direction,left_index) - mesh.cell_center(direction,left_left_index);
         const double dx_m = mesh.cell_center(direction,right_index) - mesh.cell_center(direction,left_index);
         const double dx_r = mesh.cell_center(direction,right_right_index) - mesh.cell_center(direction,right_index);
@@ -290,10 +294,9 @@ namespace hydro
         }
         reconstruct_species_face(q_l, slope_left, left_width / 2, WL);
         reconstruct_species_face(q_r, slope_right, -right_width / 2, WR);
-        WL.update_internal_energy(gamma_L);
-        WR.update_internal_energy(gamma_R);
         try
         {
+            WL.update_internal_energy(gamma_L);
             WL.validate(gamma_L);
         }
         catch (const std::invalid_argument&)
@@ -303,6 +306,7 @@ namespace hydro
 
         try
         {
+            WR.update_internal_energy(gamma_R);
             WR.validate(gamma_R);
         }
         catch (const std::invalid_argument&)

@@ -6,6 +6,8 @@
 #include "user/user_api.h"
 #include "boundary/boundary.h"
 #include "physcon/constants.h"
+#include "microphysics/eos/eos.h"
+#include "microphysics/composition/species.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -47,7 +49,10 @@ Snapshot read(const std::filesystem::path& path, hd_core::MeshBlock& mesh) {
 int main(int argc,char** argv) {
     try {
         if(argc!=2 && !(argc==3 && std::string(argv[2])=="--allow-partial")) throw std::runtime_error("Expected parameter path");
-        auto cfg=config::ReadParameters(argv[1]);auto hooks=hd_user::make_user_hooks();
+        auto cfg=config::ReadParameters(argv[1]);
+        hd_microphysics::eos_type = hd_microphysics::parse_equation_of_state(cfg.equation_of_state);
+        hd_microphysics::initialize_species_table(cfg);
+        auto hooks=hd_user::make_user_hooks();
         if(hooks.initialize_units) hooks.initialize_units(physcon::units,cfg);
         auto profile = config::read_mesa_profile(cfg.init_mesa_profile_name,cfg.mesa_radius_inner,cfg.mesa_radius_outer,"linear",100,100);
         auto mesh = config::build_mesh_from_mesa_profile(profile,cfg,true);
@@ -66,8 +71,8 @@ int main(int argc,char** argv) {
             boundary::FillBoundary(mesh,current.time,hooks);double hydro_limit,source_limit;
             const auto result=hd_time::evaluate_RHS(mesh,current.time,hydro::SpatialScheme::Godunov,sources,*solver,cfg,cfg.cfl,hydro_limit,source_limit);
             for(std::size_t f=0;f<mesh.cells.size();++f) if(mesh.is_active(f)) for(int k=0;k<hd_core::NVAR;++k) {
-                const auto w=mesh.cells[f].U.to_Primtivies(mesh.cells[f].gamma);
-                const auto wold=old.cells[f].U.to_Primtivies(old.cells[f].gamma);
+                const auto w=mesh.cells[f].Get_Primitives();
+                const auto wold=old.cells[f].Get_Primitives();
                 const double rho=std::max(w[hd_core::RHO],wold[hd_core::RHO]);
                 const double speed=std::max({std::sqrt(mesh.cells[f].gamma*w[hd_core::PRE]/w[hd_core::RHO]),
                     std::sqrt(old.cells[f].gamma*wold[hd_core::PRE]/wold[hd_core::RHO]),

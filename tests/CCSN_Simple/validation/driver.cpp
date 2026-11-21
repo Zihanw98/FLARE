@@ -7,6 +7,8 @@
 #include "boundary/boundary.h"
 #include "source/source.h"
 #include "io/output.h"
+#include "microphysics/eos/eos.h"
+#include "microphysics/composition/species.h"
 #include <array>
 #include <limits>
 
@@ -34,7 +36,7 @@ Diagnostics measure(const hd_core::MeshBlock& mesh,
     {
         const auto flat=mesh.flat_index({i},true);
         const auto& cell=mesh.cells[flat];
-        const auto W=cell.U.to_Primtivies(cell.gamma);
+        const auto W=cell.Get_Primitives();
         const auto [a,b]=mesh.cell_face_pos(0,i+mesh.nghost[0]);
         const double rho=W[hd_core::RHO], p=W[hd_core::PRE], v=W[hd_core::VEL(0)];
         const double dm=rho*mesh.volume_cell[flat], kinetic=0.5*dm*v*v;
@@ -78,7 +80,7 @@ Diagnostics measure(const hd_core::MeshBlock& mesh,
         d.mass_velocity[target++]=std::numeric_limits<double>::quiet_NaN();
     const auto flat=mesh.flat_index({mesh.nactive[0]-1},true);
     const auto& cell=mesh.cells[flat];
-    const auto W=cell.U.to_Primtivies(cell.gamma);
+    const auto W=cell.Get_Primitives();
     const double radius=cfg.upper[0], area=4*physcon::pi*radius*radius;
     const double v=std::max(0.0,W[hd_core::VEL(0)]);
     d.mass_flux=area*W[hd_core::RHO]*v;
@@ -97,6 +99,8 @@ int main(int argc,char** argv)
         validation_heating_mass=std::stod(argv[3]);
         injection_energy_erg=std::stod(argv[4]);
         auto cfg=config::ReadParameters(argv[1]);
+        hd_microphysics::eos_type = hd_microphysics::parse_equation_of_state(cfg.equation_of_state);
+        hd_microphysics::initialize_species_table(cfg);
         cfg.output_step_every=1;
         auto hooks=hd_user::make_user_hooks();
         if (hooks.initialize_units)
@@ -114,7 +118,7 @@ int main(int argc,char** argv)
         {
             const auto [a,b]=mesh.cell_face_pos(0,i+mesh.nghost[0]);
             const auto cell=model.average(a,b,cfg.gamma);
-            initial_pressure.push_back(cell.U.to_Primtivies(cell.gamma)[hd_core::PRE]);
+            initial_pressure.push_back(cell.Get_Primitives()[hd_core::PRE]);
         }
         std::ofstream log(std::filesystem::path(cfg.output_directory)/"diagnostics.csv");
         log<<std::setprecision(17)

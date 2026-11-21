@@ -128,23 +128,44 @@ int main(int argc, char* argv[])
             throw std::runtime_error("User initializer is not registered");
         }
         hooks.initialize(mesh,cfg);
-        
+
+
         double t_current = 0;
         std::size_t step_current = 0;
 
         boundary::FillBoundary(mesh,t_current,hooks);
+
+        for (auto& cell : mesh.cells)
+        {
+            if constexpr (hd_core::NCOMP > 0)
+                hd_microphysics::validate_cell_composition(cell);
+
+            hd_microphysics::refresh_thermodynamics(cell);
+        }
+
+
         io::Output(mesh, cfg, hooks, step_current, t_current, 0.0);
+
         auto source_list = hd_source::make_sources(cfg,mesh,hooks);
+
         std::unique_ptr<hd_implicit::Integrator> implicit_workspace;
+
         if (integrator == hd_time::TimeIntegrator::Implicit)
             implicit_workspace = std::make_unique<hd_implicit::Integrator>(mesh, cfg);
+
         double dt_next = std::numeric_limits<double>::infinity();
+
         hydro::StarPressureCache star_pressure_cache;
+
         std::uint64_t active_cells = 1;
+
         for (int d = 0; d < hd_core::NDIM; ++d)
             active_cells *= mesh.nactive[d];
+
         initialization_timer.stop();
+
         performance::Scope evolution_timer(performance::Section::Evolution);
+
         while(t_current < cfg.t_end)
         {
             if (step_current >= cfg.maxsteps)
@@ -183,6 +204,7 @@ int main(int argc, char* argv[])
 
             io::Output(mesh, cfg, hooks, step_current, t_current, dt);
         }
+
 
         evolution_timer.stop();
         if (performance::enabled()) std::cout.flush();

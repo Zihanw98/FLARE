@@ -15,7 +15,7 @@ namespace config
      * @param[in] filename Profile path. The first line names rho, vx, vy, vz, pre
      *            and gamma in any order. Only the velocity components present in
      *            the compiled mesh dimension enter the hydrodynamic state.
-     *            With composition enabled, supply each active isotope's neutral
+     *            When HD_NCOMP > 0, supply each active isotope's neutral
      *            species name (e.g. HI, He_I) or name_base (h1, he4). Ion columns
      *            are optional and default to zero; explicit ion fractions are retained.
      *            Fractions must be in [0,1] and sum to one within 1e-6 (not normalized).
@@ -25,7 +25,8 @@ namespace config
      *         are invalid, or a row cannot be converted to a physical cell state.
      * @throws std::logic_error If the mesh storage does not match its dimensions.
      * @note Every row is validated before the first cell is updated.
-     * @pre For HD_NCOMP > 0, initialize the shared active species table first.
+     * @pre When HD_NCOMP > 0, initialize the shared species table first;
+     *      its active size must match HD_NCOMP. HD_NCOMP == 0 ignores composition columns.
      */
     void read_profile(const std::string& filename, hd_core::MeshBlock& mesh);
 }

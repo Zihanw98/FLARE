@@ -6,6 +6,7 @@
 #include "implicit.h"
 #include "core/mesh.h"
 #include "microphysics/composition/species.h"
+#include "microphysics/eos/eos.h"
 #include "utils.h"
 #include "limiter.h"
 #include "reconstruction.h"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace hd_time
 {
@@ -165,25 +167,31 @@ namespace hd_time
             default:
                 throw std::invalid_argument("Invalid time integrator");
         }
-        // Check composition once after the complete step, for every integrator.
-        if (cfg.enable_composition)
-        {
-            for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
-            {
-                if (!mesh.is_active(flat)) continue;
-                try
-                {
-                    hd_microphysics::validate_cell_composition(mesh.cells[flat]);
-                }
-                catch (const std::invalid_argument& error)
-                {
-                    throw std::invalid_argument("advance_one_step: cell "
-                        + std::to_string(flat) + ": " + error.what());
-                }
-            }
-        }
         if (integrator == TimeIntegrator::Euler || integrator == TimeIntegrator::RK2)
             boundary::FillBoundary(mesh,time + dt,hooks);
+        for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
+        {
+            auto& cell = mesh.cells[flat];
+
+            if constexpr (hd_core::NCOMP > 0)
+            {
+                // Check only active-cell composition; ghosts still need thermodynamic updates.
+                if (mesh.is_active(flat))
+                {
+                    try
+                    {
+                        hd_microphysics::validate_cell_composition(cell);
+                    }
+                    catch (const std::invalid_argument& error)
+                    {
+                        throw std::invalid_argument("advance_one_step: cell "
+                            + std::to_string(flat) + ": " + error.what());
+                    }
+                }
+            }
+
+            hd_microphysics::refresh_thermodynamics(cell);
+        }
         return dt;
     }
 }

@@ -212,7 +212,7 @@ void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
         const auto flat=mesh.flat_index({i},true);
         const auto [a,b]=mesh.cell_face_pos(0,i+mesh.nghost[0]);
         const auto& cell=mesh.cells[flat];
-        const auto W=cell.U.to_Primtivies(cell.gamma);
+        const auto W=cell.Get_Primitives();
         const double volume=mesh.volume_cell[flat];
         envelope_mass+=W[hd_core::RHO]*volume;
         envelope_energy+=cell.U[hd_core::ENERGY]*volume;
@@ -282,7 +282,7 @@ void outer_boundary(hd_core::MeshBlock& mesh, double, int direction,
     for(int i=end; i<mesh.ntotal(0); ++i)
     {
         // Zero-gradient outflow, with inward velocity suppressed.
-        auto W=mesh.at({end-1}).U.to_Primtivies(mesh.at({end-1}).gamma);
+        auto W=mesh.at({end-1}).Get_Primitives();
         W[hd_core::VEL(0)]=std::max(0.0,W[hd_core::VEL(0)]);
         mesh.at({i})=hd_core::Cell(W,mesh.at({end-1}).gamma);
     }

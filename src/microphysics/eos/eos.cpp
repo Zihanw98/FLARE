@@ -1,5 +1,6 @@
 #include "eos.h"
 #include "core/cell.h"
+#include "core/mesh.h"
 #include "species.h"
 #include "microphysics/composition/species.h"
 #include "utils/utils.h"
@@ -138,7 +139,7 @@ namespace
             const auto gamma = cell.gamma;
             const auto mu = cell.mean_molecular_weight;
             const auto b = rho / mu * physcon::R_g;
-
+            // R_g / mu = (gamma - 1) * c_V(per unit mass)
             const double T0 = std::min(pressure/b,std::pow(3.0*pressure/physcon::a_Rad,0.25));
             // P(T) = rho/mu * R_g * T + 1/3 a T^4
             //f(T) = rho/mu *R_g  * T + 1/3 a T^4 - P
@@ -162,7 +163,7 @@ namespace
             cell.temperature = temperature;
             
             const auto radiation_energy = physcon::a_Rad * std::pow(temperature,4);
-            const auto thermal_energy = pressure / (gamma - 1);
+            const auto thermal_energy = b * temperature / (gamma - 1);
             
             const auto internal_energy = thermal_energy + ionization_energy + radiation_energy;
             cell.U[hd_core::INTERNAL_ENERGY] = internal_energy;
@@ -174,7 +175,7 @@ namespace
     void evaluate_eos_rho_internal_energy(hd_core::Cell& cell, Equation_of_State model, double& pressure)
     {
         const auto rho = cell.U[hd_core::RHO];
-        const auto internal_energy = cell.U[hd_core::INTERNAL_ENERGY];
+        const auto internal_energy = cell.U.internal_energy();
         if(model == Equation_of_State::IdealGas_Default)
         {
             const auto mu = cell.mean_molecular_weight;
@@ -224,7 +225,7 @@ namespace
 
             const auto b = rho / (mu * (gamma - 1) ) * physcon::R_g;
 
-            const double T0 = std::min(pressure/b,std::pow(3.0*pressure/physcon::a_Rad,0.25));
+
             double ionization_energy = 0.0;
             for(int k=0; k<hd_core::NCOMP; k++)
             {
@@ -234,6 +235,7 @@ namespace
             }
             ionization_energy *= physcon::eV;
             const auto thermal_energy = internal_energy - ionization_energy;
+            const double T0 = std::min(thermal_energy/b,std::pow(thermal_energy/physcon::a_Rad,0.25));
             //U = rho / mu * R_g * T + a T^4
             //f = rho/mu * R_g * T + a T^4 - U
             //df = rho/mu * R_g + 4 a T^3 
@@ -282,6 +284,37 @@ void evaluate_eos(hd_core::Cell& cell, EoSInput input,
             return;
     }
     throw std::invalid_argument("Invalid EoS input enum");
+}
+
+void refresh_thermodynamics(hd_core::Cell& cell, Equation_of_State model)
+{
+    cell.U.validate();
+    if (cell.U[hd_core::RHO] == 0.0)
+        return;
+
+    double pressure = 0.0;
+    evaluate_eos(cell, EoSInput::RhoE, model, pressure);
+}
+
+void refresh_thermodynamics(hd_core::MeshBlock& mesh, Equation_of_State model)
+{
+    for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
+    {
+        try
+        {
+            refresh_thermodynamics(mesh.cells[flat], model);
+        }
+        catch (const std::invalid_argument& error)
+        {
+            throw std::invalid_argument("refresh_thermodynamics: cell "
+                + std::to_string(flat) + ": " + error.what());
+        }
+        catch (const std::runtime_error& error)
+        {
+            throw std::runtime_error("refresh_thermodynamics: cell "
+                + std::to_string(flat) + ": " + error.what());
+        }
+    }
 }
 
 Equation_of_State parse_equation_of_state(const std::string& name)

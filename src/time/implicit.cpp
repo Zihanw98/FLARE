@@ -1,6 +1,7 @@
 #include "implicit.h"
 #include "implicit_linear.h"
 #include "implicit_variables.h"
+#include "microphysics/eos/eos.h"
 #include "user/user_api.h"
 #include <algorithm>
 #include <chrono>
@@ -21,6 +22,20 @@ namespace
 constexpr int nv = hd_core::NVAR;
 constexpr double difference_step = 2e-6;
 using Clock = std::chrono::steady_clock;
+// Only failures from thermodynamic recovery trigger this numerical fallback;
+// exceptions thrown by user source/boundary hooks propagate unchanged.
+struct ThermodynamicsFailure : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+template<class State>
+void refresh_trial_thermodynamics(State& state)
+{
+    try { hd_microphysics::refresh_thermodynamics(state); }
+    catch (const std::invalid_argument& error) { throw ThermodynamicsFailure(error.what()); }
+    catch (const std::runtime_error& error) { throw ThermodynamicsFailure(error.what()); }
+}
+
 double seconds(Clock::time_point start)
 {
     return std::chrono::duration<double>(Clock::now() - start).count();
@@ -159,7 +174,11 @@ struct Integrator::Impl
                 dq[component] = 1;
                 probe.cells = trial.cells;
                 for (auto j : groups[c])
+                {
                     probe.cells[active[j]].U = coordinates.update(j, trial.cells[active[j]], dq.data.data(), difference_step);
+                    // Preconditioning freezes ghosts; only these active cells changed.
+                    refresh_trial_thermodynamics(probe.cells[active[j]]);
+                }
                 local_rhs(probe, solver, scheme, cfg, perturbed);
                 for (std::size_t i = 0; i < active.size(); ++i)
                     for (std::size_t block = 0; block < columns[i].size(); ++block)
@@ -186,10 +205,13 @@ struct Integrator::Impl
     {
         trial.cells = old.cells;
         newton = linear = rhs_calls = preconditioner_calls = 0;
+        residual_norm = std::numeric_limits<double>::infinity();
         matrix_seconds = linear_seconds = 0;
         reason = "newton_limit";
         auto rhs = [&](hd_core::MeshBlock& state) {
             boundary::FillBoundary(state, time+dt, hooks);
+            // Covers Newton iterates, both Jacobian probes, and line-search candidates.
+            refresh_trial_thermodynamics(state);
             double rate, source_limit;
             auto value = hd_time::evaluate_RHS(state, time+dt, scheme, sources, solver, cfg,
                                               cfg.cfl, rate, source_limit);
@@ -255,13 +277,15 @@ struct Integrator::Impl
             for (double alpha = start_alpha; alpha >= start_alpha/1048576; alpha *= 0.5)
             {
                 candidate.cells = trial.cells;
+                std::vector<hd_core::Conserved> next_rates;
                 try
                 {
                     for (std::size_t i = 0; i < active.size(); ++i)
                         candidate.cells[active[i]].U = coordinates.update(i, trial.cells[active[i]], &correction[i*nv], alpha);
                 }
                 catch (const std::invalid_argument&) { continue; }
-                auto next_rates = rhs(candidate);
+                try { next_rates = rhs(candidate); }
+                catch (const ThermodynamicsFailure&) { continue; }
                 auto next_r = residual(candidate, next_rates);
                 if (merit(next_r, coordinates) <= (1-1e-4*alpha)*old_merit)
                 {
@@ -298,7 +322,24 @@ double Integrator::advance(hd_core::MeshBlock& mesh, double time, double remaini
         if (!std::isfinite(time+dt) || time+dt <= time)
             throw std::runtime_error("Implicit timestep cannot advance time");
         const auto start = Clock::now();
-        const bool accepted = p.solve(mesh, time, dt, scheme, solver, sources, cfg, hooks);
+        bool accepted = false;
+        try
+        {
+            accepted = p.solve(mesh, time, dt, scheme, solver, sources, cfg, hooks);
+            if (accepted)
+            {
+                p.trial.synchronize_dual_energy();
+                boundary::FillBoundary(p.trial, time + dt, hooks);
+                // Synchronization and user ghosts can change U after the last residual.
+                // Recover before committing so failure still leaves mesh unchanged.
+                refresh_trial_thermodynamics(p.trial);
+            }
+        }
+        catch (const ThermodynamicsFailure& error)
+        {
+            accepted = false;
+            p.reason = "thermodynamics: " + std::string(error.what());
+        }
         const double elapsed = seconds(start);
         std::cerr << "[implicit] " << (accepted ? "accepted" : "rejected") << " t=" << time
                   << " dt=" << dt << " Newton=" << p.newton << " GMRES=" << p.linear
@@ -313,8 +354,6 @@ double Integrator::advance(hd_core::MeshBlock& mesh, double time, double remaini
         }
         if (accepted)
         {
-            p.trial.synchronize_dual_energy();
-            boundary::FillBoundary(p.trial, time + dt, hooks);
             mesh.cells.swap(p.trial.cells);
             p.next_dt = std::min(p.settings.dt_implicit, dt*(p.newton <= 8 ? 1.5 : 1.0));
             return dt;

@@ -3,6 +3,7 @@
 #include "config/read_profile.h"
 #include "config/read_mesa_profile.h"
 #include "microphysics/composition/species.h"
+#include "microphysics/eos/eos.h"
 #include "physcon/unit.h"
 #include <filesystem>
 #include <fstream>
@@ -21,7 +22,8 @@ config::SimulationConfig configuration(const std::filesystem::path& directory)
     cfg.upper.fill(1);
     cfg.boundary_lower.fill("outflow");
     cfg.boundary_upper.fill("outflow");
-    cfg.enable_composition = true;
+    cfg.equation_of_state = "IdealGas_Mixed";
+    hd_microphysics::eos_type = hd_microphysics::Equation_of_State::IdealGas_Mixed;
     cfg.composition_activate_file = (directory / "active.txt").string();
     // Deliberately reverse the isotope order, including two isotopes at the same Z.
     std::ofstream(cfg.composition_activate_file) << "c12 0 0\nhe4 0 2\nh1 -1 1\nhe3 0 2\n";
@@ -97,7 +99,9 @@ void profiles(const std::filesystem::path& directory, const config::SimulationCo
     auto rejected = [&](const std::string& names, const std::string& values,
                         const std::string& last_values = "") {
         write(names, values, last_values);
-        expect_throw<std::runtime_error>([&] { config::read_profile(path, mesh); });
+        expect_throw<std::runtime_error>([&] {
+            config::read_profile(path, mesh);
+        });
         for (std::size_t f = 0; f < mesh.cells.size(); ++f)
         {
             CHECK(mesh.cells[f].gamma == before[f].gamma);
@@ -125,6 +129,22 @@ void profiles(const std::filesystem::path& directory, const config::SimulationCo
     expect_throw<std::runtime_error>([&] {
         config::set_profile_composition({.4, .1}, columns, state, "test row");
     });
+}
+
+void profiles_require_composition(const std::filesystem::path& directory,
+                                  config::SimulationConfig cfg)
+{
+    cfg.init_profile_from_file = true;
+    cfg.init_profile_file_name = (directory / "hydro_profile.dat").string();
+    {
+        std::ofstream out(cfg.init_profile_file_name);
+        out << "rho vx vy vz pre gamma\n";
+        for (int i = 0; i < (1 << hd_core::NDIM); ++i)
+            out << i + 2 << " 0.1 0.2 0.3 2 1.4\n";
+    }
+    // A composition build always requires isotope fractions in state input.
+    hd_core::MeshBlock mesh;
+    expect_throw<std::runtime_error>([&] { mesh.build_mesh(cfg); });
 }
 
 void mesa(const std::filesystem::path& directory, config::SimulationConfig cfg)
@@ -185,15 +205,14 @@ void mesa(const std::filesystem::path& directory, config::SimulationConfig cfg)
     const auto proton_mesh = config::build_mesh_from_mesa_profile(protons, cfg, true);
     check_neutral(proton_mesh.at_active({0}), .41, .1, .2, .29);
 
-    // Geometry-only and composition-disabled initialization do not require isotopes.
+    // Geometry-only loading needs no isotopes; state initialization does.
     auto hydro = profile;
     hydro.zones.headers.resize(5);
     for (auto& row : hydro.zones.data) row.resize(5);
     config::build_mesh_from_mesa_profile(hydro, cfg, false);
-    cfg.enable_composition = false;
-    const auto hydro_mesh = config::build_mesh_from_mesa_profile(hydro, cfg, true);
-    for (int k = 0; k < hd_core::NCOMP; ++k)
-        CHECK(hydro_mesh.at_active({0}).U[hd_core::COMP(k)] == 0.0);
+    expect_throw<std::runtime_error>([&] {
+        config::build_mesh_from_mesa_profile(hydro, cfg, true);
+    });
     physcon::units.init_unitsystem_MLT(1, 1, 1, 1);
 }
 }
@@ -207,5 +226,6 @@ int main(int argc, char** argv)
         const auto cfg = configuration(directory);
         profiles(directory, cfg);
         mesa(directory, cfg);
+        profiles_require_composition(directory, cfg);
     });
 }

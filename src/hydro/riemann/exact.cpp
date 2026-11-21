@@ -4,7 +4,7 @@
  */
 #include "exact.h"
 #include "utils/performance.h"
-#include "core.h"
+#include "core/cell.h"
 #include "flux.h"
 #include <algorithm>
 #include <cmath>
@@ -777,11 +777,17 @@ namespace hydro
                 throw std::runtime_error("ExactSolver: invalid wave-speed bounds");
 
             // 即使界面通量为零，也把本次最大传播速度交给网格循环。
-            interfaceState.W.update_internal_energy(interfaceState.gamma);
             face_velocity = interfaceState.W[hd_core::VEL(direction)];
             face_speed = std::max(std::abs(min_wave_speed), std::abs(max_wave_speed));
-            const auto result = interfaceState.W[hd_core::RHO] == 0.0 ? hd_core::Conserved{}
-                : physical_flux(interfaceState.W, direction, interfaceState.gamma);
+            hd_core::Conserved result{};
+            if (interfaceState.W[hd_core::RHO] != 0.0)
+            {
+                // Convert this sampled state once; flux uses the resulting energies directly.
+                hd_core::Cell context;
+                context.gamma = interfaceState.gamma;
+                const auto U = context.to_Conserved(interfaceState.W);
+                result = physical_flux(interfaceState.W, U, direction);
+            }
             if (pressure_hint) *pressure_hint = solved_pressure;
             return result;
         }

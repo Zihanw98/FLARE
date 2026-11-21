@@ -13,7 +13,9 @@ public:
     Integrator(const Integrator&) = delete;
     Integrator& operator=(const Integrator&) = delete;
     double suggested_dt() const;
-    // Commits only a converged, boundary-filled state. dt <= remaining.
+    // Commits only a converged, boundary-filled state with refreshed thermodynamics.
+    // Thermodynamic recovery failures reject the trial; adaptive mode retries at half dt.
+    // dt <= remaining; rejected trials leave the caller's cells unchanged.
     double advance(hd_core::MeshBlock& mesh, double time, double remaining,
                    hydro::SpatialScheme scheme, const hydro::RiemannSolver& solver,
                    const hd_source::SourceList& sources, const config::SimulationConfig& cfg,

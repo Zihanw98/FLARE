@@ -15,6 +15,7 @@
 #include "integrator.h"
 #include "hydro/godunov.h"
 #include "hydro/wave_timestep.h"
+#include "microphysics/eos/eos.h"
 #include "utils.h"
 #include "utils/performance.h"
 #include <algorithm>
@@ -105,6 +106,7 @@ hd_core::MeshBlock make_start_stage(
 {
     auto start = mesh;
     boundary::FillBoundary(start, time, hooks);
+    hd_microphysics::refresh_thermodynamics(start);
     return start;
 }
 
@@ -382,7 +384,7 @@ void LTSRK2Step::scan_source_changes(
         if (!source_cache_ready_)
         {
             const auto& cell = stage.cells[flat];
-            const auto primitive = cell.U.to_Primtivies(cell.gamma);
+            const auto primitive = cell.Get_Primitives();
             const double rho = primitive[hd_core::RHO];
             const double pressure = primitive[hd_core::PRE];
             source_rho_[cell_index] = rho;
@@ -613,6 +615,12 @@ bool LTSRK2Step::build_stage_view(int depth, double fraction, bool endpoint)
         if (!is_physical(cell.U)) return false;
     }
     boundary::FillBoundary(view_, time_ + fraction * macro_step_, hooks_);
+    try
+    {
+        hd_microphysics::refresh_thermodynamics(view_);
+    }
+    catch (const std::invalid_argument&) { return false; }
+    catch (const std::runtime_error&) { return false; }
     return true;
 }
 
@@ -647,8 +655,8 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
         source_start_[cell_index] = source_[flat];
 
         Conserved flux_balance{};
-        double face_velocity_balance = 0.0;
-
+        double div_velocity_balance = 0.0;
+        
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
             const auto& pair = mesh_.cell_faces[cell_index][d];
@@ -666,15 +674,14 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
             flux_balance +=
                 flux_[lower] * lower_area - flux_[upper] * upper_area;
 
-            face_velocity_balance +=
+            div_velocity_balance +=
                 upper_area * face_velocity_[upper]
                 - lower_area * face_velocity_[lower];
             //balance of (face_area * face_velocity)
         }
-
+        const double pressure_start = current_cell.Get_Pressure_From_Updated_State();
         pressure_work_start_[cell_index] =
-            -(current_cell.gamma - 1.0) * base_[cell_index].internal_energy()
-            * face_velocity_balance / volume;
+            - pressure_start * div_velocity_balance / volume;
         //Balance of (Face Area * Face Velocity) / Volume = Balance of Divergence of velocity = 1/V * dV/dt--->relative volume change rate
         slope_[cell_index] =
             flux_balance / volume + source_start_[cell_index];
@@ -696,7 +703,7 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
     //Next is the Phase II of RK2, which mainly calculate the tentative slope at the endpoint
 
     if (!build_stage_view(depth, end_fraction, true)) return false; //anticipate view_, now it contains cell states at the endpoint --- both lower level cells and current level cells need anticipation
-    solve_faces(view_, faces_owned_by_level_[depth]);               //Facial Flux get updated
+    solve_faces(view_, faces_owned_by_level_[depth]);               //Facial Flux get updated *** If it is a reuse step, then this will be the only flux update for this step, and the flux will be the start value for following steps which start from end_fraction(after all the steps from fraction -> end_fraction finish).
     if (!check_wave_speeds(faces_owned_by_level_[depth]) ||
         macro_step_ > evaluate_sources(
             view_, time_ + end_fraction * macro_step_, macro_step_)) return false;
@@ -722,14 +729,14 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
     {
         const auto flat = storage_index(cell_index);
         const double volume = mesh_.volume_cell[flat];
-
+        //Update state_ in RK2 second step...
         auto& cell = state_.cells[flat];
         cell.U = base_[cell_index]
             + pending_flux_integral_[cell_index] / volume
             + (source_start_[cell_index] + source_[flat])
                 * (0.5 * local_step);
         
-        double face_velocity_balance = 0.0;
+        double div_velocity_balance = 0.0;
 
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
@@ -745,20 +752,25 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
             const double upper_area =
                 mesh_.face_area[d].at(upper_info.storage_coordinates);
 
-            face_velocity_balance +=
+            div_velocity_balance +=
                 upper_area * face_velocity_[upper]
                 - lower_area * face_velocity_[lower];
         }
-
+        const double pressure_end = view_.cells[flat].Get_Pressure_From_Updated_State();
         const double pressure_work_end =
-            -(cell.gamma - 1.0) * view_.cells[flat].U.internal_energy()
-            * face_velocity_balance / volume;
+            - pressure_end * div_velocity_balance / volume;
         cell.U[hd_core::INTERNAL_ENERGY] +=
             0.5 * local_step * (pressure_work_start_[cell_index] + pressure_work_end);
         
         
         if (!is_physical(cell.U)) return false;
         cell.synchronize_dual_energy();
+        try
+        {
+            hd_microphysics::refresh_thermodynamics(cell);
+        }
+        catch (const std::invalid_argument&) { return false; }
+        catch (const std::runtime_error&) { return false; }
         pending_flux_integral_[cell_index] = Conserved{};
     }
     return true;

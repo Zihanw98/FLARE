@@ -89,7 +89,7 @@ namespace hd_microphysics
     void initialize_species_table(const config::SimulationConfig& cfg)
     {
         SpeciesTable table;
-        if (cfg.enable_composition)
+        if constexpr (hd_core::NCOMP > 0)
         {
             table = read_species_table();
             table.build_active_species_table(cfg);

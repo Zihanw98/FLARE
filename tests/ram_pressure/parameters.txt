@@ -33,7 +33,6 @@ constant_gravity_enabled = false
 spherical_gravity_enabled = false
 spherical_self_gravity_enabled = false
 constant_heating_enabled = false
-enable_composition = false
 
 output_step_every = 40
 output_directory = output

@@ -4,6 +4,8 @@
  */
 #include "integrator.h"
 #include "core/mesh.h"
+#include "microphysics/eos/eos.h"
+#include "microphysics/composition/species.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>

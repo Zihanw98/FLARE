@@ -97,7 +97,7 @@ void file_profile(const std::filesystem::path& directory)
     {
         if (!mesh.is_active(flat)) continue;
         const auto& cell = mesh.cells[flat];
-        const auto w = cell.U.to_Primtivies(cell.gamma);
+        const auto w = cell.Get_Primitives();
         CHECK(near(w[hd_core::RHO], ++row));
         CHECK(near(w[hd_core::PRE], 2));
         for (int d = 0; d < hd_core::NDIM; ++d)
@@ -137,7 +137,9 @@ void file_profile(const std::filesystem::path& directory)
         for (int i = 0; i < count; ++i)
             out << "99 0 0 0 " << (i == count - 1 ? -1 : 1) << " 1.4\n";
     }
-    expect_throw<std::runtime_error>([&] { config::read_profile(cfg.init_profile_file_name, mesh); });
+    expect_throw<std::runtime_error>([&] {
+        config::read_profile(cfg.init_profile_file_name, mesh);
+    });
     for (std::size_t i = 0; i < before.size(); ++i)
         for (int k = 0; k < hd_core::NVAR; ++k)
             CHECK(mesh.cells[i].U[k] == before[i].U[k]);
@@ -184,7 +186,7 @@ void mesa(const std::filesystem::path& directory)
         CHECK(cfg.geometry == "spherical");
         CHECK(cfg.nactive[0] == 4);
         CHECK(cfg.lower[0] == 1.5 && cfg.upper[0] == 5);
-        auto w = mesh.at_active({0}).U.to_Primtivies(cfg.gamma);
+        auto w = mesh.at_active({0}).Get_Primitives();
         CHECK(near(w[hd_core::RHO], 8));
         CHECK(near(w[hd_core::PRE], 128));
         CHECK(near(w[hd_core::VEL(0)], 8));

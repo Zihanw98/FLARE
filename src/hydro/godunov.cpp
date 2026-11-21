@@ -110,7 +110,7 @@ namespace hydro
 
             rhs[flat] = {{}};
             double inverse_dt = 0.0;
-            const double pressure = mesh.cells[flat].U.internal_energy() * (mesh.cells[flat].gamma - 1.0);
+            const double pressure = mesh.cells[flat].Get_Pressure_From_Updated_State();
             auto face_left_index = index;
             auto area_left_index = hd_core::Index_add_offset(face_left_index,mesh.nghost);
             auto V = mesh.volume_cell[flat];

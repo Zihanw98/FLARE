@@ -108,7 +108,7 @@ namespace io
             const auto& cell = mesh.cells[flat];
             const auto volume = mesh.volume_cell[flat];
             cell.U.validate();
-            const auto W = cell.U.to_Primtivies(cell.gamma);
+            const auto W = cell.Get_Primitives();
             if (!is_ghost)
             {
                 ++active_cells;

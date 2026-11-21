@@ -19,13 +19,11 @@ namespace
      * @param[in,out] mesh Allocated radial mesh. Row zero maps to the first active storage cell.
      * @param[in] zones MESA table in mesh order, including any copied inner padding rows.
      * @param[in] gamma Ideal-gas adiabatic index passed to the FLARE cell constructor.
-     * @param[in] enable_composition Read MESA isotope fractions into neutral states.
      * @pre The number of rows is at most the active cell count.
      * @throws std::runtime_error If a required column is missing.
      * @throws std::invalid_argument If a unit scale or converted gas state is invalid.
      */
-    void fill_mesa_states(hd_core::MeshBlock& mesh, const Table& zones, double gamma,
-                          bool enable_composition)
+    void fill_mesa_states(hd_core::MeshBlock& mesh, const Table& zones, double gamma)
     {
         // CGS units per code unit of density, pressure and velocity.
         const auto& units = physcon::units;
@@ -38,9 +36,8 @@ namespace
         const auto log_rho = zones.column("logRho");
         const auto log_p = zones.column("logP");
         const auto velocity = zones.column("velocity");
-        const auto composition = enable_composition
-            ? profile_composition_columns(zones, CompositionColumnFormat::MesaIsotopes, "MESA profile")
-            : CompositionColumns{};
+        const auto composition = profile_composition_columns(
+            zones, CompositionColumnFormat::MesaIsotopes, "MESA profile");
         const auto first = static_cast<std::size_t>(mesh.nghost[0]); // First active storage cell.
         for (std::size_t i = 0; i < zones.data.size(); ++i)
         {
@@ -50,9 +47,8 @@ namespace
             state[hd_core::VEL(0)] = velocity[i] / units.unit_velocity;
             if (!(state[hd_core::RHO] > 0.0))
                 throw std::invalid_argument("MESA density is not positive in code units");
-            if (enable_composition)
-                set_profile_composition(zones.data[i], composition, state,
-                    "MESA profile data row " + std::to_string(i + 1));
+            set_profile_composition(zones.data[i], composition, state,
+                "MESA profile data row " + std::to_string(i + 1));
             mesh.cells[first + i] = hd_core::Cell(state, gamma);
         }
     }
@@ -110,7 +106,7 @@ hd_core::MeshBlock build_mesh_from_mesa_profile(const MesaProfile& profile,
     mesh.allocate();
     mesh.build_geometry();
     if (initialize_state && !profile.zones.data.empty())
-        fill_mesa_states(mesh, profile.zones, cfg.gamma, cfg.enable_composition);
+        fill_mesa_states(mesh, profile.zones, cfg.gamma);
 
     cfg.geometry = "spherical";
     cfg.nactive = mesh.nactive;

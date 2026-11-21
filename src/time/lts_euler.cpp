@@ -18,6 +18,7 @@
 #include "integrator.h"
 #include "hydro/riemann/riemann.h"
 #include "hydro/wave_timestep.h"
+#include "microphysics/eos/eos.h"
 #include "utils.h"
 #include "utils/performance.h"
 #include <algorithm>
@@ -94,6 +95,7 @@ MeshBlock make_start_stage(
 {
     auto start = mesh;
     boundary::FillBoundary(start, time, hooks);
+    hd_microphysics::refresh_thermodynamics(start);
     return start;
 }
 
@@ -325,7 +327,7 @@ double LTSEulerStep::source_change_limit(
         if (!cache_ready)
         {
             const auto& cell = start_.cells[flat];
-            const auto primitive = cell.U.to_Primtivies(cell.gamma);
+            const auto primitive = cell.Get_Primitives();
             const double rho = primitive[hd_core::RHO];
             scale.fill(0.0);
             scale[0] = rho;
@@ -474,6 +476,12 @@ bool LTSEulerStep::build_stage_view(int depth, double fraction, double stage_tim
         if (!is_physical(cell.U)) return false;
     }
     boundary::FillBoundary(view_, stage_time, hooks_);
+    try
+    {
+        hd_microphysics::refresh_thermodynamics(view_);
+    }
+    catch (const std::invalid_argument&) { return false; }
+    catch (const std::runtime_error&) { return false; }
     return true;
 }
 
@@ -524,6 +532,7 @@ bool LTSEulerStep::build_level_predictors(
         step_fraction_[cell_index] = fraction;
         Conserved flux_balance{};
         double div_velocity_balance = 0.0;
+       
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
             const auto& pair = mesh_.cell_faces[cell_index][d];
@@ -533,8 +542,8 @@ bool LTSEulerStep::build_level_predictors(
             div_velocity_balance += upper_area * stage_faces_[upper].velocity
                                   - lower_area * stage_faces_[lower].velocity;
         }
-        pressure_work_[cell_index] = -(current_cell.gamma - 1.0)
-            * step_start_[cell_index].internal_energy() * div_velocity_balance / volume;
+        const double pressure_start = current_cell.Get_Pressure_From_Updated_State();
+        pressure_work_[cell_index] = -pressure_start * div_velocity_balance / volume;
         auto& candidate = candidate_[cell_index];
         candidate = step_start_[cell_index] + flux_balance * (local_step / volume)
                   + source_[flat] * local_step;
@@ -557,6 +566,12 @@ bool LTSEulerStep::commit_level(int depth, double local_step)
             local_step * pressure_work_[cell_index];
         if (!is_physical(cell.U)) return false;
         cell.synchronize_dual_energy();
+        try
+        {
+            hd_microphysics::refresh_thermodynamics(cell);
+        }
+        catch (const std::invalid_argument&) { return false; }
+        catch (const std::runtime_error&) { return false; }
         pending_flux_integral_[cell_index] = Conserved{};
     }
     return true;

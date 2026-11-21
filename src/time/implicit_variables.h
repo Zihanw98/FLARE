@@ -31,8 +31,8 @@ public:
         for (auto flat : active)
         {
             const auto& cell = trial.cells[flat];
-            const auto w = cell.U.to_Primtivies(cell.gamma);
-            const auto previous = old.cells[flat].U.to_Primtivies(old.cells[flat].gamma);
+            const auto w = cell.Get_Primitives();
+            const auto previous = old.cells[flat].Get_Primitives();
             if (!(w[hd_core::RHO] > 0 && w[hd_core::PRE] > 0
                   && previous[hd_core::RHO] > 0 && previous[hd_core::PRE] > 0))
                 throw std::invalid_argument("Log implicit variables require positive density and pressure, not vacuum");
