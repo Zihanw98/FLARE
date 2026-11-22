@@ -384,7 +384,7 @@ void LTSRK2Step::scan_source_changes(
         if (!source_cache_ready_)
         {
             const auto& cell = stage.cells[flat];
-            const auto primitive = cell.Get_Primitives();
+            const auto primitive = cell.Get_Primitives_From_Updated_State();
             const double rho = primitive[hd_core::RHO];
             const double pressure = primitive[hd_core::PRE];
             source_rho_[cell_index] = rho;
@@ -393,7 +393,7 @@ void LTSRK2Step::scan_source_changes(
             source_internal_allowance_[cell_index] = 0.0;
             if (rho != 0.0)
             {
-                const double sound_speed = std::sqrt(cell.gamma * pressure / rho);
+                const double sound_speed = cell.Get_Pressure_From_Updated_State();
                 for(int d=0; d<hd_core::NDIM; d++)
                 {
                     const double velocity = primitive[hd_core::VEL(d)];

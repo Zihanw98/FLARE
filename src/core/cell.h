@@ -118,5 +118,6 @@ namespace hd_core
         void Set_Conserved_From_Primitives(
             const Primitives& state,
             hd_microphysics::Equation_of_State model = hd_microphysics::eos_type);
+        double get_sound_speed(hd_microphysics::Equation_of_State model=hd_microphysics::eos_type) const;
     };
 }

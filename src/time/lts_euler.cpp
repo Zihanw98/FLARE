@@ -327,14 +327,13 @@ double LTSEulerStep::source_change_limit(
         if (!cache_ready)
         {
             const auto& cell = start_.cells[flat];
-            const auto primitive = cell.Get_Primitives();
+            const auto primitive = cell.Get_Primitives_From_Updated_State();
             const double rho = primitive[hd_core::RHO];
             scale.fill(0.0);
             scale[0] = rho;
             if (rho != 0.0)
             {
-                const double sound_speed =
-                    std::sqrt(cell.gamma * primitive[hd_core::PRE] / rho);
+                const double sound_speed = cell.get_sound_speed();
                 for (int d = 0; d < hd_core::NDIM; ++d)
                     scale[1 + d] = rho * (std::abs(primitive[hd_core::VEL(d)]) + sound_speed);
                 scale[1 + hd_core::NDIM] = primitive[hd_core::PRE] / (cell.gamma - 1.0);

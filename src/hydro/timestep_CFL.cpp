@@ -6,6 +6,7 @@
 #include "wave_timestep.h"
 #include "core.h"
 #include "mesh.h"
+#include "microphysics/eos/eos.h"
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
@@ -53,13 +54,14 @@ namespace hydro
                 continue;
             
             double inverse_dt = 0.0;
-            const auto gamma = mesh.cells[flat].gamma;
-            const auto& W = mesh.cells[flat].Get_Primitives();
+            const auto& cell = mesh.cells[flat];
+            const auto gamma = cell.gamma;
+            const auto& W = cell.Get_Primitives_From_Updated_State();
             if(W[hd_core::RHO] == 0.0)
             {
                 continue;
             }
-            const double c_s = std::sqrt(gamma *W[hd_core::PRE]/W[hd_core::RHO]);
+            const double c_s = cell.get_sound_speed();
             for(int d = 0; d < hd_core::NDIM; d++)
             {
                 inverse_dt += (std::abs(W[hd_core::VEL(d)]) + c_s)/mesh.cell_width(d,index[d]+mesh.nghost[d]);

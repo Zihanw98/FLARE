@@ -31,15 +31,15 @@ public:
         for (auto flat : active)
         {
             const auto& cell = trial.cells[flat];
-            const auto w = cell.Get_Primitives();
-            const auto previous = old.cells[flat].Get_Primitives();
+            const auto w = cell.Get_Primitives_From_Updated_State();
+            const auto previous = old.cells[flat].Get_Primitives_From_Updated_State();
             if (!(w[hd_core::RHO] > 0 && w[hd_core::PRE] > 0
                   && previous[hd_core::RHO] > 0 && previous[hd_core::PRE] > 0))
                 throw std::invalid_argument("Log implicit variables require positive density and pressure, not vacuum");
             CellScale scale{};
             scale.primitive = w;
-            scale.velocity = std::max(std::sqrt(cell.gamma*w[hd_core::PRE]/w[hd_core::RHO]),
-                std::sqrt(old.cells[flat].gamma*previous[hd_core::PRE]/previous[hd_core::RHO]));
+            scale.velocity = std::max(cell.get_sound_speed(),
+                old.cells[flat].get_sound_speed());
             for (int d = 0; d < hd_core::NDIM; ++d)
                 scale.velocity = std::max({scale.velocity, std::abs(w[hd_core::VEL(d)]),
                                           std::abs(previous[hd_core::VEL(d)])});
