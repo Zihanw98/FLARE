@@ -81,6 +81,71 @@ python3 animate.py
 动画只使用保存的数值状态，不对状态插值，并在反弹附近放慢播放。
 `analyze.py` 检查核密度穿越、中心密度峰值后的下降、质量守恒、热能非负，以及外传压缩激波的密度/压力跃变和上游激波参考系 Mach 数。激波位置按速度压缩前沿估计，跃变采样覆盖数个单元，不作为精确 Rankine–Hugoniot 拟合。
 
+## 高分辨率、延长运行及阈值对比
+
+`parameters_hires.txt` 使用 1536 个径向单元，中心单元宽约 0.120 km，运行到 15 ms。
+每 10 步保存一次；加密后物理时间采样也更密。结果写入独立的 `output_bounce_hires/`。
+
+```bash
+# 在本算例目录中运行；输出目录必须为空或使用新的目录名。
+make -j4
+./flare -par parameters_hires.txt > bounce_hires.log
+python3 analyze.py --output output_bounce_hires --t-end 0.015
+
+# 回到仓库根目录，用通用脚本生成核心近景。
+cd ../..
+python3 animate.py tests/CCSN_Hybrid_1D/output_bounce_hires bounce \
+  --plot spherical --cgs --log --rmax 1e7 \
+  --radial-grid tests/CCSN_Hybrid_1D/output_bounce_hires/grid.csv \
+  --density-threshold 2e14 --map-pixels 801 --dpi 200 \
+  --stride 4 --fps 12 \
+  --output tests/CCSN_Hybrid_1D/output_bounce_hires/animations/bounce_threshold_100km.mp4
+```
+
+将 `--rmax` 改为 `1.5e8`，输出文件名改为 `bounce_threshold_1500km.mp4`，即可查看完整外传激波。
+两部视频均为 2400×1800 像素、328 帧、约 27.3 秒；球面对称映射采用 801×801 个采样点。
+每帧对应真实保存状态，播放等帧间隔，不等于物理时间匀速播放。
+
+`--density-threshold 2e14` 将 60% 的色标分配给核密度的 0.5–1.5 倍区间；
+低密度为蓝色，阈值为浅黄色，高于阈值转为橙红色。分段对数色标保留完整密度范围，
+所有帧共用同一尺度，色条标注真实密度，径向剖面增加阈值虚线。此选项要求 `--log`，
+阈值单位与显示单位相同（这里为 CGS）；它只改变显示，不改变物理模型或快照数据。
+`--map-pixels` 控制球面图采样，`--dpi` 控制导出像素，两者与模拟网格数分别设置。
+
+同一绘图命令可将输出扩展名改为 `.html` 生成可暂停和逐帧查看的离线动画（需要 Plotly）。
+本次另生成 `bounce_threshold_100km.html`（401×401 映射以减轻浏览器负担）、
+`bounce_threshold_100km.gif`（1600×1200、328 帧）、`bounce_threshold_peak_last.png`
+和同一峰值状态的新旧色标对比图 `density_threshold_comparison.png`。
+
+### 原 colormap、密度下限和对数半径
+
+以下命令在仓库根目录执行，使用原来的 viridis 对数密度色标：
+
+```bash
+python3 animate.py tests/CCSN_Hybrid_1D/output_bounce_hires bounce \
+  --plot spherical --cgs --log --log-x \
+  --radial-grid tests/CCSN_Hybrid_1D/output_bounce_hires/grid.csv \
+  --rmax 1e7 --profile-range 1e4 1e7 \
+  --density-min 1e8 --map-pixels 801 --dpi 200 \
+  --stride 4 --fps 12 \
+  --output tests/CCSN_Hybrid_1D/output_bounce_hires/animations/bounce_viridis_cut1e8_logr_100km.mp4
+```
+
+| 选项 | 含义（使用 `--cgs` 时） |
+| --- | --- |
+| `--log-x` / `--log-radius` | 右侧所有径向剖面的半径使用对数轴；左侧球面切面保持线性坐标 |
+| `--profile-range 1e4 1e7` / `--xlim 1e4 1e7` | 右侧半径显示 0.1–100 km；对数轴要求两个端点严格为正 |
+| `--rmax 1e7` | 左侧球面图显示至半径 100 km；未指定剖面范围时也控制剖面上限 |
+| `--density-min 1e8` | 密度色条和剖面纵轴从 10⁸ g cm⁻³ 开始，较低密度使用色条底端颜色 |
+| `--density-max 4e14` | 可选：指定密度色条和剖面纵轴上限，较高密度使用色条顶端颜色 |
+
+未指定 `--profile-range` 时，对数半径的默认下限取第一个正半径单元中心，避免对零取对数。
+不使用 `--cgs` 时，所有范围参数都按代码单位解释。范围与对数轴选项同时支持 MP4、GIF、PNG 和 HTML；
+原始快照、径向坐标和 HTML 悬停读数均保留真实物理值。密度上下限不能与 `--density-threshold` 同用。
+
+1500 km 全景使用 `--rmax 1.5e8 --profile-range 1e4 1.5e8`，并换用相应输出文件名。
+剖面范围可以独立于左侧图设置，例如左侧放大 100 km、右侧查看 0.1–1500 km。
+
 EoS 单元测试：
 
 ```bash

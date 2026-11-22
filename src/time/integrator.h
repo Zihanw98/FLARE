@@ -215,11 +215,13 @@ namespace hd_time
      * @param[in] solver Riemann solver supplying fluxes and interface wave speeds.
      * @param[in] cfg Reconstruction, limiter, and source settings.
      * @param[in] cfl Finite positive target CFL coefficient.
-     * @param[out] hydro_inverse_dt Largest cell inverse timescale measured from interface waves.
+     * @param[out] hydro_inverse_dt Explicit inverse timescale: max hydro rate plus max transport rate.
      * @param[out] source_dt_limit Minimum independent source limit, or infinity if unrestricted.
      * @param[in,out] star_pressure_cache Optional stage-local star-pressure cache, updated
      * while solving faces. Integrators pass trial arrays to preserve rollback.
-     * @return Pair {target timestep, RHS}, where the timestep is the minimum hydrodynamic and source limit and may be infinity.
+     * @note SourceKind::Transport entries supply face fluxes, not cell sources;
+     * their rates are added to the hydro rate for joint explicit timestep selection.
+     * @return Pair {target timestep, RHS}, limited by combined transport/hydro rates and sources.
      * @pre Each source callback is valid, returns a positive limit or infinity, and does not make its rate depend on the incoming limit.
      * @throws std::invalid_argument If CFL, recorded wave rate, callback, or source limit is invalid.
      * @throws std::logic_error If a source changes the RHS array size.

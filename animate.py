@@ -30,6 +30,11 @@ stretched meshes whose edges cannot be inferred accurately from cell centers.
 --rmax sets the displayed outer radius for spherical maps and profiles, in cm
 with --cgs, otherwise in code length units. Maps are sampled at this radius
 range; color scales and profile y limits still use all cells and selected frames.
+--profile-range MIN MAX (alias --xlim) overrides the horizontal length range
+of the right-hand profiles only. --log-x (alias --log-radius) uses a logarithmic
+profile length axis; limits must be positive. Without explicit limits the lower
+bound is the first positive cell center when the domain reaches zero.
+Left-hand spherical maps keep signed linear coordinates.
 2D: rho/vx/vy/pressure maps, with x profiles at the nearest --slice-y row
 (default: domain midpoint), or y profiles at the nearest --slice-x column.
 These options are mutually exclusive. A dashed line marks the cut on each map.
@@ -50,6 +55,14 @@ Old snapshots without unit metadata can still be plotted without --cgs.
 --log uses logarithmic color scales and profile y axes for rho and pressure;
 velocity and spatial axes stay linear. All selected rho/pressure values must
 be positive. Units and physical values, including HTML hover values, are unchanged.
+--density-threshold RHO (with --log) emphasizes density near RHO using a fixed
+piecewise-log blue/yellow/red scale; yellow marks RHO. RHO is in displayed units.
+--density-min RHO sets the density color scale and profile lower limit in displayed
+units. Lower densities use the bottom color; physical data are unchanged.
+--density-max RHO similarly sets the upper display limit. Density limits cannot
+be combined with --density-threshold.
+--map-pixels controls spherical map sampling (default: 241); increase it together
+with --dpi for sharper output. It does not change the simulation grid.
 
 Default output: DIRECTORY/animations/PREFIX_evolution.gif and *_last.png.
 Use --output movie.mp4 for MP4, or --show to play in a GUI without saving.
@@ -282,6 +295,8 @@ def spherical_projection(snapshot, pixels=241, rmax=None):
     Use supplied shell edges; otherwise infer them as in the Cartesian plots.
     The returned mask excludes both the exterior and any inner cavity.
     """
+    if not isinstance(pixels, (int, np.integer)) or pixels < 3:
+        raise ValueError("--map-pixels must be an integer >= 3")
     if len(snapshot.y) != 1:
         raise ValueError("--plot spherical requires a 1D radial snapshot")
     if snapshot.xlabel != "x":
@@ -325,6 +340,56 @@ def logarithmic_limits(lower, upper):
     if lower == upper:
         return lower / 1.1, upper * 1.1
     return lower, upper
+
+
+DENSITY_COLORS = ((0., "#081d58"), (.25, "#41b6c4"), (.5, "#ffffcc"),
+                  (.75, "#fd8d3c"), (1., "#800026"))
+
+
+def density_display_limits(lower, upper, minimum=None, maximum=None):
+    """Apply optional display limits without clipping physical samples."""
+    if minimum is None and maximum is None:
+        return lower, upper
+    lo = lower if minimum is None else minimum
+    hi = upper if maximum is None else maximum
+    if not np.isfinite(lo) or not np.isfinite(hi) or not 0 < lo < hi:
+        raise ValueError("Density display limits must be finite and satisfy 0 < minimum < maximum")
+    return lo, hi
+
+
+def density_color_scale(lower, upper, threshold):
+    """Keep all densities, allocating 60% of color space to 0.5–1.5 threshold.
+
+    Bounds include the threshold window even if the selected states do not
+    cross it. Knots are fixed across frames; no snapshot values are modified.
+    """
+    logarithmic_limits(lower, upper)
+    if not np.isfinite(threshold) or threshold <= 0:
+        raise ValueError("--density-threshold must be finite and positive")
+    densities = np.array([min(lower, .05*threshold), .1*threshold,
+                          .5*threshold, threshold, 1.5*threshold,
+                          max(upper, 2*threshold)])
+    if not np.isfinite(densities).all() or np.any(densities <= 0):
+        raise ValueError("--density-threshold window exceeds floating-point range")
+    return np.log10(densities), np.array([0., .08, .25, .5, .85, 1.])
+
+
+def density_normalization(knots, positions):
+    """Invertible physical-density normalization, including projection masks."""
+    from matplotlib.colors import FuncNorm
+
+    def forward(values):
+        values = np.ma.asarray(values)
+        logs = np.ma.log10(values)
+        return np.ma.array(np.interp(logs.filled(knots[0]), knots, positions),
+                           mask=np.ma.getmaskarray(logs))
+
+    def inverse(values):
+        values = np.ma.asarray(values)
+        return np.ma.array(10.**np.interp(values.filled(0.), positions, knots),
+                           mask=np.ma.getmaskarray(values))
+
+    return FuncNorm((forward, inverse), vmin=10.**knots[0], vmax=10.**knots[-1], clip=True)
 
 
 def prepare(files, cgs=False, log=False, composition=False, thermodynamics=False):
@@ -381,6 +446,23 @@ def select_profile(reference, args):
     return is_2d, along_y, fixed_axis, cut_index, profile_axis, profile_label, cut_label
 
 
+def profile_display_limits(axis, cell_edges, logarithmic=False, bounds=None):
+    """Shared physical-coordinate limits for Matplotlib and Plotly profiles."""
+    lo, hi = (cell_edges[0], cell_edges[-1]) if bounds is None else bounds
+    if logarithmic and bounds is None and lo <= 0:
+        positive = axis[axis > 0]
+        if not len(positive):
+            raise ValueError("--log-x requires positive profile coordinates")
+        lo = positive[0]
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+        raise ValueError("--profile-range requires finite increasing bounds")
+    if logarithmic and lo <= 0:
+        raise ValueError("--log-x requires strictly positive --profile-range bounds")
+    if hi < cell_edges[0] or lo > cell_edges[-1]:
+        raise ValueError("--profile-range does not overlap the displayed domain")
+    return float(lo), float(hi)
+
+
 def streamline_segments(snapshot):
     """Shared line/arrow geometry for both backends, in physical coordinates.
 
@@ -426,16 +508,21 @@ def animate(reference, records, lower, upper, args):
     if not args.show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
+    from matplotlib.colors import LogNorm, LinearSegmentedColormap
     from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter, writers
 
     is_2d, along_y, fixed_axis, cut_index, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
-    projection = spherical_projection(reference, rmax=args.rmax) if spherical else None
+    projection = spherical_projection(reference, pixels=getattr(args, "map_pixels", 241),
+                                      rmax=args.rmax) if spherical else None
     profile_edges = (reference.radial_edges.copy() if spherical and reference.radial_edges is not None
                      else edges(profile_axis))
-    if spherical and args.rmax is not None:
+    if spherical and args.rmax is not None and getattr(args, "profile_range", None) is None:
         profile_edges[-1] = args.rmax
+    log_x = getattr(args, "log_x", False)
+    profile_limits = profile_display_limits(profile_axis, profile_edges, log_x,
+                                             getattr(args, "profile_range", None))
+    plotted_axis = np.ma.masked_less_equal(profile_axis, 0) if log_x else profile_axis
 
     def profile_values(snapshot, k):
         return snapshot.values[k, :, cut_index] if along_y else snapshot.values[k, cut_index, :]
@@ -456,6 +543,11 @@ def animate(reference, records, lower, upper, args):
     for k, (name, label, cmap) in enumerate(reference.fields):
         label = display_label(name, label, spherical, reference.cgs)
         lo, hi = lower[k], upper[k]
+        if name == "rho":
+            lo, hi = density_display_limits(lo, hi, getattr(args, "density_min", None),
+                                             getattr(args, "density_max", None))
+        density_bounds = name == "rho" and any(getattr(args, option, None) is not None
+                                               for option in ("density_min", "density_max"))
         logarithmic = args.log and name in ("rho", "p")
         if logarithmic:
             lo, hi = logarithmic_limits(lo, hi)
@@ -469,9 +561,31 @@ def animate(reference, records, lower, upper, args):
             lo, hi = lo - pad, hi + pad
         left, right = axes[k]
         color_scale = {"norm": LogNorm(vmin=lo, vmax=hi)} if logarithmic else {"vmin": lo, "vmax": hi}
-        mesh = left.pcolormesh(xedges, yedges, map_values(reference, k),
-                               shading="flat", cmap=cmap, **color_scale)
-        fig.colorbar(mesh, ax=left, pad=0.02)
+        threshold = getattr(args, "density_threshold", None) if name == "rho" else None
+        if threshold is not None:
+            knots, positions = density_color_scale(lo, hi, threshold)
+            color_scale = {"norm": density_normalization(knots, positions)}
+            cmap = LinearSegmentedColormap.from_list("density_threshold", DENSITY_COLORS, N=1024)
+        if spherical:
+            # Projection pixels are uniform: draw the same shell samples directly
+            # instead of rasterizing hundreds of thousands of quadrilaterals.
+            mesh = left.imshow(map_values(reference, k), origin="lower", interpolation="nearest",
+                               extent=(xedges[0], xedges[-1], yedges[0], yedges[-1]),
+                               cmap=cmap, **color_scale)
+        else:
+            mesh = left.pcolormesh(xedges, yedges, map_values(reference, k),
+                                   shading="flat", cmap=cmap, **color_scale)
+        colorbar = fig.colorbar(mesh, ax=left, pad=0.02)
+        if threshold is not None:
+            ticks = 10.**knots
+            colorbar.set_ticks(ticks, labels=[f"{value:.2g}" + (" (threshold)" if i == 3 else "")
+                                             for i, value in enumerate(ticks)])
+            colorbar.ax.minorticks_off()
+            colorbar.ax.axhline(threshold, color="#222222", lw=1.2)
+            colorbar.set_label("Density: threshold-focused scale")
+            right.axhline(threshold, color="#ad2844", ls="--", lw=1.2,
+                          label=f"Threshold = {threshold:.2g}")
+            right.legend(loc="lower left", fontsize=8)
         left.set(title=label + (" (spherical slice)" if spherical else ""),
                  xlabel=coordinate_label("x" if spherical else reference.xlabel, reference.cgs))
         if spherical:
@@ -484,15 +598,18 @@ def animate(reference, records, lower, upper, args):
         else:
             left.set_yticks([])
             left.set_ylabel("repeated 1D")
-        line, = right.plot(profile_axis, profile_values(reference, k), linewidth=1.5)
+        line, = right.plot(plotted_axis, profile_values(reference, k), linewidth=1.5)
         if name.startswith("comp_"):
             # Keep X=0 and X=1 curves visible on the fixed range's boundary.
             line.set(zorder=3, clip_on=False)
         pad = max((upper[k] - lower[k]) * 0.05, max(abs(lower[k]), abs(upper[k])) * 0.01, 1e-12)
         if logarithmic:
             right.set_yscale("log")
-        right.set(xlim=(profile_edges[0], profile_edges[-1]),
-                  ylim=(lo, hi) if logarithmic or name.startswith("comp_") else (lower[k] - pad, upper[k] + pad),
+        if log_x:
+            right.set_xscale("log")
+        right.set(xlim=profile_limits,
+                  ylim=(lo, hi) if logarithmic or name.startswith("comp_") or density_bounds
+                  else (lower[k] - pad, upper[k] + pad),
                   xlabel=profile_label, ylabel=label,
                   title=f"{label}({'r' if spherical else 'y' if along_y else 'x'})" + cut_label)
         right.grid(alpha=0.25)
@@ -521,7 +638,10 @@ def animate(reference, records, lower, upper, args):
         title.set_text(f"{args.prefix} | {'1D spherical' if spherical else '2D' if is_2d else '1D'} | step {step} | {time_label}"
                        f" | frame {index + 1}/{len(records)}")
         for k, (mesh, line) in enumerate(zip(maps, lines)):
-            mesh.set_array(map_values(snapshot, k).ravel())
+            if spherical:
+                mesh.set_data(map_values(snapshot, k))
+            else:
+                mesh.set_array(map_values(snapshot, k).ravel())
             line.set_ydata(profile_values(snapshot, k))
         if streamlines:
             segments = streamline_segments(snapshot)
@@ -591,6 +711,17 @@ const buttons = Object.fromEntries(['first','previous','play','pause','next','la
 document.getElementById('heading').textContent = viewer.heading;
 const end = frames.length - 1;
 let current = -1, target = 0, playing = false, drawing = false, timer = null;
+function densityColor(value) {
+    if (value === null) return null;
+    const {knots, positions} = viewer.densityScale;
+    const x = Math.log10(value);
+    if (x <= knots[0]) return 0;
+    for (let j = 1; j < knots.length; j++) {
+        if (x <= knots[j]) return positions[j-1] + (positions[j]-positions[j-1])
+            * (x-knots[j-1]) / (knots[j]-knots[j-1]);
+    }
+    return 1;
+}
 function controls() {
     buttons.first.disabled = buttons.previous.disabled = target <= 0;
     buttons.last.disabled = buttons.next.disabled = target >= end;
@@ -626,7 +757,9 @@ async function draw() {
                     const physical = viewer.spherical
                         ? viewer.radialMap.map(row => row.map(j => j < 0 ? null : field[0][j]))
                         : viewer.is2d ? field : [field[0], field[0]];
-                    const z = viewer.logFields[Math.floor(i / 2)]
+                    const z = viewer.densityScale && i === viewer.densityScale.field * 2
+                        ? physical.map(row => row.map(densityColor))
+                        : viewer.logFields[Math.floor(i / 2)]
                         ? physical.map(row => row.map(v => v === null ? null : Math.log10(v)))
                         : physical;
                     return {...trace, z, customdata: physical};
@@ -685,7 +818,8 @@ def save_plotly(reference, records, lower, upper, args):
 
     is_2d, along_y, fixed_axis, cut, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
-    projection = spherical_projection(reference, rmax=args.rmax) if spherical else None
+    projection = spherical_projection(reference, pixels=getattr(args, "map_pixels", 241),
+                                      rmax=args.rmax) if spherical else None
     titles = []
     for name, label, _ in reference.fields:
         label = display_label(name, label, spherical, reference.cgs)
@@ -698,12 +832,22 @@ def save_plotly(reference, records, lower, upper, args):
     yedges = xedges if spherical else (edges(reference.y).tolist() if is_2d else [0, 0.5, 1])
     profile_edges = (reference.radial_edges.copy() if spherical and reference.radial_edges is not None
                      else edges(profile_axis))
-    if spherical and args.rmax is not None:
+    if spherical and args.rmax is not None and getattr(args, "profile_range", None) is None:
         profile_edges[-1] = args.rmax
+    log_x = getattr(args, "log_x", False)
+    profile_limits = profile_display_limits(profile_axis, profile_edges, log_x,
+                                             getattr(args, "profile_range", None))
+    plotted_axis = [None if log_x and value <= 0 else float(value) for value in profile_axis]
+    density_scale = None
     for k, (name, label, cmap) in enumerate(reference.fields):
         label = display_label(name, label, spherical, reference.cgs)
         row = k + 1
         lo, hi = float(lower[k]), float(upper[k])
+        if name == "rho":
+            lo, hi = density_display_limits(lo, hi, getattr(args, "density_min", None),
+                                             getattr(args, "density_max", None))
+        density_bounds = name == "rho" and any(getattr(args, option, None) is not None
+                                               for option in ("density_min", "density_max"))
         logarithmic = args.log and name in ("rho", "p")
         color_ticks = {}
         if logarithmic:
@@ -723,6 +867,18 @@ def save_plotly(reference, records, lower, upper, args):
         elif lo == hi:
             pad = max(abs(lo) * 0.01, 1e-12)
             lo, hi = lo - pad, hi + pad
+        profile_lo, profile_hi = lo, hi
+        threshold = getattr(args, "density_threshold", None) if name == "rho" else None
+        if threshold is not None:
+            knots, positions = density_color_scale(float(lower[k]), float(upper[k]), threshold)
+            density_scale = dict(field=k, knots=knots.tolist(), positions=positions.tolist())
+            cmap = list(DENSITY_COLORS)
+            lo, hi = 0., 1.
+            color_ticks = dict(tickmode="array", tickvals=positions.tolist(),
+                               ticktext=[f"{10.**value:.2g}" + (" (threshold)" if i == 3 else "")
+                                         for i, value in enumerate(knots)])
+            fig.add_hline(y=threshold, line_dash="dash", line_color="#ad2844",
+                          row=row, col=2, exclude_empty_subplots=False)
         axis_number = 2 * k + 1
         axis_suffix = str(axis_number) if axis_number > 1 else ""
         domain = fig.layout[f"yaxis{axis_suffix}"].domain
@@ -733,7 +889,7 @@ def save_plotly(reference, records, lower, upper, args):
                           thickness=12, outlinewidth=0, tickfont=dict(size=10), **color_ticks),
             hovertemplate=f"x=%{{x:.6g}}" + ("<br>z=%{y:.6g}" if spherical else "<br>y=%{y:.6g}" if is_2d else "")
                           + f"<br>{label}=%{{customdata:.6g}}<extra></extra>"), row=row, col=1)
-        fig.add_trace(go.Scatter(x=profile_axis.tolist(), y=[], mode="lines", name=label,
+        fig.add_trace(go.Scatter(x=plotted_axis, y=[], mode="lines", name=label,
                                 line=dict(color="#176b87", width=2),
                                 hovertemplate=f"{profile_label}=%{{x:.6g}}<br>{label}=%{{y:.6g}}<extra></extra>"),
                       row=row, col=2)
@@ -757,10 +913,11 @@ def save_plotly(reference, records, lower, upper, args):
                               row=row, col=1, exclude_empty_subplots=False)
         pad = max(float(upper[k] - lower[k]) * 0.05,
                   max(abs(float(lower[k])), abs(float(upper[k]))) * 0.01, 1e-12)
-        fig.update_xaxes(title_text=profile_label, range=[float(profile_edges[0]), float(profile_edges[-1])],
+        fig.update_xaxes(title_text=profile_label, type="log" if log_x else "linear",
+                         range=np.log10(profile_limits).tolist() if log_x else list(profile_limits),
                          autorange=False, row=row, col=2)
         fig.update_yaxes(title_text=label, type="log" if logarithmic else "linear",
-                         range=[lo, hi] if logarithmic or name.startswith("comp_")
+                         range=[profile_lo, profile_hi] if logarithmic or name.startswith("comp_") or density_bounds
                          else [float(lower[k]) - pad, float(upper[k]) + pad],
                          autorange=False, row=row, col=2)
     # Append overlays after all heatmap/profile pairs to preserve their indices.
@@ -778,6 +935,7 @@ def save_plotly(reference, records, lower, upper, args):
     heading = f"{args.prefix} · {'1D spherical' if spherical else '2D' if is_2d else '1D'}"
     settings = dict(heading=heading, fps=args.fps, is2d=is_2d, alongY=along_y, cut=cut,
                     spherical=spherical, cgs=reference.cgs,
+                    densityScale=density_scale,
                     logFields=[bool(args.log and name in ("rho", "p")) for name, _, _ in reference.fields],
                     figure=json.loads(fig.to_json()))
     if spherical:
@@ -832,6 +990,19 @@ def main():
     parser.add_argument("--stride", type=int, default=1, help="One frame per N saved outputs; always keep last")
     parser.add_argument("--fps", type=float, default=8, help="Playback frames per second (default: 8)")
     parser.add_argument("--dpi", type=int, default=100)
+    parser.add_argument("--map-pixels", type=int, default=241,
+                        help="Samples per axis in spherical maps (default: 241; e.g. 801 for sharper maps)")
+    density_scale = parser.add_mutually_exclusive_group()
+    density_scale.add_argument("--density-min", type=float,
+                        help="Density color/profile lower limit in displayed units; smaller values use the bottom color")
+    density_scale.add_argument("--density-threshold", type=float,
+                        help="Emphasize density near this value in displayed units; requires --log")
+    parser.add_argument("--density-max", type=float,
+                        help="Density color/profile upper limit in displayed units")
+    parser.add_argument("--log-x", "--log-radius", action="store_true",
+                        help="Logarithmic horizontal length axis on right-hand profiles; spherical maps stay linear")
+    parser.add_argument("--profile-range", "--xlim", type=float, nargs=2, metavar=("MIN", "MAX"),
+                        help="Right-hand profile length range (cm with --cgs, otherwise code units)")
     parser.add_argument("--plot", choices=("cartesian", "spherical"), default="cartesian",
                         help="Map style: Cartesian strips/maps (default), or 1D spherical symmetry slices")
     parser.add_argument("--rmax", type=float,
@@ -858,6 +1029,24 @@ def main():
     args = parser.parse_args()
     if args.stride < 1 or args.dpi < 1 or not np.isfinite(args.fps) or args.fps <= 0:
         parser.error("Require stride >= 1, dpi >= 1 and finite fps > 0")
+    if args.map_pixels < 3:
+        parser.error("--map-pixels must be >= 3")
+    if args.density_min is not None and (not np.isfinite(args.density_min) or args.density_min <= 0):
+        parser.error("--density-min must be finite and positive")
+    if args.density_max is not None:
+        if not np.isfinite(args.density_max) or args.density_max <= 0:
+            parser.error("--density-max must be finite and positive")
+        if args.density_threshold is not None:
+            parser.error("--density-max cannot be combined with --density-threshold")
+    if args.profile_range is not None:
+        lo, hi = args.profile_range
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+            parser.error("--profile-range requires finite increasing bounds")
+        if args.log_x and lo <= 0:
+            parser.error("--log-x requires strictly positive --profile-range bounds")
+    if args.density_threshold is not None:
+        if not args.log or not np.isfinite(args.density_threshold) or args.density_threshold <= 0:
+            parser.error("--density-threshold requires --log and a finite positive value")
     if args.rmax is not None:
         if args.plot != "spherical":
             parser.error("--rmax requires --plot spherical")

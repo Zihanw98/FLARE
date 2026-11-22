@@ -27,7 +27,8 @@ def shock_measurement(data, model):
     # Locate the steep compressive velocity drop, then sample three/four cells
     # either side. This is a finite-resolution diagnostic, not an exact jump fit.
     r, v, rho, p = (data[k] for k in ('x', 'vx', 'rho', 'p'))
-    region = (r[:-1] > 5e5) & (r[:-1] < 1e8)
+    # Follow longer runs beyond 1000 km; retain four upstream sampling cells.
+    region = (r[:-1] > 5e5) & (r[:-1] < r[-5])
     score = np.where(region, v[:-1]-v[1:], -np.inf)
     j = int(np.argmax(score))
     left, right = max(0, j-3), min(len(r)-1, j+4)
@@ -88,7 +89,9 @@ def analyze(directory, expected_end=None, write=True):
         'max_relative_mass_error': float(mass_error),
         'first_outgoing_shock_s': float(times[first]),
         'first_outgoing_shock_radius_km': float(history[first, 3]/1e5),
+        'last_outgoing_shock_s': float(times[last]),
         'last_shock_radius_km': float(history[last, 3]/1e5),
+        'final_compressive_front_radius_km': float(history[-1, 3]/1e5),
         'last_pressure_jump': float(history[last, 7]),
         'last_density_jump': float(history[last, 6]),
         'last_upstream_shock_frame_Mach': float(history[last, 9]),

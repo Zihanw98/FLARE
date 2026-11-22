@@ -79,7 +79,10 @@ namespace hd_time
         hydro::Limiter limiter = hydro::parse_limiter(cfg.limiter);
         hydro::Reconstructor reconstructor = hydro::parse_reconstructor(cfg.reconstructor);
         hydro::compute_hydro_rhs(mesh, scheme, solver, rhs,reconstructor,limiter,cfg.limiter_beta,star_pressure_cache);
-        const double inverse_dt = hydro::max_inverse_dt;
+        // Sum of maxima is a conservative bound on the maximum combined cell
+        // rate. Keep the hydro-only record unchanged for existing diagnostics.
+        const double inverse_dt = hydro::max_inverse_dt
+            + hd_source::add_transport_rhs(mesh, time, cfg, source_list, rhs);
         if (!std::isfinite(inverse_dt) || inverse_dt < 0.0)
             throw std::invalid_argument("RHS requires a finite nonnegative CFL rate");
         const double hydro_limit = inverse_dt == 0.0
@@ -89,6 +92,7 @@ namespace hd_time
         std::vector<hd_core::Conserved> contribution(source_list.empty() ? 0 : mesh.cells.size());
         for (const auto& source : source_list)
         {
+            if (source.kind == hd_source::SourceKind::Transport) continue; // 已按面守恒处理。
             if (!source.func)
                 throw std::invalid_argument("Missing source function");
             double source_limit = std::numeric_limits<double>::infinity();

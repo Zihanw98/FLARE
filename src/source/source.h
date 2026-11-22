@@ -29,12 +29,23 @@ namespace hd_source
         std::vector<hd_core::Conserved>& rhs,
         double& dt_limit
     )>;
+    // 输运源项：独立面沿坐标轴正向的通量（不乘面积、dt）。输出初始为零。
+    // inverse_dt[0/1] 是该面对左/右 cell 的非负逆时间尺度贡献，包含面积/体积，
+    // 不含 CFL。F=-D*grad(q) 时为 A*D/(V_left/right*distance)。多过程贡献相加。
+    // 从同一阶段的相邻 cell/ghost 计算梯度，不使用重构跳跃；不修改 mesh。
+    // LTS 和隐式预条件器目前支持相邻单元模板。重试/扰动可重复调用，不能提交外部状态。
+    // 必须显式填写受影响的总能量与辅助内能通量，不执行普通源项的内能自动补全。
+    using TransportFunction = std::function<void(
+        const hd_core::MeshBlock& stage, std::size_t face, double time,
+        const config::SimulationConfig& cfg, hd_core::Conserved& flux,
+        std::array<double, 2>& inverse_dt)>;
     /** @brief Physical categories used to label registered sources. */
     enum class SourceKind
     {
         Thermal, ///< Source categorized as thermal.
         Force, ///< Source categorized as a force.
-        General ///< Source without a specialized physical category.
+        General, ///< Source without a specialized physical category.
+        Transport ///< Conservative face transport; uses transport_flux instead of func.
     };
 
     /** @brief Named source callback and its physical category. */
@@ -44,10 +55,23 @@ namespace hd_source
         SourceKind kind;
         SourceFunction func;
         bool supplies_internal_energy = false; // legacy callbacks: derive thermal rate from E,m,rho
+        TransportFunction transport_flux{}; // Only used when kind == Transport.
     };
 
     /** @brief Ordered collection of source terms evaluated for each RHS. */
     using SourceList = std::vector<SourceTerm>;
+    // 输运接入：仅计算标为 Transport 的源项，叠加到已有面通量；覆盖 inverse_dt。
+    // 左右 cell 的更新由积分器统一执行，回调中不能先计算成逐 cell 的源项。
+    void add_transport_flux(
+        const hd_core::MeshBlock& stage, std::size_t face, double time,
+        const config::SimulationConfig& cfg, const SourceList& sources,
+        hd_core::Conserved& flux, std::array<double, 2>& inverse_dt);
+    // 全局显式/隐式 RHS 共用的守恒散度；返回各 cell 输运逆时间尺度的最大值。
+    // 每个独立面只计算一次，物理边界只更新域内一侧。
+    double add_transport_rhs(
+        const hd_core::MeshBlock& stage, double time,
+        const config::SimulationConfig& cfg, const SourceList& sources,
+        std::vector<hd_core::Conserved>& rhs);
     void complete_internal_source(const hd_core::MeshBlock& mesh, const SourceTerm& term,
                                   std::vector<hd_core::Conserved>& rates);
 

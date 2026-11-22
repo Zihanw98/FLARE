@@ -129,7 +129,8 @@ private:
     static bool is_physical(const Conserved& state);
 
     // ---------- 面重构与 Riemann 求解 ----------
-    void solve_faces(const hd_core::MeshBlock& stage, const std::vector<int>& faces);
+    void solve_faces(const hd_core::MeshBlock& stage, const std::vector<int>& faces,
+                     double stage_time);
 
     // ---------- 源项计算与 10% 变化限制 ----------
     template<class Bound>
@@ -182,6 +183,10 @@ private:
     std::vector<Conserved> flux_;
     std::vector<Conserved> initial_flux_;
     std::vector<Conserved> first_flux_;
+    // Transport is included in flux_; keep its two cell rates separately from
+    // Riemann wave speeds. Retry/reuse rules match the corresponding face fluxes.
+    std::vector<std::array<double, 2>> transport_rate_, initial_transport_rate_;
+    std::vector<std::array<double, 2>> max_seen_transport_rate_;
     std::vector<double> face_velocity_;
     std::vector<double> initial_velocity_;
     std::vector<double> pressure_work_start_;
@@ -241,6 +246,7 @@ LTSRK2Step::LTSRK2Step(
       start_(make_start_stage(mesh, time, hooks)), state_(mesh), view_(mesh),
       flux_(independent_face_count_),
       first_flux_(independent_face_count_),
+      transport_rate_(independent_face_count_),
       face_velocity_(independent_face_count_),
       pressure_work_start_(n_),
       speed_(independent_face_count_),
@@ -300,7 +306,7 @@ bool LTSRK2Step::is_physical(const Conserved& state)
 }
 
 void LTSRK2Step::solve_faces(
-    const hd_core::MeshBlock& stage, const std::vector<int>& faces)
+    const hd_core::MeshBlock& stage, const std::vector<int>& faces, double stage_time)
 {
     // 将指定面重构到同一阶段时刻，再求数值通量和 CFL 波速。
     reconstruction_.reset(stage, method_, limiter_, cfg_.limiter_beta);
@@ -344,6 +350,9 @@ void LTSRK2Step::solve_faces(
                     hints_[d][hint_index],
                     speed_[face], face_velocity_[face]);
             }, true);
+        // 输运接入：只有 SourceKind::Transport 进入共享面通量。
+        hd_source::add_transport_flux(stage, face, stage_time, cfg_, sources_,
+                                      flux_[face], transport_rate_[face]);
         if (stage.bc_lower[d] == boundary::BoundaryCondition::Periodic &&
             right_index[d] == stage.nghost[d])
         {
@@ -454,6 +463,7 @@ double LTSRK2Step::evaluate_sources(
 
     for (const auto& term : sources_)
     {
+        if (term.kind == hd_source::SourceKind::Transport) continue; // 已由面通量处理。
         if (!term.func) throw std::invalid_argument("Missing LTS RK2 source function");
         std::fill(source_contribution_.begin(), source_contribution_.end(), Conserved{});
         double callback_limit = inf;
@@ -558,6 +568,8 @@ void LTSRK2Step::reset_attempt()
     flux_ = initial_flux_;
     speed_ = initial_speed_;
     max_seen_speed_ = initial_speed_;
+    transport_rate_ = initial_transport_rate_;
+    max_seen_transport_rate_ = initial_transport_rate_;
     source_ = initial_source_;
     std::fill(pending_flux_integral_.begin(), pending_flux_integral_.end(), Conserved{});
 }
@@ -566,8 +578,13 @@ bool LTSRK2Step::check_wave_speeds(const std::vector<int>& faces)
 {
     // 先更新本批面的波速记录。
     for (int face : faces)
+    {
         max_seen_speed_[face] =
             std::max(max_seen_speed_[face], speed_[face]);
+        for (int side = 0; side < 2; ++side)
+            max_seen_transport_rate_[face][side] = std::max(
+                max_seen_transport_rate_[face][side], transport_rate_[face][side]);
+    }
 
     // 再用各方向的历史峰值检查相邻 active cell。
     for (int face : faces)
@@ -586,6 +603,8 @@ bool LTSRK2Step::check_wave_speeds(const std::vector<int>& faces)
                     max_seen_speed_[pair.upper]);
 
                 rate += direction_speed / mesh_.cell_width(d, index[d]);
+                rate += max_seen_transport_rate_[pair.lower][1]
+                      + max_seen_transport_rate_[pair.upper][0];
             }
 
             hydro::max_inverse_dt = std::max(hydro::max_inverse_dt, rate);
@@ -635,7 +654,7 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
     if (!reuse_start_stage)
     {
         if (!build_stage_view(depth, fraction, false)) return false;    //anticipate view_, now it contains cell states at the startpoint(fraction) --- only lower levels need anticipation
-        solve_faces(view_, faces_needed_by_level_[depth]);              // Facial Flux get updated
+        solve_faces(view_, faces_needed_by_level_[depth], time_ + fraction * macro_step_); // Hydro + transport flux at the common start time.
         if (macro_step_ > evaluate_sources(
                 view_, time_ + fraction * macro_step_, macro_step_)) return false;
     }
@@ -702,7 +721,7 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
     //Next is the Phase II of RK2, which mainly calculate the tentative slope at the endpoint
 
     if (!build_stage_view(depth, end_fraction, true)) return false; //anticipate view_, now it contains cell states at the endpoint --- both lower level cells and current level cells need anticipation
-    solve_faces(view_, faces_owned_by_level_[depth]);               //Facial Flux get updated *** If it is a reuse step, then this will be the only flux update for this step, and the flux will be the start value for following steps which start from end_fraction(after all the steps from fraction -> end_fraction finish).
+    solve_faces(view_, faces_owned_by_level_[depth], time_ + end_fraction * macro_step_); // Hydro + transport endpoint flux; reused by following steps starting here.
     if (!check_wave_speeds(faces_owned_by_level_[depth]) ||
         macro_step_ > evaluate_sources(
             view_, time_ + end_fraction * macro_step_, macro_step_)) return false;
@@ -777,9 +796,10 @@ bool LTSRK2Step::advance_level(int depth, double fraction, bool reuse_start_stag
 
 double LTSRK2Step::run()
 {
-    solve_faces(start_, all_faces_);
+    solve_faces(start_, all_faces_, time_);
     initial_flux_ = flux_;
     initial_speed_ = speed_;
+    initial_transport_rate_ = transport_rate_;
     initial_velocity_ = face_velocity_;
     initial_hints_ = hints_;
     const double source_limit = evaluate_sources(start_, time_, 0.0);
@@ -800,6 +820,7 @@ double LTSRK2Step::run()
                 std::max(speed_[pair.lower], speed_[pair.upper]);
 
             rate += direction_speed / mesh_.cell_width(d, index[d]);
+            rate += transport_rate_[pair.lower][1] + transport_rate_[pair.upper][0];
         }
         
         if (!std::isfinite(rate)) throw std::runtime_error("Non-finite LTS RK2 CFL rate");

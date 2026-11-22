@@ -38,6 +38,7 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `limiter` | 五种斜率限制器、none 中心斜率、线性保持与极值归零、极端数值、MC-beta 端点、配置选择及非法参数 |
 | `wave_timestep` | 已有波速回归测试：强激波、真空、CFL、Euler、失败时状态保持不变 |
 | `source` | 捕获参数的生命周期与实例独立性、重力/加热 RHS 和 Euler/RK2 更新、加热内能时间尺度、零加热和真空、自定义源项步长限制、球坐标几何源项 |
+| `transport` | 源项类型分派、多输运项与重力/加热共存、扩散解析衰减、单层 Euler/RK2 等价性、跨层/周期/球坐标能量守恒、联合步长限制及阶段回退、隐式扩散和边界能量流出；`HD_NCOMP=2` 额外检查 H/He 扩散质量与能量守恒 |
 | `units` | 非平凡质量、长度、时间、温度单位下的常量换算、跨编译单元共享常量、恢复 cgs |
 | `output_boundary` | 已有边界/输出测试：多层周期 ghost、角点、用户 hook、参数读取、CSV 和输出频率 |
 
@@ -64,6 +65,16 @@ make -C unit_test -j4 check NDIM=1 CPPFLAGS=-DHD_NCOMP=10 \
 MESA 网格构建只在 1D 下执行。
 
 ## EoS 与辐射通量
+
+输运入口测试不要求增加任何实际算例的物理配置：
+
+```bash
+make -C unit_test -j4 TESTS=transport DIMENSIONS="1 2 3"
+make -C unit_test -j4 check NDIM=1 CPPFLAGS=-DHD_NCOMP=2 \
+  BUILD_DIR="$PWD/unit_test/build/ndim1_transport_comp" TESTS=transport
+```
+
+测试中的常系数能量扩散用于验证公共数值算子，不代表已经实现辐射物理模型。
 
 四种 EoS 的转换、声速、隐式加热和辐射 exact 回归使用 H I/H II 两个组分：
 

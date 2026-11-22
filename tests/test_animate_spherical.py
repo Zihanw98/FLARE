@@ -5,7 +5,31 @@ import tempfile
 
 import numpy as np
 
-from animate import FIELDS, Snapshot, spherical_projection, spherical_values, read_radial_grid
+from animate import (FIELDS, Snapshot, spherical_projection, spherical_values,
+                     read_radial_grid, profile_display_limits)
+
+
+class ProfileRangeTests(unittest.TestCase):
+    def test_log_origin_uses_first_positive_cell(self):
+        axis = np.array([.06, .18, .3])
+        edges = np.array([0., .12, .24, .36])
+        self.assertEqual(profile_display_limits(axis, edges, True), (.06, .36))
+        self.assertEqual(profile_display_limits(axis, edges), (0., .36))
+        np.testing.assert_array_equal(axis, [.06, .18, .3])
+
+    def test_explicit_positive_range_and_signed_linear_range(self):
+        axis = np.array([-.5, .5, 1.5])
+        edges = np.array([-1., 0., 1., 2.])
+        self.assertEqual(profile_display_limits(axis, edges, True, (.01, 2)), (.01, 2.))
+        self.assertEqual(profile_display_limits(axis, edges, False, (-.2, 1)), (-.2, 1.))
+
+    def test_reject_nonpositive_log_bounds_and_empty_range(self):
+        axis, edges = np.array([.5, 1.5]), np.array([0., 1., 2.])
+        for bounds in [(0, 1), (-1, 1), (2, 1), (1, 1), (np.nan, 2), (3, 4)]:
+            with self.subTest(bounds=bounds), self.assertRaises(ValueError):
+                profile_display_limits(axis, edges, True, bounds)
+        with self.assertRaises(ValueError):
+            profile_display_limits(np.array([-2., -1.]), np.array([-2.5, -1.5, -.5]), True)
 
 
 class SphericalProjectionTests(unittest.TestCase):

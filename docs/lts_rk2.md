@@ -83,6 +83,41 @@ I_f^{(m)}=A_f\frac h2\bigl(F_f^{(m,0)}+F_f^{(m,1)}\bigr).
 快单元每个子步结算；慢单元等其局部步完成再结算。这避免两侧各算各的积分造成不守恒。
 周期边界的首尾面也只求解和累计一次。
 
+### 输运源项的接入
+
+源项仍统一放在 `SourceList`，由已有的 `register_sources` 注册。
+新增的 `SourceKind::Transport` 使用 `SourceTerm::transport_flux` 计算面通量；
+其他类型继续使用 `func`，包括自引力、几何源项和加热。
+输运项不会再次进入普通源项循环，也不执行普通源项的辅助内能补全。
+
+```cpp
+hd_source::SourceTerm term;
+term.name = "composition_diffusion";
+term.kind = hd_source::SourceKind::Transport;
+term.transport_flux = my_diffusion_flux;
+sources.push_back(term);
+```
+
+`my_diffusion_flux` 的签名见 `src/source/source.h` 的 `TransportFunction`。
+它读取同一阶段的相邻 cell/ghost，填写从零开始的 `Conserved` 面通量和左右逆时间尺度。
+通量沿坐标轴正向，不乘面积或 `dt`，不修改 cell；当前支持相邻单元模板。
+组分扩散和热传导应使用中心梯度，不使用重构状态的跳跃。
+
+`solve_faces()` 将输运贡献加到 Riemann 通量上，`flux_`、`first_flux_`、预测斜率和
+共享时间积分都使用总通量；`reuse` 复用总通量与对应的输运时间尺度。
+回调的 `inverse_dt[0/1]` 是该面对左/右 cell 的非负逆时间尺度贡献，已经包含几何因子，
+不包含 CFL。对于 `F=-D*grad(q)`，分别填写 `A*D/(V_left/right*distance)`。
+各面贡献求和后加到流体 CFL 速率上，用于选层、阶段检查和失败重试。
+
+普通 Euler/RK2 通过 `add_transport_rhs()` 使用同一面算子的守恒散度；
+LTS Euler 使用共享矩形积分，LTS RK2 使用共享梯形积分。
+隐式残差及预条件器也包含输运，但不受其显式 CFL 限制。
+回调可因阶段重试和 Newton 扰动被重复调用，不能在回调里累计已传出的能量。
+记录实际逃逸能量需要另接接受步的面时间积分，当前未添加该输出接口。
+
+该入口尚不包含具体扩散系数、热传导或辐射闭合模型。能量通量必须显式填写相应的
+总能量和辅助内能分量；独立辐射能的存储、吸收/发射、EoS 一致性仍需后续实现。
+
 一个层级的实际顺序如下：
 
 1. 计算起点通量和源项，为本层单元保存 \(U^0,k_1,S^0\)。

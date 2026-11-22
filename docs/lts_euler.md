@@ -1,5 +1,10 @@
 # Multilevel explicit LTS Euler
 
+`SourceKind::Transport` 已接入面通量：与 Riemann 通量相加后使用原有共享矩形时间积分。
+输运项在各子步重新计算，不参与普通源项的宏步冻结；自引力等普通源项保持原处理。
+左右两侧的输运逆时间尺度参与选层及阶段检查，重试时与面通量一起恢复。
+接口与注册方式见 [LTS RK2 的输运说明](lts_rk2.md#输运源项的接入)。
+
 ## 实现 pipeline
 
 `advance_lts_euler` 负责校验输入并启动一次内部 `LTSEulerStep`。

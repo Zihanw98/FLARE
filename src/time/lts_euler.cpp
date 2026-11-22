@@ -41,6 +41,7 @@ struct FaceResult
     Conserved flux{};
     double speed = 0.0;
     double velocity = 0.0;
+    std::array<double, 2> transport_rate{};
 };
 
 struct ValidatedOptions
@@ -121,7 +122,7 @@ private:
     static bool is_physical(const Conserved& state);
 
     // ---------- 面重构、Riemann 求解与多维 CFL ----------
-    FaceResult solve_face(const MeshBlock& stage, int face);
+    FaceResult solve_face(const MeshBlock& stage, int face, double stage_time);
     double cell_wave_rate(int cell) const;
     double solve_initial_faces_and_cfl();
 
@@ -165,6 +166,7 @@ private:
     hydro::StarPressureCache initial_pressure_, pressure_hints_;
     std::vector<FaceResult> initial_faces_, stage_faces_;
     std::vector<double> max_seen_speed_;
+    std::vector<std::array<double, 2>> max_seen_transport_rate_;
     std::vector<double> local_dt_, step_fraction_, pressure_work_;
     std::vector<Conserved> source_, source_contribution_, pending_flux_integral_;
     std::vector<Conserved> step_start_, candidate_;
@@ -190,7 +192,8 @@ LTSEulerStep::LTSEulerStep(
       reconstruction_(start_, method, limiter, cfg.limiter_beta),
       star_pressure_cache_(star_pressure_cache),
       initial_faces_(independent_face_count_), stage_faces_(independent_face_count_),
-      max_seen_speed_(independent_face_count_), local_dt_(n_), step_fraction_(n_),
+      max_seen_speed_(independent_face_count_), max_seen_transport_rate_(independent_face_count_),
+      local_dt_(n_), step_fraction_(n_),
       pressure_work_(n_), source_(mesh.cells.size()), source_contribution_(mesh.cells.size()),
       pending_flux_integral_(n_), step_start_(n_), candidate_(n_),
       source_scales_(sources.empty() ? 0 : n_), level_(n_), face_level_(independent_face_count_)
@@ -231,7 +234,7 @@ bool LTSEulerStep::is_physical(const Conserved& state)
     return true;
 }
 
-FaceResult LTSEulerStep::solve_face(const MeshBlock& stage, int face)
+FaceResult LTSEulerStep::solve_face(const MeshBlock& stage, int face, double stage_time)
 {
     const auto& info = mesh_.face_info[face];
     const int d = info.direction;
@@ -259,6 +262,9 @@ FaceResult LTSEulerStep::solve_face(const MeshBlock& stage, int face)
             pressure_hint, result.speed, result.velocity);
     }, true);
 
+    // 输运接入：只有 SourceKind::Transport 进入共享面通量。
+    hd_source::add_transport_flux(stage, face, stage_time, cfg_, sources_,
+                                  result.flux, result.transport_rate);
     if (!std::isfinite(result.speed) || result.speed < 0.0)
         throw std::runtime_error("LTS received an invalid Riemann wave speed");
     for (double value : result.flux.data)
@@ -279,6 +285,8 @@ double LTSEulerStep::cell_wave_rate(int cell) const
         const auto& pair = mesh_.cell_faces[cell][d];
         rate += std::max(max_seen_speed_[pair.lower], max_seen_speed_[pair.upper])
               / mesh_.cell_width(d, index[d]);
+        rate += max_seen_transport_rate_[pair.lower][1]
+              + max_seen_transport_rate_[pair.upper][0];
     }
     return rate;
 }
@@ -287,8 +295,9 @@ double LTSEulerStep::solve_initial_faces_and_cfl()
 {
     for (int face = 0; face < independent_face_count_; ++face)
     {
-        initial_faces_[face] = solve_face(start_, face);
+        initial_faces_[face] = solve_face(start_, face, time_);
         max_seen_speed_[face] = initial_faces_[face].speed;
+        max_seen_transport_rate_[face] = initial_faces_[face].transport_rate;
     }
     initial_pressure_ = pressure_hints_;
 
@@ -365,6 +374,7 @@ double LTSEulerStep::evaluate_frozen_sources()
 
     for (const auto& term : sources_)
     {
+        if (term.kind == hd_source::SourceKind::Transport) continue; // 不冻结输运面通量。
         if (!term.func) throw std::invalid_argument("Missing LTS source function");
         std::fill(source_contribution_.begin(),
                   source_contribution_.end(), Conserved{});
@@ -457,7 +467,10 @@ void LTSEulerStep::reset_attempt()
     pressure_hints_ = initial_pressure_;
     stage_faces_ = initial_faces_;
     for (int face = 0; face < independent_face_count_; ++face)
+    {
         max_seen_speed_[face] = initial_faces_[face].speed;
+        max_seen_transport_rate_[face] = initial_faces_[face].transport_rate;
+    }
     std::fill(pending_flux_integral_.begin(), pending_flux_integral_.end(), Conserved{});
 }
 
@@ -489,7 +502,7 @@ bool LTSEulerStep::refresh_stage_faces(int depth, double fraction, double stage_
     if (!build_stage_view(depth, fraction, stage_time)) return false;
     reconstruction_.reset(view_, method_, limiter_, cfg_.limiter_beta);
     for (int face : faces_needed_by_level_[depth])
-        stage_faces_[face] = solve_face(view_, face);
+        stage_faces_[face] = solve_face(view_, face, stage_time);
     return true;
 }
 
@@ -497,7 +510,12 @@ bool LTSEulerStep::check_waves_and_accumulate_flux(int depth, double local_step)
 {
     // 先更新整批面，再用各方向历史峰值的总和检查 CFL；重试时清除本次峰值。
     for (int face : faces_needed_by_level_[depth])
+    {
         max_seen_speed_[face] = std::max(max_seen_speed_[face], stage_faces_[face].speed);
+        for (int side = 0; side < 2; ++side)
+            max_seen_transport_rate_[face][side] = std::max(
+                max_seen_transport_rate_[face][side], stage_faces_[face].transport_rate[side]);
+    }
     for (int face : faces_needed_by_level_[depth])
     {
         for (int cell : {left_cell(face), right_cell(face)})

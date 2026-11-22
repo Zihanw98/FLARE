@@ -61,6 +61,7 @@ struct Integrator::Impl
     std::vector<std::size_t> active, color;
     std::vector<std::vector<std::size_t>> columns, groups;
     detail::SparseMatrix preconditioner;
+    bool transport_pattern = false;
     std::ofstream report;
     double next_dt, residual_norm = 0;
     int newton = 0, linear = 0, rhs_calls = 0, preconditioner_calls = 0;
@@ -93,7 +94,7 @@ struct Integrator::Impl
                   << " matrix_and_krylov_bytes_estimate=" << bytes << '\n';
     }
 
-    void build_pattern(const hd_core::MeshBlock& mesh)
+    void build_pattern(const hd_core::MeshBlock& mesh, bool include_transport = false)
     {
         // Only the preconditioner freezes ghosts and omits physical sources.
         // Thus its graph is local regardless of the real boundary/source graph.
@@ -101,7 +102,9 @@ struct Integrator::Impl
         const auto missing = std::numeric_limits<std::size_t>::max();
         std::vector<std::size_t> mapping(mesh.cells.size(), missing);
         for (std::size_t i = 0; i < active.size(); ++i) mapping[active[i]] = i;
-        columns.resize(active.size());
+        columns.assign(active.size(), {});
+        groups.clear();
+        preconditioner = {};
         std::vector<std::vector<std::size_t>> rows(active.size());
         for (std::size_t i = 0; i < active.size(); ++i)
         {
@@ -116,7 +119,17 @@ struct Integrator::Impl
                     if (offset && index[d] >= 0 && index[d] < mesh.nactive[d])
                         neighbors.push_back(mapping[mesh.flat_index(index, true)]);
                 }
+            // 输运使用独立面，周期首尾 cell 共享同一通量；着色模板也必须包含此邻接。
+            if (include_transport)
+                for (const auto& pair : mesh.cell_faces[i])
+                    for (auto face : {pair.lower, pair.upper})
+                    {
+                        const auto& info = mesh.face_info[face];
+                        const auto other = info.left_active == i ? info.right_active : info.left_active;
+                        if (other != missing) neighbors.push_back(other);
+                    }
             std::sort(neighbors.begin(), neighbors.end());
+            neighbors.erase(std::unique(neighbors.begin(), neighbors.end()), neighbors.end());
             for (auto j : neighbors) rows[j].push_back(i);
         }
         color.assign(active.size(), missing);
@@ -150,9 +163,12 @@ struct Integrator::Impl
 
     void local_rhs(const hd_core::MeshBlock& state, const hydro::RiemannSolver& solver,
                    hydro::SpatialScheme scheme, const config::SimulationConfig& cfg,
-                   std::vector<hd_core::Conserved>& rhs)
+                   std::vector<hd_core::Conserved>& rhs, double stage_time,
+                   const hd_source::SourceList& sources)
     {
         hydro::compute_hydro_rhs(state, scheme, solver, rhs, reconstruction, limiter, cfg.limiter_beta);
+        // 输运接入：预条件器也包含相邻单元的输运耦合，普通源项策略不变。
+        hd_source::add_transport_rhs(state, stage_time, cfg, sources, rhs);
         double limit = std::numeric_limits<double>::infinity();
         if (state.geometry == hd_core::Geometry::Spherical)
             hd_source::geometric_source(state, 0.0, cfg, rhs, limit);
@@ -161,11 +177,12 @@ struct Integrator::Impl
 
     void build_preconditioner(const LogVariables& coordinates, double dt,
                               const hydro::RiemannSolver& solver, hydro::SpatialScheme scheme,
-                              const config::SimulationConfig& cfg)
+                              const config::SimulationConfig& cfg, double stage_time,
+                              const hd_source::SourceList& sources)
     {
         const auto start = Clock::now();
         std::vector<hd_core::Conserved> baseline, perturbed;
-        local_rhs(trial, solver, scheme, cfg, baseline);
+        local_rhs(trial, solver, scheme, cfg, baseline, stage_time, sources);
         auto& a = preconditioner;
         for (std::size_t c = 0; c < groups.size(); ++c)
             for (int component = 0; component < nv; ++component)
@@ -179,7 +196,7 @@ struct Integrator::Impl
                     // Preconditioning freezes ghosts; only these active cells changed.
                     refresh_trial_thermodynamics(probe.cells[active[j]]);
                 }
-                local_rhs(probe, solver, scheme, cfg, perturbed);
+                local_rhs(probe, solver, scheme, cfg, perturbed, stage_time, sources);
                 for (std::size_t i = 0; i < active.size(); ++i)
                     for (std::size_t block = 0; block < columns[i].size(); ++block)
                     {
@@ -238,7 +255,8 @@ struct Integrator::Impl
                           << " residual=" << residual_norm << '\n';
             if (residual_norm <= settings.implicit_tolerance) { reason = "converged"; return true; }
             if (!std::isfinite(residual_norm) || newton == settings.implicit_newton_max_iterations) return false;
-            build_preconditioner(coordinates, dt, solver, scheme, cfg);
+            build_preconditioner(coordinates, dt, solver, scheme, cfg, time+dt,
+                                 sources);
             const detail::LinearAction action = [&](const Vector& v, Vector& result) {
                 double largest = 0;
                 for (double value : v) largest = std::max(largest, std::abs(value));
@@ -316,6 +334,12 @@ double Integrator::advance(hd_core::MeshBlock& mesh, double time, double remaini
         || mesh.face != p.trial.face || mesh.nactive != p.trial.nactive || mesh.nghost != p.trial.nghost
         || mesh.geometry != p.trial.geometry)
         throw std::invalid_argument("Implicit requires finite time and unchanged mesh geometry");
+    if (!p.transport_pattern && std::any_of(sources.begin(), sources.end(),
+            [](const hd_source::SourceTerm& source) { return source.kind == hd_source::SourceKind::Transport; }))
+    {
+        p.build_pattern(mesh, true);
+        p.transport_pattern = true;
+    }
     double dt = std::min(remaining, p.settings.implicit_adaptive ? p.next_dt : p.settings.dt_implicit);
     // LogVariables reads cached pressure and sound speed from both old and trial.
     // Recover the old active cells once per advance, without changing the caller
