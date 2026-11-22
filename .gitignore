@@ -26,6 +26,8 @@ flare
 
 # Build directories
 .build/
+.build_*/
+.build-*/
 build/
 Build/
 cmake-build-*/
@@ -37,21 +39,39 @@ cmake_install.cmake
 /runs/
 /output/
 /output_*/
+/output-*/
 /animations/
 /diagnostics/
 /figures/
-/run.log
+/*.log
 /tests/**/output/
 /tests/**/output_*/
+/tests/**/output-*/
 /tests/**/animations/
 /tests/**/diagnostics/
 /tests/**/figures/
 /tests/**/*.log
 /unit_test/**/output/
 /unit_test/**/output_*/
+/unit_test/**/output-*/
+/unit_test/build_*/
+/unit_test/build-*/
 /unit_test/**/*.log
 /old_version/output/
 /old_version/output_*/
+
+# FLARE snapshots written outside an output directory (prefix + 8-digit step).
+# Keep input profiles, meshes, conservation histories and other CSV fixtures visible.
+/*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].csv
+/tests/**/*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].csv
+/unit_test/**/*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].csv
+
+# Temporary files from local builds/runs. These rules do not remove local data
+# or stop tracking files already committed (including archived CCSN results).
+*.tmp
+/*.pid
+/tests/**/*.pid
+/unit_test/**/*.pid
 
 # Generated MESA mesh/CFL estimates; retain scripts and input profiles
 /profile013_radius_fixed_merged/mesa_amr_estimate/*.csv
