@@ -53,13 +53,26 @@ At the start of every macro-step attempt, `reset_attempt()` executes `state_.cel
 
 When Phase II finalizes the current level, `auto& cell = state_.cells[flat]` refers directly to a cell in the trial array; assigning `cell.U` advances that cell to its local-step endpoint. Only after the entire macro step succeeds does `mesh_.cells.swap(state_.cells)` commit the result to the simulation grid. If the attempt fails, the next `reset_attempt()` restarts from `start_`.
 
-Each `build_stage_view()` call first executes `view_.cells = state_.cells`, then extrapolates selected cells only in `view_`: coarser levels for a starting-stage view, and both current and coarser levels for an endpoint view. Finer cells that have already reached the target time retain their copied states.
+`view_` is the temporary grid snapshot used for reconstruction, Riemann solves, and source evaluation. Cells in `state_` can represent different times; `view_` places them at the common target time for this stage. A coarser cell has not yet received all finer-step flux integrals, so its prediction cannot be written into `state_` as a completed RK2 update.
 
-Face fluxes and sources are evaluated from this `view_` at the common target time. A finer level reusing the start stage reads the existing `flux_`, `speed_`, `face_velocity_`, and `source_` results, which already include the coarser cells' predicted states at that start time. Coarser cells in `state_` may remain at their own local-step starts.
+Every actual call to `build_stage_view()` first executes `view_.cells = state_.cells`, copying the entire cell array, including each cell's current `U` and other members. Only then does it test `needs_prediction`: cells requiring no prediction retain their copied `U`, while selected cells have their `U` overwritten with `base_ + slope_ * elapsed`. A starting view predicts coarser levels; an endpoint view predicts current and coarser levels. Finer levels already at the target time are not predicted again. Prediction changes only `view_`, without advancing `state_`.
+
+Face fluxes and sources are evaluated from this `view_` at the common target time. A finer level reusing the start stage skips the starting `build_stage_view()` call, including the copy from `state_` to `view_`. It reads the existing `flux_`, `speed_`, `face_velocity_`, and `source_` results, which already include the coarser cells' predicted states at that start time. Coarser cells in `state_` may remain at their own local-step starts.
 
 ### 2.2 Face quantities and the star-pressure cache
 
 `flux_`, `speed_`, and `face_velocity_` store face fluxes, CFL wave speeds, and face velocities, respectively. `first_flux_` retains each face's start flux for the current local step of its owning level, protecting it from subsequent updates.
+
+`flux_` is a member array of `LTSRK2Step`, shared by every recursive call. Entering a finer level does not create another array, and changing `state_` or `view_` does not automatically update it. New fluxes are computed inside `solve_faces(stage, faces)`: each listed face is reconstructed, passed to the Riemann solver, and assigned the returned value in `flux_[face]`. Entries outside the supplied `faces` set retain their previous values.
+
+| Execution point | Write to `flux_` | States used for the result |
+| --- | --- | --- |
+| `solve_faces(start_, all_faces_)` in `run()` | Update all independent faces, then save to `initial_flux_` | `start_` at the common macro-step start |
+| `reset_attempt()` on every attempt | Restore the whole array with `flux_ = initial_flux_`, without solving again | The same macro-step start; overwritten values from failed attempts are discarded |
+| Non-reused start: `solve_faces(view_, faces_needed_by_level_[depth])` | Update every face with `owner >= depth` | Starting `view_` combining updated states and coarser predictions |
+| Current-level endpoint: `solve_faces(view_, faces_owned_by_level_[depth])` | Update only faces with `owner == depth` | Endpoint `view_` combining current/coarser predictions and completed finer states |
+
+`build_stage_view()` prepares states without writing `flux_`; `evaluate_sources()` writes source arrays, not `flux_`. Likewise, `first_flux_[face] = flux_[face]` copies a starting value into another array without modifying its right-hand side. To determine whether a flux can be reused, track the last `solve_faces()` that wrote that face, rather than only inspecting the current time of `state_` or `view_`.
 
 `hints_` stores the star-region pressure $p_*$ from the previous Riemann solve as an initial guess for the next solve. A value of `0` indicates that no usable pressure guess is available. In multiple dimensions, it is accessed as
 
@@ -239,6 +252,8 @@ Each table has `deepest_ + 1` level slots. `owned` determines which level integr
 
 ## 5. `build_stage_view()`: placing different levels at one time
 
+This function constructs temporary stage states for reconstruction, face fluxes, sources, and endpoint pressure work. It does not finalize the current level's conservative update or copy `view_` back into `state_`.
+
 When a fine level evaluates a face flux, a neighboring slow cell may not yet have completed its own local step. Its older state in `state_` cannot be used directly. Instead, the method constructs a linear prediction:
 
 $$
@@ -265,7 +280,7 @@ $$
 
 The common physical start time $t_0$ is omitted here. This level layout is schematic and ignores further promotions that buffers may require. C has completed its previous fine step and uses its RK2-updated state at $3H/4$ directly.
 
-The function first copies `state_` into `view_`, then overwrites cells requiring prediction according to the following rule:
+The function first unconditionally executes `view_.cells = state_.cells`. These copied states still represent each cell's most recently completed local step, potentially at different times; copying alone does not complete the stage view. The following rule then determines which cells retain their copied values and which are overwritten with predictions:
 
 | Stage | Coarser levels, `level < depth` | Current level, `level == depth` | Finer levels, `level > depth` |
 | --- | --- | --- | --- |
@@ -279,9 +294,18 @@ const bool needs_prediction =
     level_[cell_index] < depth || (endpoint && level_[cell_index] == depth);
 ```
 
+`needs_prediction` determines whether prediction follows the copy, not whether the cell is copied:
+
+- If it is `false`, `continue` leaves the cell's `U` in `view_` equal to the value copied from `state_`. This applies to all finer cells, and also to current-level cells in a starting view.
+- If it is `true`, the cell's `U` in `view_` is replaced by `base_[i] + slope_[i] * elapsed`. The elapsed time runs from that cell's own `local_step_start_[i]` to the target `fraction`; it is not necessarily one fine-step duration.
+
+Coarser cells awaiting finalization, and current-level cells in an endpoint view, still hold their local-step starting states in `state_.U`, corresponding to `base_`. The prediction can therefore be understood as adding the slope increment to the copied starting state. The code explicitly assigns a value computed from `base_`, however; it does not accumulate another increment onto the previous prediction in `view_`. Each call copies and predicts afresh.
+
 Why can finer levels use `state_` directly? The recursion ensures that the current level and all finer levels share the start when this local step begins. Before the current level constructs its endpoint stage, finer levels have completed every substep covering the interval.
 
-After prediction, the function checks physical validity and fills boundaries at the target physical time. The resulting `view_` is an approximate state at one common time, suitable for both face reconstruction and sources that depend on the full grid, such as self-gravity. PLM must recompute spatial slopes on this stage view instead of combining neighboring states from different times.
+After prediction, the function checks physical validity and fills boundaries at the target physical time. The current multidimensional implementation also refreshes thermodynamic caches in `view_`: retaining a copied `U` does not skip the subsequent boundary fill or thermodynamic refresh. The resulting `view_` is an approximate state at one common time, suitable for both face reconstruction and sources that depend on the full grid, such as self-gravity. PLM must recompute spatial slopes on this stage view instead of combining neighboring states from different times.
+
+The two Boolean parameters have different meanings: `true` in `advance_level(..., true)` requests start-stage reuse, whereas `true` in `build_stage_view(..., true)` requests an endpoint view that also predicts current-level cells. `build_stage_view()` has no reuse parameter.
 
 ## 6. `advance_level()`: one local RK2 step
 
@@ -337,7 +361,7 @@ These saves, slope calculations, and wave-speed checks also run when the start s
 
 ### 6.2 Start-stage reuse means reusing a stage evaluation
 
-`reuse_start_stage=true` means the required face fluxes, wave speeds, face velocities, and sources have already been evaluated for the same start stage and can be reused.
+`reuse_start_stage=true` means the required face fluxes, wave speeds, face velocities, and sources have already been evaluated for the same start stage and can be reused. The entire starting `if (!reuse_start_stage)` block is skipped: there is no `build_stage_view()` call, no `view_.cells = state_.cells`, and no new face or source evaluation. Reuse consumes these evaluated quantities; copying `state_` again would not by itself create synchronized states.
 
 | Reused array | Use at the current level |
 | --- | --- |
@@ -352,9 +376,35 @@ These saves, slope calculations, and wave-speed checks also run when the start s
 
 The caches remain valid even when coarser cells in `state_` have not reached this start time: those cells were first predicted in `view_` when the caches were prepared. Reuse skips rebuilding the starting view and reevaluating face quantities and sources. It does not require every cell in `state_` to be synchronized, and the current level still computes its starting slope.
 
-For example, let the macro step begin at 0 with levels 0, 1, and 2. On entry to `advance_level(1, 0.5, false)`, level 0's `state_` is still at 0, while levels 1 and 2 are at $H/2$. Level 1 first uses `build_stage_view()` to predict level 0 to $H/2$ in `view_`, then evaluates face quantities for `owner >= 1` and sources. When it subsequently calls `advance_level(2, 0.5, true)`, these caches already represent the $H/2$ stage, including the coarser cells' predictions, so level 2 can reuse them. Level 2 takes its own `base_` and pressure from its own `state_`, which has reached $H/2$.
+For example, let the macro step begin at 0 with levels 0, 1, and 2. After finer levels complete the first half of the macro step, `advance_level(1, 0.5, false)` constructs its starting view as follows:
+
+| Level | Time stored in `state_` | Immediately after copying into `view_` | `needs_prediction` | Completed starting view |
+| --- | --- | --- | --- | --- |
+| 0 | $0$ | $U_0(0)$ | `true`, coarser level | $U_0(0)+(H/2)k_{1,0}(0)$, predicted to $H/2$ |
+| 1 | $H/2$ | $U_1(H/2)$ | `false`, current level at the start | Retain the copied value, already at $H/2$ |
+| 2 | $H/2$ | $U_2(H/2)$ | `false`, finer level | Retain the copied value, already at $H/2$ |
+
+Level 1 evaluates face quantities for `owner >= 1` and sources from this `view_`, storing the results in `flux_`, `speed_`, `face_velocity_`, and `source_`. Level 0's `state_` remains at 0. The subsequent `advance_level(2, 0.5, true)` does not rebuild the starting view or copy level 0's old state back in for a new starting evaluation; it directly uses the prepared $H/2$ stage results. Level 2 reads its own `base_` and starting pressure from its `state_` at $H/2$, then computes its own starting slope.
+
+Start-stage reuse does not remove the endpoint view. When level 2 subsequently calls `build_stage_view(2, 0.75, true)`, it copies `state_` again and predicts level 0 from 0, level 1 from $H/2$, and the current level 2 from $H/2$ to $3H/4$. Prediction changes only `view_`; level 2's `state_` reaches $3H/4$ only after its Phase II finalization.
 
 Between preparing the parent's start stage and entering the first finer half-step, the parent only saves local starting states and computes slopes; it neither advances cells nor overwrites these stage caches. The parent's `needed` face set also contains every face needed by the child. The cached time, states, and face coverage therefore satisfy the reuse requirements.
+
+For `flux_`, no extra transfer from a parent array to a child array occurs: both calls access the same member array. The parent copies its `owned` faces into `first_flux_` and reads `flux_` to compute its own `slope_`. Neither operation writes `flux_`, and the parent's endpoint `solve_faces()` runs only after both finer half-steps return. Thus, when the child enters with `reuse=true`, its required starting fluxes still hold the prepared values. If the parent also reused its start, tracing backward through the recursive calls leads to the most recent non-reused solve at the shared start or to the initial macro-step scan.
+
+Track a specific entry using the four-cell, three-level example in Section 7. Cells `C0, C1, C2, C3` have levels `0, 1, 2, 1`; face `f2` connects `C1` and `C2` and is owned by level 2. Level 1 needs `f1` through `f4`, including both faces `f2, f3` needed by level 2.
+
+| Execution order | Flux entries written | Meaning or use of `flux_[f2]` |
+| --- | --- | --- |
+| Initial scan, followed by `(0,0,true)`, `(1,0,true)`, and `(2,0,true)` | The scan writes all faces; none of these three calls writes starting fluxes | All three levels read the same starting flux at time 0 |
+| After the first two fine steps, level 1 evaluates its $H/2$ endpoint | Level 1 writes only its own `f1, f4` | `f2` still holds level 2's preceding predicted-endpoint flux at $H/2$ |
+| Starting solve in `advance_level(1,0.5,false)` | Recompute and overwrite `f1, f2, f3, f4` | `f2` becomes the starting flux constructed from the updated $H/2$ states of `C1, C2` |
+| Level 1 saves `first_flux_` and computes `slope_` | No write to `flux_` | `f2` remains unchanged |
+| Start of `advance_level(2,0.5,true)` | No write to `flux_`; save the current `f2, f3` values into `first_flux_` | Read the parent's freshly written $H/2$ starting flux and compute level 2's slope |
+| Level 2's $3H/4$ endpoint solve | Overwrite its own `f2, f3` | `f2` becomes the predicted-endpoint flux; combine it with saved `first_flux_[f2]` for the trapezoidal integral |
+| Starting solve in `advance_level(2,0.75,false)` | Overwrite `f2, f3` again | Use the RK2-updated `C2` and predicted slower states to obtain the new $3H/4$ starting flux |
+
+Skipping a flux update during reuse applies only to that call's starting solve. It does not freeze `flux_` throughout recursion: later finer solves and the current level's endpoint solve overwrite their selected entries. `first_flux_` preserves the starting values for the two-stage integral after the working array has been overwritten. Each level saves only its `owned` faces, so a child does not overwrite the parent's owned-face starting copies.
 
 Likewise, an endpoint flux from the previous substep generally cannot serve as the next substep's start flux. The former uses the current level's Euler-predicted state, whereas the latter requires its RK2-corrected state. Equal times do not imply equal states.
 
@@ -394,7 +444,7 @@ if (!check_wave_speeds(faces_owned_by_level_[depth]) ||
         view_, time_ + end_fraction * macro_step_, macro_step_)) return false;
 ```
 
-The endpoint view uses linear predictions for the current and coarser levels, and completed substep states for finer levels. Sources are also reevaluated on this endpoint view.
+Regardless of start-stage reuse, this endpoint stage calls `build_stage_view()` again. It first copies all cells from `state_`; finer levels have reached the endpoint and retain their copied `U`, while current and coarser cells have their `U` in `view_` overwritten with their own `base_ + slope_ * elapsed`. Sources are also reevaluated on this endpoint view.
 
 Here, `build_stage_view()` updates only `view_`; current-level cells in `state_` still hold their local-step starting states. The subsequent face loop also only accumulates flux integrals. The actual write to current-level cells in `state_` occurs in the cell-finalization loop in Section 6.6.
 
@@ -464,10 +514,10 @@ Shared face integrals ensure discrete conservation of transport. Sources can cha
 ## Process summary
 
 0. The outer run function performs all the various initialization steps, including initializing arrays, assigning time steps, assigning levels to cells and faces, and calculating the maximum step size macro_step (the smallest feasible dt among all cells * $2^{\mathrm{max_depth}}$). It then begins the attempt loop.
-1. First, the outer advance_lts_rk2 computes the flux at the initial starting point once, then calls advance_level(0,0,true). This is the starting point. Before calling `advance_level` on each attempt, `reset_attempt()` restores the macro-step starting state with `state_.cells = start_.cells`; local updates from a failed attempt do not carry into the next attempt.
-2. Each level's advance_level has a level parameter depth, a starting-point parameter fraction (the fractional time step), and a reuse flag. It calculates the current fractional step size span = $2^{-\mathrm{depth}}$ and the endpoint end_fraction = fraction + span. It first checks whether this is a reuse step. If not, it calls `build_stage_view(depth, fraction, false)`, which copies the cell states produced by RK2 advancement from state_ into the temporary array view_. Because the step sizes differ, the states of different cells in state_ correspond to different times. Using the previously stored slopes from the first part of RK2, it extrapolates the states in view_ of all lower-level cells (which have longer step sizes and have not reached this level's starting point) to the current level's start fraction. Because of the recursion, cells at the current and higher levels must already have reached the current start fraction, so their copied values from state_ do not need modification. The entire view_ is therefore synchronized. The cell states in view_ are then used to solve the Riemann problems and obtain flux_ for all faces owned by the current or higher levels, because only faces owned by the current or higher levels can belong to cells at the current level and affect those cells through their fluxes.
+1. run first calls solve_faces(start_,all_faces_), writes starting fluxes for every independent face into flux_, and saves them to initial_flux_. On each attempt, reset_attempt restores states with state_.cells = start_.cells and starting fluxes with flux_ = initial_flux_, then calls advance_level(0,0,true). The outermost call therefore reads already evaluated and restored fluxes for this macro step, rather than endpoint values left by a failed attempt.
+2. Each level's advance_level has a level parameter depth, a starting-point parameter fraction (the fractional time step), and a reuse flag. It calculates the current fractional step size span = $2^{-\mathrm{depth}}$ and the endpoint end_fraction = fraction + span. It first checks whether this is a reuse step. If not, it calls `build_stage_view(depth, fraction, false)`, which copies the cell states produced by RK2 advancement from state_ into the temporary array view_. Because the step sizes differ, the states of different cells in state_ correspond to different times. After copying, it tests needs_prediction for each cell. At the start only coarser cells return true; their U in view_ is overwritten with their own base_ + slope_ * ((fraction-local_step_start_)*macro_step_), predicting them to fraction. No increment is accumulated onto an earlier prediction in view_. Because of the recursion, cells at the current and higher levels must already have reached the current start fraction, so their copied values from state_ do not need modification. The entire view_ is therefore synchronized. The cell states in view_ are then used to solve the Riemann problems and obtain flux_ for all faces owned by the current or higher levels, because only faces owned by the current or higher levels can belong to cells at the current level and affect those cells through their fluxes.
 
-   A reuse step means the required starting-stage flux_, speed_, face_velocity_, and source_ results are already available, so build_stage_view, solve_faces, and evaluate_sources are skipped. Lower-level cells in state_ may still represent earlier times, but their predictions at the current start time have already contributed through the previously prepared view_. Those predictions and evaluations need not be repeated for this level; its own starting states must still be saved and its slopes computed.
+   A reuse step means the required starting-stage flux_, speed_, face_velocity_, and source_ results are already available, so build_stage_view, solve_faces, and evaluate_sources are skipped, including the copy from state_ to view_ at this start. Lower-level cells in state_ may still represent earlier times, but their predictions at the current start time have already contributed through the previously prepared view_. The parent's needed-face solve already covers the child's faces, and saving first_flux_ and computing slope_ only read flux_, so those required values remain unchanged on entry to the first finer half-step. Predictions and evaluations need not be repeated; the child still saves its own starting states and computes its slopes.
 3. Save the starting flux_ of faces owned by this level into first_flux_. The incoming-minus-outgoing sum of area-weighted face fluxes divided by cell volume gives the state derivative excluding sources and pressure work. Adding those terms gives the complete RK2 starting slope $k_1$. The final integral uses the average of the starting and endpoint sources and pressure work.
 
  Then iterate over current-level cells, save their local starting states from state_ into base_, save sources from source_ into source_start_, and compute pressure_work_start_ and slope_ using the available flux_, face_velocity_, and current-level starting pressure. These operations also run during reuse. The loop visits only cells_by_level_[depth], so the states and pressures read belong to current-level cells that have reached fraction; earlier coarser states are not used as this level's starting state. Phase I only saves starting states and slopes; current-level state_ is updated in its own Phase II.
@@ -477,9 +527,9 @@ Next, the current level executes the second call, advance_level(depth+1,fraction
 
 The discussion above does not cover invalid cases. If a validity check fails at any level, return false propagates level by level back to the attempt loop in run, which halves the maximum step size macro_step and retries.
 
-5. Next comes Phase II of RK2. To calculate the time derivative of the cell state at the endpoint (the endpoint slope), we first use build_stage_view to predict the cell states view_ at end_fraction. Copy state_ into view_ again. Because of the recursion described above, cells at higher levels have already reached the endpoint and do not need modification. The current level has not yet reached the endpoint, so cells at the current and lower levels all need to be extrapolated to the endpoint using slope. This updates only `view_`; current-level cells in `state_` retain their local-step starting states until finalization in step 8.
+5. Next comes Phase II of RK2. To calculate the time derivative of the cell state at the endpoint (the endpoint slope), we first use build_stage_view to predict the cell states view_ at end_fraction. Copy state_ into view_ again. Because of the recursion described above, cells at higher levels have already reached the endpoint and do not need modification. The current level has not yet reached the endpoint, so needs_prediction is true for current and coarser cells: their U in view_ is overwritten with their own base_ + slope_ * elapsed at the common endpoint. Finer cells return false and retain their copied U. This stage runs regardless of start-stage reuse; the third true passed to build_stage_view is the endpoint parameter. This updates only `view_`; current-level cells in `state_` retain their local-step starting states until finalization in step 8.
 
-6. Use view_ to call solve_faces, evaluating endpoint flux_ only for faces owned by the current level. Faces with lower owners cannot touch current-level cells. Faces with higher owners have already been integrated during finer substeps, and their contributions remain in the shared pending_flux_integral_ until the corresponding cells are finalized. Applying those accumulated finer-step integrals is a separate operation from reusing starting face quantities and sources through reuse_start_stage in Phase I.
+6. Use view_ to call solve_faces, evaluating endpoint fluxes only for faces owned by the current level and overwriting those entries in shared flux_. The trapezoidal integral combines the starting values saved in first_flux_ with these newly written endpoint values. Since the endpoint values use predicted states, the next non-reused start must solve again from updated states; it cannot simply retain these as its starting fluxes. Faces with lower owners cannot touch current-level cells. Faces with higher owners have already been integrated during finer substeps, and their contributions remain in the shared pending_flux_integral_ until the corresponding cells are finalized. Applying those accumulated finer-step integrals is a separate operation from reusing starting face quantities and sources through reuse_start_stage in Phase I.
 
 7. For faces owned by this level, average starting first_flux_ and endpoint flux_, multiply by face area and the local step, and add the negative integral to pending_flux_integral_[left] and the positive integral to pending_flux_integral_[right]. These integrals remain in the shared array until the corresponding cell's level finalizes it, dividing by cell volume to obtain a state increment. They are not copied down the recursion stack on return.
 
@@ -601,7 +651,7 @@ After adding their sources and pressure work, `C1` and `C3` are updated to $H/2$
 
 ### 7.5 The second half of the macro step: $H/2\rightarrow H$
 
-On entry to `advance_level(1, 0.5, false)`, `C1`, `C2`, and `C3` are synchronized at $H/2$; only `C0` needs prediction from 0 to $H/2$. Level 1 resolves the needed faces `f1`–`f4` and saves new start slopes for `C1` and `C3`.
+On entry to `advance_level(1, 0.5, false)`, `C1`, `C2`, and `C3` are synchronized at $H/2$; only `C0` needs prediction from 0 to $H/2$. Level 1 resolves the needed faces `f1`–`f4`, writing new starting fluxes into the shared `flux_` array over the preceding endpoint values. It then saves `first_flux_[f1]` and `first_flux_[f4]` and computes new starting slopes for `C1` and `C3`. These operations only read `flux_`, leaving the freshly computed `flux_[f2]` and `flux_[f3]` available for the first finer half-step.
 
 It then executes
 
@@ -610,7 +660,7 @@ advance_level(2, 0.5, true);   // H/2 -> 3H/4
 advance_level(2, 0.75, false); // 3H/4 -> H
 ```
 
-The first fine step reuses `flux_`, `speed_`, `face_velocity_`, and `source_` just prepared by level 1. Although `C0` in `state_` is still at 0, these caches were evaluated from a `view_` containing its predicted state at $H/2$. `C2` saves `base_` from its own updated state at $H/2$ and computes its starting slope, without predicting `C0` or evaluating the starting face quantities and sources again.
+The first fine step reuses `flux_`, `speed_`, `face_velocity_`, and `source_` just prepared by level 1. Although `C0` in `state_` is still at 0, these caches were evaluated from a `view_` containing its predicted state at $H/2$. The starting `build_stage_view()` call is skipped, including the copy from `state_` to `view_`. `C2` saves `base_` from its own updated state at $H/2$ and computes its starting slope, without predicting `C0` or evaluating the starting face quantities and sources again. Its endpoint stage at $3H/4$ still constructs a new view.
 
 The second fine step begins at $3H/4$, uses the updated `C2`, and predicts `C0`, `C1`, and `C3` in a new `view_` to reevaluate the start stage. Once `C2` reaches $H$, level 1 constructs its endpoint view, completes the second-half integrals for `f1` and `f4`, and updates `C1` and `C3` to $H$.
 

@@ -13,14 +13,22 @@ namespace hydro
         hd_core::Primitives W;
         double gamma;
     };
-    // Bisection is retained as a numerical/performance reference for tests.
+    // Both methods use the same wave functions; bisection is a root-finder reference.
     enum class ExactPressureMethod { SafeguardedNewton, Bisection };
-    /** @brief Exact ideal-gas Riemann solver with gas/vacuum interface handling. */
+    /**
+     * @brief Riemann solver for the configured EoS, with gas/vacuum interfaces.
+     * @note Default/Mixed/Ionized retain analytic gamma-law wave relations.
+     * Ionized_Radiative uses numerical Hugoniot and isentropic wave relations
+     * for a single gas/radiation temperature. X, mu and each side's gas gamma
+     * are frozen across its waves; Saha and radiation transport are not solved.
+     * Constant specific ionization energy cancels from the wave relations and
+     * is restored by the existing EoS conversion when building the energy flux.
+     */
     class ExactSolver final: public RiemannSolver
     {
         public:
             /**
-             * @brief Construct an exact ideal-gas Riemann solver.
+             * @brief Construct a Riemann solver; each flux call reads the global EoS type.
              * @param[in] tolerance Finite positive relative pressure-bracket tolerance.
              * @param[in] max_iterations Positive maximum number of pressure iterations.
              * @param[in] method Safeguarded Newton (default) or reference bisection.
@@ -32,21 +40,27 @@ namespace hydro
                 ExactPressureMethod method = ExactPressureMethod::SafeguardedNewton
             );
             /**
-             * @brief Solve the ideal-gas Riemann problem and return the stationary-face flux.
+             * @brief Solve the frozen-composition Riemann problem and return the stationary-face flux.
              * @param[in] left Primitive state immediately to the left of the face.
              * @param[in] right Primitive state immediately to the right of the face.
              * @param[in] direction Face-normal axis in [0, hd_core::NDIM).
-             * @param[in] gamma_L Left ideal-gas adiabatic index greater than one.
-             * @param[in] gamma_R Right ideal-gas adiabatic index greater than one.
+             * @param[in] gamma_L Left gas thermal adiabatic index greater than one.
+             * @param[in] gamma_R Right gas thermal adiabatic index greater than one.
              * @param[out] face_speed Maximum absolute outer wave speed, for CFL control.
              * @param[out] face_velocity Signed sampled normal fluid velocity, for pressure work.
              * @return Conserved flux in the positive axis direction; the exact solver returns zero when the sampled interface is vacuum.
-             * @pre Each input is a valid gas or vacuum state for its adiabatic index.
+             * @pre Each input is a valid gas or vacuum state. Composition models
+             * require an initialized species table and the face mass fractions.
+             * For Ionized_Radiative, PRE includes gas and radiation pressure.
              * @post Every successful call writes face_speed and face_velocity, including zero-flux cases.
              * @note Output references must refer to distinct caller-owned values.
              * @throws std::out_of_range If direction is invalid.
              * @throws std::invalid_argument If an input state or adiabatic index is invalid.
-             * @throws std::runtime_error If star pressure fails to converge or wave-speed bounds are invalid.
+             * @throws std::runtime_error If a pressure/density/temperature solve,
+             * rarefaction integral or vacuum limit fails to converge, or a wave
+             * state exceeds floating-point range. Numerical radiation-wave
+             * accuracy has a double-precision floor; very near-isothermal gamma
+             * can require a vacuum integration beyond the supported log range.
              */
             hd_core::Conserved flux(
                 const hd_core::Primitives& left,
