@@ -14,13 +14,13 @@ namespace hd_microphysics
         IdealGas_Mixed,
         Ionized,
         Ionized_Radiative,
-        Nuclear         //to be implemented for CCSN core
+        Nuclear         // Toy hybrid: cold piecewise polytrope + thermal gamma law.
     };
     enum class EoSInput
     {
         RhoT,   // 密度、温度是已知量
         RhoP,   // 密度、压力是已知量
-        RhoE    // 密度、比内能是已知量
+        RhoE    // 密度、内能密度是已知量（从 U 按双能量规则选择）
     };
 
     // 启动时从配置设置；演化期间保持不变，需要时显式传给 evaluate_eos。
@@ -31,6 +31,9 @@ namespace hd_microphysics
 
     // 唯一计算入口。RhoT/RhoE 输出 pressure；RhoP 读取 pressure，不修改它。
     // 密度和组分来自 cell；RhoT 的温度来自 cell.temperature。
+    // 非真空状态要求 rho、mu、T、P 为有限正数，gamma > 1；RhoE 要求
+    // 扣除电离能后仍有正的能量。非法状态抛出 invalid_argument。
+    // Nuclear 不依赖组分；允许 T=0，但要求 u>=u_cold、P>=P_cold。
     // 尚未实现的输入模式抛出 logic_error。
     void evaluate_eos(
         hd_core::Cell& cell,

@@ -4,6 +4,8 @@
  */
 #include "factory.h"
 #include "exact.h"
+#include "hll.h"
+#include "microphysics/eos/eos.h"
 #include <memory>
 #include <string>
 namespace hydro
@@ -14,6 +16,9 @@ namespace hydro
         int max_iterations
     )
     {
+        if (hd_microphysics::eos_type == hd_microphysics::Equation_of_State::Nuclear
+            && (name == "exact" || name == "exact_bisection"))
+            throw std::invalid_argument("Nuclear EoS requires riemann_solver = hll; exact does not support its cold-pressure branches");
         if (name == "exact")
         {
             return std::make_unique<hydro::ExactSolver>(
@@ -25,7 +30,8 @@ namespace hydro
             return std::make_unique<hydro::ExactSolver>(
                 tolerance, max_iterations, hydro::ExactPressureMethod::Bisection);
 
-        // 将来实现 HLLSolver、HLLCSolver 后，在这里增加分支。
+        if (name == "hll")
+            return std::make_unique<hydro::HLLSolver>();
 
         throw std::invalid_argument(
             "Unknown or unavailable Riemann solver: " + name

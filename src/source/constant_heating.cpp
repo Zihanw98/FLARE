@@ -64,10 +64,12 @@ namespace hd_source
             if (!active) continue;
 
             const auto& cell = mesh.cells[flat];
-            const auto primitive = cell.Get_Primitives();
             const double rho = cell.U[hd_core::RHO];
             if (rho == 0.0) continue;
-            const double internal_energy = primitive[hd_core::PRE] / (cell.gamma - 1.0);
+            // Use the same non-kinetic energy evolved by both energy equations.
+            const double internal_energy = cell.U.internal_energy();
+            if (!std::isfinite(internal_energy) || internal_energy <= 0.0)
+                throw std::invalid_argument("Heating requires finite positive internal energy");
             const double energy_rate = rho * heating_rate;
             rhs[flat][hd_core::ENERGY] += energy_rate;
             rhs[flat][hd_core::INTERNAL_ENERGY] += energy_rate;

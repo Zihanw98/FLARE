@@ -55,6 +55,24 @@ class UnitConversionTests(unittest.TestCase):
         self.assertEqual(result[5], "y [cm]")
         self.assertIn("3 cm", result[6])
 
+    def test_thermodynamic_columns_and_kelvin_conversion(self):
+        path = self.snapshot(two_dimensional=True)
+        lines = path.read_text().splitlines()
+        path.write_text('\n'.join(line if line.startswith('#') else
+                                 line + (',mean_molecular_weight,temperature'
+                                         if line.startswith('x,') else ',2.5,4')
+                                 for line in lines) + '\n')
+        code = read_snapshot(path, 0, thermodynamics=True)
+        physical, _, _, _ = prepare([(0, path)], cgs=True, thermodynamics=True)
+        np.testing.assert_array_equal(code.values[-2], 2.5)
+        np.testing.assert_array_equal(code.values[-1], 4)
+        np.testing.assert_array_equal(physical.values[-2], 2.5)
+        np.testing.assert_array_equal(physical.values[-1], 1200)
+        self.assertEqual(display_label('temperature', 'temperature', False, True), 'temperature [K]')
+        self.assertEqual(len(read_snapshot(path, 0).fields), 4)  # Opt in; old plots unchanged.
+        with self.assertRaisesRegex(ValueError, 'Missing requested field'):
+            read_snapshot(self.snapshot(), 0, thermodynamics=True)
+
     def test_legacy_csv_requires_explicit_units_for_cgs(self):
         path = self.snapshot(units=False)
         self.assertEqual(read_snapshot(path, 0).time, 2)

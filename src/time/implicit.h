@@ -14,6 +14,8 @@ public:
     Integrator& operator=(const Integrator&) = delete;
     double suggested_dt() const;
     // Commits only a converged, boundary-filled state with refreshed thermodynamics.
+    // Recovers incoming active-cell caches on a private snapshot once per advance;
+    // incoming ghosts are replaced by the boundary fill before EoS evaluation.
     // Thermodynamic recovery failures reject the trial; adaptive mode retries at half dt.
     // dt <= remaining; rejected trials leave the caller's cells unchanged.
     double advance(hd_core::MeshBlock& mesh, double time, double remaining,

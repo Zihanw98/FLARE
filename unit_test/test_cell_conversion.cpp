@@ -293,12 +293,6 @@ void check_energy_selection_and_failure()
     expect_throw<std::invalid_argument>([&] { cell.Get_Primitives(invalid_model); });
     expect_throw<std::invalid_argument>([&] { cell.Get_Primitives_From_Updated_State(invalid_model); });
     expect_throw<std::invalid_argument>([&] { cell.Get_Pressure_From_Updated_State(invalid_model); });
-    expect_throw<std::invalid_argument>([&] {
-        cell.Get_Primitives_From_Updated_State(Equation_of_State::Nuclear);
-    });
-    expect_throw<std::invalid_argument>([&] {
-        cell.Get_Pressure_From_Updated_State(Equation_of_State::Nuclear);
-    });
     expect_throw<std::invalid_argument>([&] { cell.to_Conserved(primitive, invalid_model); });
     expect_throw<std::invalid_argument>([&] { cell.Set_Conserved_From_Primitives(primitive, invalid_model); });
     unchanged(cell, before);

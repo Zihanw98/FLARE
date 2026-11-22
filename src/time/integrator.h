@@ -71,7 +71,7 @@ namespace hd_time
         const hd_user::UserHooks& hooks, double cfl,
         hydro::StarPressureCache* star_pressure_cache = nullptr);
 
-    // 对活跃单元执行 U += dt * rhs，并逐个校验候选状态。
+    // 对活跃单元执行 U += dt * rhs，通过 RhoE 校验并刷新候选状态。
     // rhs 与 mesh.cells 等长；dt 必须有限，零表示不更新。
     // 全部校验成功后才提交；失败时保持原 mesh，ghost、gamma 和几何不变。
     /**
@@ -82,7 +82,8 @@ namespace hd_time
      * @pre Cell storage matches the mesh dimensions.
      * @throws std::invalid_argument If dt, RHS size, or a candidate active state is invalid.
      * @throws std::logic_error If cell storage does not match mesh dimensions.
-     * @post On success, active states are updated; ghost states, gamma, and geometry are unchanged.
+     * @throws std::runtime_error If an EoS temperature solve fails.
+     * @post On success, active U and thermodynamic caches are updated; ghost states, gamma, and geometry are unchanged.
      * @note If validation fails, no cell states are committed.
      */
     void add_scaled_rhs(

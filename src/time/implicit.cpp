@@ -57,7 +57,7 @@ struct Integrator::Impl
     const config::SimulationConfig settings;
     hydro::Reconstructor reconstruction;
     hydro::Limiter limiter;
-    hd_core::MeshBlock trial, probe, minus, candidate;
+    hd_core::MeshBlock initial, trial, probe, minus, candidate;
     std::vector<std::size_t> active, color;
     std::vector<std::vector<std::size_t>> columns, groups;
     detail::SparseMatrix preconditioner;
@@ -69,7 +69,7 @@ struct Integrator::Impl
 
     Impl(const hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
         : settings(cfg), reconstruction(hydro::parse_reconstructor(cfg.reconstructor)),
-          limiter(hydro::parse_limiter(cfg.limiter)), trial(mesh), probe(mesh), minus(mesh), candidate(mesh),
+          limiter(hydro::parse_limiter(cfg.limiter)), initial(mesh), trial(mesh), probe(mesh), minus(mesh), candidate(mesh),
           next_dt(settings.dt_implicit)
     {
         if (!std::isfinite(settings.dt_implicit) || settings.dt_implicit <= 0 || !std::isfinite(settings.implicit_tolerance)
@@ -317,6 +317,14 @@ double Integrator::advance(hd_core::MeshBlock& mesh, double time, double remaini
         || mesh.geometry != p.trial.geometry)
         throw std::invalid_argument("Implicit requires finite time and unchanged mesh geometry");
     double dt = std::min(remaining, p.settings.implicit_adaptive ? p.next_dt : p.settings.dt_implicit);
+    // LogVariables reads cached pressure and sound speed from both old and trial.
+    // Recover the old active cells once per advance, without changing the caller
+    // or U. Reuse this snapshot across Newton iterations and adaptive retries.
+    p.initial.cells = mesh.cells;
+    for (auto flat : p.active)
+        refresh_trial_thermodynamics(p.initial.cells[flat]);
+    // Old ghosts are not used by LogVariables; rhs() fills trial ghosts before
+    // recovering them. Uninitialized incoming ghosts need not enter the EoS.
     for (int attempt = 0; attempt < (p.settings.implicit_adaptive ? 16 : 1); ++attempt)
     {
         if (!std::isfinite(time+dt) || time+dt <= time)
@@ -325,7 +333,7 @@ double Integrator::advance(hd_core::MeshBlock& mesh, double time, double remaini
         bool accepted = false;
         try
         {
-            accepted = p.solve(mesh, time, dt, scheme, solver, sources, cfg, hooks);
+            accepted = p.solve(p.initial, time, dt, scheme, solver, sources, cfg, hooks);
             if (accepted)
             {
                 p.trial.synchronize_dual_energy();

@@ -324,13 +324,15 @@ int main()
         auto& last_active = states.cells[active_cells.back()];
         const auto saved = last_active;
         last_active.U[hd_core::ENERGY] = -1.0;
-        expect_throw<std::invalid_argument>([&] { states.validate_active(); });
+        states.validate_active(); // Arithmetic validation does not impose an EoS.
+        expect_throw<std::invalid_argument>([&] { last_active.Get_Primitives(); });
         last_active = saved;
         last_active.U[hd_core::MOMDEN(0)] = std::numeric_limits<double>::quiet_NaN();
         expect_throw<std::invalid_argument>([&] { states.validate_active(); });
         last_active = saved;
         last_active.gamma = 1.0;
-        expect_throw<std::invalid_argument>([&] { states.validate_active(); });
+        states.validate_active();
+        expect_throw<std::invalid_argument>([&] { last_active.Get_Primitives(); });
         last_active = saved;
         last_active.U = {}; // Preserve Conserved::validate's vacuum convention.
         states.validate_active();

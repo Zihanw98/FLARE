@@ -116,7 +116,7 @@ int dual_energy_physics(int argc, char** argv)
     {
         const auto& cell=mesh.cells[k]; cell.U.validate();
         CHECK(cell.U[INTERNAL_ENERGY]>0);
-        const auto w=cell.U.to_Primtivies(cell.gamma);
+        const auto w=cell.Get_Primitives();
         pmin=std::min(pmin,w[PRE]); correction+=cell.dual_energy_correction*mesh.volume_cell[k];
         if (blast && w[RHO]>1.1) shock_radius=std::max(shock_radius,radius(k));
         bool interior=true;
@@ -193,7 +193,7 @@ int main(int argc, char** argv)
 
         // Fail at the last active cell: preceding candidate updates must not leak.
         auto bad_rhs = rhs;
-        bad_rhs[last_active][hd_core::ENERGY] = -1e6;
+        bad_rhs[last_active][hd_core::RHO] = -1e6;
         auto check_unchanged = [&] {
             for (std::size_t flat = 0; flat < mesh.cells.size(); ++flat)
             {
@@ -205,6 +205,13 @@ int main(int argc, char** argv)
             hd_time::add_scaled_rhs(mesh, bad_rhs, 0.5);
         });
         check_unchanged();
+        bad_rhs = rhs;
+        bad_rhs[last_active][hd_core::ENERGY] = -1e6;
+        expect_throw<std::invalid_argument>([&] {
+            hd_time::add_scaled_rhs(mesh, bad_rhs, 0.5);
+        });
+        check_unchanged();
+        bad_rhs = rhs;
         bad_rhs[last_active][hd_core::ENERGY] = std::numeric_limits<double>::quiet_NaN();
         expect_throw<std::invalid_argument>([&] {
             hd_time::add_scaled_rhs(mesh, bad_rhs, 0.5);

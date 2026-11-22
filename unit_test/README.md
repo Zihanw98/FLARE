@@ -24,11 +24,12 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `reconstruction` | PLM_corrected 在非均匀网格上的密度/压力正性、共享斜率系数、阈值连续性、低密度、各方向缓存/直接接口一致及未受限状态逐位兼容 |
 | `state` | 原始量/守恒量转换、动能与压力、算术运算、真空、非法状态、各方向物理通量 |
 | `cell_conversion` | Cell 的 EoS 转换：副本隔离、Setter 只写 U、失败时状态不变、双能量选择、全局/显式 EoS、真空；`HD_NCOMP=2` 时额外检查 H I/H II 混合物的全部四种 EoS |
-| `eos` | EoS 名称解析、函数指针分派、非法选择及未实现物理函数的明确报错 |
+| `eos` | RhoT/RhoP/RhoE 往返、热力学合法性、显式模型声速、真空；`HD_NCOMP=2` 时检查 Mixed/Ionized/辐射分支 |
+| `exact_eos` | `HD_NCOMP=2`：辐射通量、gamma=4/3 解析参照、稀疏波/激波/真空、接触间断、电离能输运以及周期网格守恒 |
 | `species` | 物种表、单态索引、按 `(Z,A)` 查询所有已激活电离态索引（按电荷排序，含负离子） |
 | `initialization` | 普通 profile 与 MESA 网格、流体状态读取及错误回滚 |
 | `profile_composition` | 专用 `HD_NCOMP=10` 测试：基态输入、可选电离态、同位素别名、MESA 核素映射、质量分数校验与回滚 |
-| `implicit` | 温度依赖源项的后向 Euler 解、Newton 阶段及用户 ghost 热力学量一致性、线搜索回退、自适应缩步与失败回滚；支持 `HD_NCOMP=0/2` |
+| `implicit` | 温度依赖源项的后向 Euler 解、Newton 阶段及用户 ghost 热力学量一致性、线搜索回退、自适应缩步与失败回滚；能量坐标及其解析方向、各 EoS 的均匀加热；支持 `HD_NCOMP=0/2` |
 | `lts_euler` | PCM/PLM/PLM_corrected 多层子循环、16:1 步长、同一子步时刻的 PLM 邻域预测、跨层与周期边界守恒、Euler 等价性、界面压力历史与异常回滚、减少界面求解、球对称几何源项、源项限制、激波跨界、重试回滚及维度限制 |
 | `lts_rk2` | 独立的多层 Heun 子循环、单层/全细层 RK2 等价性、固定网格上的二阶时间收敛（含非局部时变源项）、跨层/周期守恒、球对称自引力、激波、界面求解次数、阶段源项限制及状态/压力缓存回滚 |
 | `mesh` | flat/Index、active/ghost 偏移、const 访问、非均匀间距、越界与损坏的几何 |
@@ -61,6 +62,19 @@ make -C unit_test -j4 check NDIM=1 CPPFLAGS=-DHD_NCOMP=10 \
 
 将 `NDIM` 和构建目录中的 `ndim1` 改为 2 或 3 可检查多维普通 profile；
 MESA 网格构建只在 1D 下执行。
+
+## EoS 与辐射通量
+
+四种 EoS 的转换、声速、隐式加热和辐射 exact 回归使用 H I/H II 两个组分：
+
+```bash
+make -C unit_test -j4 check NDIM=2 CPPFLAGS=-DHD_NCOMP=2 \
+  BUILD_DIR="$PWD/unit_test/build/ndim2_eos" \
+  TESTS='eos cell_conversion implicit exact_eos'
+```
+
+无组分配置下 `exact_eos` 明确跳过辐射测试。可运行的 Mixed/Ionized 输运、加热算例见
+[`tests/EoS_Mixed_Ionized_1D`](../tests/EoS_Mixed_Ionized_1D/README.md)。
 
 ## 组分 profile 输入
 

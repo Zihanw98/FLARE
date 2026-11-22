@@ -6,6 +6,7 @@
 #include "hydro/timestep_CFL.h"
 #include "hydro/wave_timestep.h"
 #include "time/integrator.h"
+#include "microphysics/eos/eos.h"
 #include "user/user_api.h"
 #include <algorithm>
 #include <cassert>
@@ -213,6 +214,7 @@ void integration_tests()
         shock.cells[f] = hd_core::Cell(idx[0] <= shock.nghost[0]
             ? state(1000., 1000.) : state(1., 0.01), gamma_gas);
     }
+    hd_microphysics::refresh_thermodynamics(shock);
     const auto before = shock.cells;
     const double old_estimate = hydro::compute_cfl_dt(shock);
     hydro::compute_hydro_rhs(shock, hydro::SpatialScheme::Godunov, exact, rhs);

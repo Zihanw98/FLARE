@@ -1,0 +1,27 @@
+# CGS units. Composition is frozen; no Saha in these regression cases.
+equation_of_state = Ionized
+composition_activate_file = composition_ionized.txt
+nxa = 64
+nxg = 2
+x_lower = 0
+x_upper = 100000000
+gamma = 1.6666666666666667
+boundary_x_lower = periodic
+boundary_x_upper = periodic
+t_end = 200
+cfl = 0.4
+maxsteps = 20000
+riemann_solver = exact
+riemann_tolerance = 1e-10
+riemann_max_iterations = 200
+spatial_scheme = godunov
+reconstructor = PCM
+time_integrator = rk2
+lts_max_levels = 3
+dt_implicit = 0.04
+implicit_tolerance = 1e-10
+constant_heating_enabled = false
+heating_rate = 0
+output_step_every = 20
+output_directory = output_ionized_contact
+output_suffix = ionized_contact

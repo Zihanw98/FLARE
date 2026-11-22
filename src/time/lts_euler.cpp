@@ -336,7 +336,7 @@ double LTSEulerStep::source_change_limit(
                 const double sound_speed = cell.get_sound_speed();
                 for (int d = 0; d < hd_core::NDIM; ++d)
                     scale[1 + d] = rho * (std::abs(primitive[hd_core::VEL(d)]) + sound_speed);
-                scale[1 + hd_core::NDIM] = primitive[hd_core::PRE] / (cell.gamma - 1.0);
+                scale[1 + hd_core::NDIM] = cell.U.internal_energy();
             }
         }
 

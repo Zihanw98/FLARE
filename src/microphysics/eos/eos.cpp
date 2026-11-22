@@ -1,4 +1,5 @@
 #include "eos.h"
+#include "nuclear.h"
 #include "core/cell.h"
 #include "core/mesh.h"
 #include "species.h"
@@ -6,6 +7,7 @@
 #include "utils/utils.h"
 #include "physcon/constants.h"
 #include "hdmath.h"
+#include <cmath>
 #include <stdexcept>
 
 namespace hd_microphysics
@@ -30,7 +32,6 @@ namespace
             pressure = pre;
             return;
         }
-        hd_microphysics::evaluate_cell_density(cell);
 
         if(model==Equation_of_State::IdealGas_Mixed)
         {
@@ -99,7 +100,6 @@ namespace
             cell.U[hd_core::ENERGY] = internal_energy + kinetic;
             return;
         }
-        hd_microphysics::evaluate_cell_density(cell);
         if(model==Equation_of_State::IdealGas_Mixed)
         {
             const auto gamma = cell.gamma;
@@ -186,7 +186,6 @@ namespace
             cell.temperature = temperature;
             return;
         }
-        hd_microphysics::evaluate_cell_density(cell);
         if(model == Equation_of_State::IdealGas_Mixed)
         {
             const auto gamma = cell.gamma;
@@ -211,6 +210,8 @@ namespace
             }
             ionization_energy *= physcon::eV;
             const auto thermal_energy = internal_energy - ionization_energy;
+            if (!std::isfinite(thermal_energy) || thermal_energy <= 0.0)
+                throw std::invalid_argument("EoS RhoE requires internal energy > ionization energy");
             const auto pre = thermal_energy * (gamma - 1);
             pressure = pre;
             const auto temperature = pre * mu / (rho * physcon::R_g); 
@@ -235,10 +236,10 @@ namespace
             }
             ionization_energy *= physcon::eV;
             const auto thermal_energy = internal_energy - ionization_energy;
+            if (!std::isfinite(thermal_energy) || thermal_energy <= 0.0)
+                throw std::invalid_argument("EoS RhoE requires internal energy > ionization energy");
             const double T0 = std::min(thermal_energy/b,std::pow(thermal_energy/physcon::a_Rad,0.25));
-            //U = rho / mu * R_g * T + a T^4
-            //f = rho/mu * R_g * T + a T^4 - U
-            //df = rho/mu * R_g + 4 a T^3 
+            // u - u_ion = b*T + a*T^4; b = rho*R_g/(mu*(gamma-1)).
             auto f = [=](double T){
                 return (b * T + physcon::a_Rad * std::pow(T,4) - thermal_energy)/thermal_energy;
             };
@@ -266,24 +267,53 @@ void evaluate_eos(hd_core::Cell& cell, EoSInput input,
         case Equation_of_State::IdealGas_Mixed:
         case Equation_of_State::Ionized:
         case Equation_of_State::Ionized_Radiative:
+        case Equation_of_State::Nuclear:
             break;
         default:
             throw std::invalid_argument("Invalid equation of state enum");
     }
 
-    switch (input)
+    if (input != EoSInput::RhoT && input != EoSInput::RhoP && input != EoSInput::RhoE)
+        throw std::invalid_argument("Invalid EoS input enum");
+
+    // Conserved validation only checks arithmetic; thermodynamic admissibility
+    // belongs here. Vacuum is handled by the Cell/refresh entry points.
+    cell.U.validate();
+    if (cell.U[hd_core::RHO] <= 0.0)
+        throw std::invalid_argument("EoS requires finite positive density");
+    if (!std::isfinite(cell.gamma) || cell.gamma <= 1.0)
+        throw std::invalid_argument("EoS requires finite gamma > 1");
+    const bool nuclear = model == Equation_of_State::Nuclear;
+    if (input == EoSInput::RhoT && (!std::isfinite(cell.temperature)
+        || (nuclear ? cell.temperature < 0.0 : cell.temperature <= 0.0)))
+        throw std::invalid_argument("EoS RhoT requires finite positive temperature");
+    if (input == EoSInput::RhoP && (!std::isfinite(pressure) || pressure <= 0.0))
+        throw std::invalid_argument("EoS RhoP requires finite positive pressure");
+
+    if (model != Equation_of_State::IdealGas_Default && !nuclear)
+        evaluate_cell_density(cell);
+    if (!std::isfinite(cell.mean_molecular_weight) || cell.mean_molecular_weight <= 0.0)
+        throw std::invalid_argument("EoS requires finite positive mean molecular weight");
+
+    if (nuclear)
+        evaluate_nuclear_eos(cell, input, pressure);
+    else switch (input)
     {
         case EoSInput::RhoT:
             evaluate_eos_rho_temperature(cell, model, pressure);
-            return;
+            break;
         case EoSInput::RhoP:
             evaluate_eos_rho_pressure(cell, model, pressure);
-            return;
+            break;
         case EoSInput::RhoE:
             evaluate_eos_rho_internal_energy(cell, model, pressure);
-            return;
+            break;
     }
-    throw std::invalid_argument("Invalid EoS input enum");
+    if (!std::isfinite(cell.temperature)
+        || (nuclear ? cell.temperature < 0.0 : cell.temperature <= 0.0) ||
+        !std::isfinite(pressure) || pressure <= 0.0)
+        throw std::invalid_argument("EoS produced nonfinite or nonpositive temperature/pressure");
+    cell.U.validate();
 }
 
 void refresh_thermodynamics(hd_core::Cell& cell, Equation_of_State model)

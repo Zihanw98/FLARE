@@ -17,9 +17,9 @@ namespace hydro
     enum class ExactPressureMethod { SafeguardedNewton, Bisection };
     /**
      * @brief Riemann solver for the configured EoS, with gas/vacuum interfaces.
-     * @note Default/Mixed/Ionized retain analytic gamma-law wave relations.
-     * Ionized_Radiative uses numerical Hugoniot and isentropic wave relations
-     * for a single gas/radiation temperature. X, mu and each side's gas gamma
+     * @note Default/Mixed/Ionized retain the original analytic wave/sampling branches.
+     * Ionized_Radiative uses Hugoniot for shocks and RK4 integration for
+     * rarefactions, assuming a single gas/radiation temperature. X, mu and each side's gas gamma
      * are frozen across its waves; Saha and radiation transport are not solved.
      * Constant specific ionization energy cancels from the wave relations and
      * is restored by the existing EoS conversion when building the energy flux.

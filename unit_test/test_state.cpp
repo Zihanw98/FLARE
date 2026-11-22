@@ -18,13 +18,13 @@ int main()
             speed_squared += v * v;
         }
         w.update_internal_energy(gamma);
-        const auto u = w.to_Conserved(gamma);
+        const auto u = w.to_Conserved_Default(gamma);
         CHECK(hd_core::INTERNAL_ENERGY + 1 == hd_core::NHYDRO);
         CHECK(hd_core::COMP_BEGIN == hd_core::NHYDRO);
         CHECK(near(u[hd_core::INTERNAL_ENERGY], 7.5));
         CHECK(u[hd_core::RHO] == 2.0);
         CHECK(near(u[hd_core::ENERGY], 7.5 + speed_squared));
-        const auto roundtrip = u.to_Primtivies(gamma);
+        const auto roundtrip = u.to_Primitives_Default(gamma);
         for (int k = 0; k < hd_core::NVAR; ++k) CHECK(near(roundtrip[k], w[k]));
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
@@ -59,7 +59,7 @@ int main()
         CHECK(near((tiny / 1e-310)[0], 1.0));
         hd_core::Primitives vacuum{};
         vacuum.validate(gamma);
-        CHECK(vacuum.to_Conserved(gamma).data == hd_core::Conserved{}.data);
+        CHECK(vacuum.to_Conserved_Default(gamma).data == hd_core::Conserved{}.data);
         for (double f : hydro::physical_flux(vacuum, 0, gamma).data) CHECK(f == 0.0);
 
         auto invalid = w;
@@ -77,7 +77,7 @@ int main()
         bad_energy.validate(); // E-K=0 is recoverable from independent internal energy.
         bad_energy[hd_core::INTERNAL_ENERGY] = 0.0;
         bad_energy.validate(); // A finite state need not be admissible for the ideal-gas EoS.
-        expect_throw<std::invalid_argument>([&] { bad_energy.to_Primtivies(gamma); });
+        expect_throw<std::invalid_argument>([&] { bad_energy.to_Primitives_Default(gamma); });
 
         // Generic validation is read-only and does not choose an energy zero point.
         hd_core::Conserved shifted{};
@@ -120,12 +120,12 @@ int main()
         cold[hd_core::VEL(0)] = 1.e8;
         cold[hd_core::PRE] = 1.e-8;
         hd_core::Cell cell(cold, gamma);
-        CHECK(near(cell.U.to_Primtivies(gamma)[hd_core::PRE], 1.e-8, 1.e-14));
+        CHECK(near(cell.Get_Primitives()[hd_core::PRE], 1.e-8, 1.e-14));
         cell.U[hd_core::ENERGY] = std::nextafter(cell.U[hd_core::ENERGY], 0.0);
         const double energy_before = cell.U[hd_core::ENERGY];
         cell.synchronize_dual_energy();
         CHECK(cell.dual_energy_correction == cell.U[hd_core::ENERGY] - energy_before);
-        CHECK(near(cell.U.to_Primtivies(gamma)[hd_core::PRE], 1.e-8, 1.e-14));
+        CHECK(near(cell.Get_Primitives()[hd_core::PRE], 1.e-8, 1.e-14));
         cell.U[hd_core::INTERNAL_ENERGY] = -1.0;
         cell.U.validate(); // Thermodynamic rejection belongs to the EoS.
         hd_core::Cell hot(w, gamma);

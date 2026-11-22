@@ -80,7 +80,8 @@ namespace hd_core
          * @pre For non-vacuum cells, temperature and mean_molecular_weight must
          * already match the current U and model (e.g. after RhoE on this Cell).
          * @note Does not evaluate EoS, recompute number densities, or modify any
-         * members. Pressure includes radiation only for Ionized_Radiative;
+         * members. Nuclear adds cold pressure to the thermal contribution;
+         * radiation is included only for Ionized_Radiative;
          * specific internal energy still uses U's dual-energy selection.
          * User-defined conserved fields are copied unchanged. Cache freshness
          * is the caller's responsibility and is not checked here.
@@ -92,7 +93,8 @@ namespace hd_core
          * @brief Return pressure from rho and the stored temperature and molecular weight.
          * @pre For non-vacuum cells, temperature and mean_molecular_weight must
          * already match the current U and model; freshness is not checked here.
-         * @note Adds radiation pressure for Ionized_Radiative. Returns zero for
+         * @note Adds radiation pressure for Ionized_Radiative, cold pressure for Nuclear.
+         * Nuclear permits thermal T=0. Returns zero for
          * vacuum. Does not evaluate EoS, scan composition, or modify any members.
          */
         double Get_Pressure_From_Updated_State(

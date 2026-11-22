@@ -52,7 +52,9 @@ namespace hd_time
                 continue;
 
             next_cells[flat].U += dt * rhs[flat];
-            next_cells[flat].U.validate();
+            // Reject thermodynamically invalid candidates before committing U.
+            // Generic Conserved validation alone permits a finite negative energy.
+            hd_microphysics::refresh_thermodynamics(next_cells[flat]);
         }
         mesh.cells.swap(next_cells);
     }

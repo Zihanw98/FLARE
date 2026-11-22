@@ -22,6 +22,7 @@ namespace io
      * @pre Geometry and all states being output are valid; ghost states have already been filled.
      * @note Always prints active-cell density/pressure ranges and integrated mass/energy. Writes snapshots at steps 0 and 1, interval multiples, and the end time or step limit.
      * @note CSV includes ghost cells in storage order, cell-center coordinates, an is_ghost flag, and three initial metadata lines for step/time/dt. Missing axes and velocities are zero.
+     * @note comp_k are mass fractions; mean_molecular_weight is dimensionless and temperature is in code temperature units (multiply by unit_temperature for kelvin). T and mu are recovered on a copy of the current conserved state; both are written as zero for vacuum.
      * @throws std::invalid_argument If output settings, time, geometry, or a state are invalid.
      * @throws std::runtime_error If the CSV file cannot be opened or written.
      * @throws std::filesystem::filesystem_error If the output directory cannot be created.

@@ -10,7 +10,7 @@ namespace hydro
 {
     /**
      * @brief Create a Riemann solver by its configured name.
-     * @param[in] name Case-sensitive solver name; currently only exact is supported.
+     * @param[in] name Case-sensitive solver name: exact, exact_bisection, or hll.
      * @param[in] tolerance Finite positive relative pressure tolerance.
      * @param[in] max_iterations Positive maximum number of pressure iterations.
      * @return Exclusive ownership of the newly created solver.

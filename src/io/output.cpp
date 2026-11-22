@@ -8,6 +8,7 @@
 #include "user/user_api.h"
 #include "physcon/unit.h"
 #include "microphysics/composition/species.h"
+#include "microphysics/eos/eos.h"
 #include "utils/performance.h"
 #include <algorithm>
 #include <array>
@@ -84,7 +85,8 @@ namespace io
                 csv << ",comp_" << k;
             for (int k = 0; k < hd_core::NUSER; ++k)
                 csv << ",user_" << k;
-            csv << ",is_ghost,internal_energy,total_energy,dual_energy_correction\n";
+            csv << ",is_ghost,internal_energy,total_energy,dual_energy_correction"
+                << ",mean_molecular_weight,temperature\n";
         }
 
         double rho_min = std::numeric_limits<double>::infinity();
@@ -107,8 +109,11 @@ namespace io
                 continue;
             const auto& cell = mesh.cells[flat];
             const auto volume = mesh.volume_cell[flat];
-            cell.U.validate();
-            const auto W = cell.Get_Primitives();
+            // Recover all reported thermodynamic quantities from the same U.
+            // Output must not refresh or otherwise modify the simulation cell.
+            auto state = cell;
+            hd_microphysics::refresh_thermodynamics(state);
+            const auto W = state.Get_Primitives_From_Updated_State();
             if (!is_ghost)
             {
                 ++active_cells;
@@ -139,7 +144,10 @@ namespace io
                 for (int k = 0; k < hd_core::NUSER; ++k)
                     csv << ',' << W[hd_core::CONUSR(k)];
                 csv << ',' << (is_ghost ? 1 : 0) << ',' << cell.U[hd_core::INTERNAL_ENERGY]
-                    << ',' << cell.U[hd_core::ENERGY] << ',' << cell.dual_energy_correction << '\n';
+                    << ',' << cell.U[hd_core::ENERGY] << ',' << cell.dual_energy_correction
+                    // T and mu are undefined in vacuum; zero is an output sentinel.
+                    << ',' << (W[hd_core::RHO] > 0.0 ? state.mean_molecular_weight : 0.0)
+                    << ',' << (W[hd_core::RHO] > 0.0 ? state.temperature : 0.0) << '\n';
             }
         }
         if (write_snapshot)

@@ -24,6 +24,9 @@ because physical coordinates are not stored in those files.
 --plot spherical: interpret 1D CSV x as radius and vx as radial velocity;
 show spherical symmetry slices and radial profiles. A nonzero inner radius
 is shown as a masked cavity. GIF, MP4 and HTML use the same radial mapping.
+--radial-grid reads exact active shell edges from a CSV with r_left,r_right
+columns in code units, in the same radial order as the snapshot. Use this for
+stretched meshes whose edges cannot be inferred accurately from cell centers.
 --rmax sets the displayed outer radius for spherical maps and profiles, in cm
 with --cgs, otherwise in code length units. Maps are sampled at this radius
 range; color scales and profile y limits still use all cells and selected frames.
@@ -33,6 +36,8 @@ These options are mutually exclusive. A dashed line marks the cut on each map.
 --composition adds every comp_<index> mass fraction, labeled by the CSV
 comp_<index>_name metadata (for example HI, HII, He_I). These dimensionless
 fields use a fixed linear [0,1] scale, including all-zero species, with --cgs/--log too.
+--thermodynamics adds mean_molecular_weight and temperature. With --cgs,
+temperature is converted to kelvin; molecular weight remains dimensionless.
 --streamlines overlays instantaneous velocity streamlines on 2D rho/pressure
 maps, including HTML output. Nonuniform grids are interpolated for tracing.
 Scales are fixed over selected frames; ghost cells are excluded. Stride counts
@@ -79,6 +84,7 @@ class Snapshot:
     units: tuple = ()  # Base-unit values in g, cm, s, K; None for missing entries.
     cgs: bool = False
     metadata: dict = dataclass_field(default_factory=dict)
+    radial_edges: object = None  # Optional exact shell edges in displayed length units.
 
 
 def signature(path):
@@ -108,7 +114,7 @@ def find_files(directory, prefix, stride):
     return selected
 
 
-def read_snapshot(path, step, cgs=False, fields=None, composition=False):
+def read_snapshot(path, step, cgs=False, fields=None, composition=False, thermodynamics=False):
     """Read standard fields, or caller-selected (column, label, colormap) tuples."""
     before = signature(path)
     metadata = {}
@@ -176,7 +182,8 @@ def read_snapshot(path, step, cgs=False, fields=None, composition=False):
         try:
             factors = {"x": length, "y": length, "z": length,
                        "rho": mass / length**3, "p": mass / (length * duration**2),
-                       "vx": length / duration, "vy": length / duration, "vz": length / duration}
+                       "vx": length / duration, "vy": length / duration, "vz": length / duration,
+                       "temperature": _temperature}
             for key in ("internal_energy", "total_energy", "dual_energy_correction"):
                 factors[key] = factors["p"]  # Energy densities, not specific energies.
             if any(not np.isfinite(value) or value <= 0 for value in factors.values()):
@@ -209,6 +216,9 @@ def read_snapshot(path, step, cgs=False, fields=None, composition=False):
                 raise ValueError(f"--composition requires comp_<index> columns: {path}")
             fields += tuple((key, f"{metadata.get(key + '_name', key)} mass fraction", "viridis")
                             for key in components)
+        if thermodynamics:
+            fields += (("mean_molecular_weight", "mean molecular weight", "viridis"),
+                       ("temperature", "temperature", "inferno"))
     fields = tuple(field for field in fields
                    if len(y) > 1 or field[0] != "vy")
     required = ["x", *[field[0] for field in fields]]
@@ -245,17 +255,39 @@ def edges(centers):
                  centers[-1] + (centers[-1] - centers[-2]) / 2]
 
 
+def read_radial_grid(path, snapshot):
+    """Read fixed active shell geometry, checking it against snapshot centers."""
+    before = signature(path)
+    table = np.genfromtxt(path, names=True, delimiter=",", ndmin=1)
+    if signature(path) != before:
+        raise ValueError("Radial grid changed while reading; rerun after output finishes")
+    if not {"r_left", "r_right"}.issubset(table.dtype.names or ()):
+        raise ValueError("--radial-grid requires CSV columns r_left,r_right")
+    left, right = table["r_left"], table["r_right"]
+    if snapshot.cgs:
+        left, right = left * snapshot.units[1], right * snapshot.units[1]
+    if (len(snapshot.y) != 1 or len(left) != len(snapshot.x)
+        or not np.all(np.isfinite(left)) or not np.all(np.isfinite(right))
+        or np.any(left < 0) or np.any(right <= left)
+        or not np.allclose(right[:-1], left[1:], rtol=1e-12, atol=0)):
+        raise ValueError("--radial-grid requires one contiguous positive-width shell per active cell")
+    if not np.allclose(0.5*left+0.5*right, snapshot.x, rtol=1e-12, atol=0):
+        raise ValueError("--radial-grid shell centers do not match the snapshot")
+    return np.r_[left, right[-1]]
+
+
 def spherical_projection(snapshot, pixels=241, rmax=None):
     """Map a 1D radial grid onto a symmetry plane without interpolating states.
 
-    CSV stores centers, so shell edges are inferred as in the Cartesian plots.
+    Use supplied shell edges; otherwise infer them as in the Cartesian plots.
     The returned mask excludes both the exterior and any inner cavity.
     """
     if len(snapshot.y) != 1:
         raise ValueError("--plot spherical requires a 1D radial snapshot")
     if snapshot.xlabel != "x":
         raise ValueError("--plot spherical requires CSV physical radii, not legacy cell indices")
-    radial_edges = edges(snapshot.x)
+    radial_edges = (snapshot.radial_edges.copy() if snapshot.radial_edges is not None
+                    else edges(snapshot.x))
     tolerance = 1e-12 * max(abs(radial_edges[-1]), 1.0)
     if snapshot.x[0] < 0 or radial_edges[0] < -tolerance:
         raise ValueError("--plot spherical requires nonnegative active radii and shell edges")
@@ -278,7 +310,7 @@ def spherical_values(values, projection):
 
 def display_label(name, label, spherical, cgs=False):
     label = "radial velocity" if spherical and name == "vx" else label
-    unit = {"rho": "g/cm^3", "vx": "cm/s", "vy": "cm/s", "p": "dyn/cm^2"}
+    unit = {"rho": "g/cm^3", "vx": "cm/s", "vy": "cm/s", "p": "dyn/cm^2", "temperature": "K"}
     return f"{label} [{unit[name]}]" if cgs and name in unit else label
 
 
@@ -295,13 +327,14 @@ def logarithmic_limits(lower, upper):
     return lower, upper
 
 
-def prepare(files, cgs=False, log=False, composition=False):
+def prepare(files, cgs=False, log=False, composition=False, thermodynamics=False):
     reference = None
     records = []
     previous_time = -np.inf
     for i, (step, path) in enumerate(files):
         stamp = signature(path)
-        snapshot = read_snapshot(path, step, cgs=cgs, composition=composition)
+        snapshot = read_snapshot(path, step, cgs=cgs, composition=composition,
+                                 thermodynamics=thermodynamics)
         if log:
             for k, (name, _, _) in enumerate(snapshot.fields):
                 if name in ("rho", "p") and np.any(snapshot.values[k] <= 0):
@@ -399,7 +432,8 @@ def animate(reference, records, lower, upper, args):
     is_2d, along_y, fixed_axis, cut_index, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
     projection = spherical_projection(reference, rmax=args.rmax) if spherical else None
-    profile_edges = edges(profile_axis)
+    profile_edges = (reference.radial_edges.copy() if spherical and reference.radial_edges is not None
+                     else edges(profile_axis))
     if spherical and args.rmax is not None:
         profile_edges[-1] = args.rmax
 
@@ -478,7 +512,8 @@ def animate(reference, records, lower, upper, args):
         if signature(path) != stamp:
             raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
         snapshot = read_snapshot(path, step, cgs=reference.cgs,
-                                 composition=any(name.startswith("comp_") for name, _, _ in reference.fields))
+                                 composition=any(name.startswith("comp_") for name, _, _ in reference.fields),
+                                 thermodynamics=any(name == "temperature" for name, _, _ in reference.fields))
         check_grid(snapshot, reference)
         if signature(path) != stamp:
             raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
@@ -661,7 +696,8 @@ def save_plotly(reference, records, lower, upper, args):
                         subplot_titles=titles)
     xedges = edges(projection[0]).tolist() if spherical else edges(reference.x).tolist()
     yedges = xedges if spherical else (edges(reference.y).tolist() if is_2d else [0, 0.5, 1])
-    profile_edges = edges(profile_axis)
+    profile_edges = (reference.radial_edges.copy() if spherical and reference.radial_edges is not None
+                     else edges(profile_axis))
     if spherical and args.rmax is not None:
         profile_edges[-1] = args.rmax
     for k, (name, label, cmap) in enumerate(reference.fields):
@@ -766,7 +802,8 @@ def save_plotly(reference, records, lower, upper, args):
             if signature(path) != stamp:
                 raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
             snapshot = read_snapshot(path, step, cgs=reference.cgs,
-                                     composition=any(name.startswith("comp_") for name, _, _ in reference.fields))
+                                     composition=any(name.startswith("comp_") for name, _, _ in reference.fields),
+                                     thermodynamics=any(name == "temperature" for name, _, _ in reference.fields))
             check_grid(snapshot, reference)
             if signature(path) != stamp:
                 raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
@@ -799,10 +836,14 @@ def main():
                         help="Map style: Cartesian strips/maps (default), or 1D spherical symmetry slices")
     parser.add_argument("--rmax", type=float,
                         help="Spherical map/profile outer radius (cm with --cgs, otherwise code units)")
+    parser.add_argument("--radial-grid", type=Path,
+                        help="Exact active shell CSV (r_left,r_right in code units); requires --plot spherical")
     parser.add_argument("--cgs", action="store_true",
                         help="Convert plots to CGS using CSV unit metadata; slice coordinates are then in cm")
     parser.add_argument("--composition", action="store_true",
                         help="Add all species mass fractions, labeled from CSV metadata, on a fixed [0,1] scale")
+    parser.add_argument("--thermodynamics", action="store_true",
+                        help="Add mean molecular weight and temperature (kelvin with --cgs)")
     parser.add_argument("--log", action="store_true",
                         help="Logarithmic color scales and profile y axes for positive rho/pressure; velocity stays linear")
     parser.add_argument("--plotly", action="store_true", help="Save an offline interactive HTML viewer")
@@ -822,6 +863,8 @@ def main():
             parser.error("--rmax requires --plot spherical")
         if not np.isfinite(args.rmax) or args.rmax <= 0:
             parser.error("--rmax must be finite and positive")
+    if args.radial_grid is not None and args.plot != "spherical":
+        parser.error("--radial-grid requires --plot spherical")
     if not args.prefix.rstrip("_") or Path(args.prefix).name != args.prefix:
         parser.error("prefix must be a filename prefix without directory components")
     if any(value is not None and not np.isfinite(value) for value in (args.slice_x, args.slice_y)):
@@ -833,7 +876,10 @@ def main():
     try:
         files = find_files(args.directory, args.prefix, args.stride)
         reference, records, lower, upper = prepare(files, cgs=args.cgs, log=args.log,
-                                                  composition=args.composition)
+                                                  composition=args.composition,
+                                                  thermodynamics=args.thermodynamics)
+        if args.radial_grid is not None:
+            reference.radial_edges = read_radial_grid(args.radial_grid, reference)
         if args.plotly or (args.output and args.output.suffix.lower() == ".html"):
             save_plotly(reference, records, lower, upper, args)
         else:

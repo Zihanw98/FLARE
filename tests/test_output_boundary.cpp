@@ -5,6 +5,7 @@
 #include "io/output.h"
 #include "user/user_api.h"
 #include "physcon/unit.h"
+#include "physcon/constants.h"
 #include "microphysics/composition/species.h"
 #include "microphysics/eos/eos.h"
 #include <algorithm>
@@ -245,7 +246,7 @@ namespace
         std::string header = "x,y,z,gamma,rho,vx,vy,vz,p";
         for (int k = 0; k < hd_core::NCOMP; ++k) header += ",comp_" + std::to_string(k);
         for (int k = 0; k < hd_core::NUSER; ++k) header += ",user_" + std::to_string(k);
-        header += ",is_ghost,internal_energy,total_energy,dual_energy_correction";
+        header += ",is_ghost,internal_energy,total_energy,dual_energy_correction,mean_molecular_weight,temperature";
         assert(std::getline(file, line));
         assert(line == header);
         std::size_t f = 0;
@@ -256,7 +257,7 @@ namespace
             std::vector<double> fields;
             std::string field;
             while (std::getline(row, field, ',')) fields.push_back(std::stod(field));
-            assert(fields.size() == 13 + hd_core::NCOMP + hd_core::NUSER);
+            assert(fields.size() == 15 + hd_core::NCOMP + hd_core::NUSER);
             const auto index = mesh.coordinates(f);
             const auto& cell = mesh.cells[f];
             const auto W = cell.Get_Primitives();
@@ -277,6 +278,18 @@ namespace
             assert(fields[10+extra] == cell.U[hd_core::INTERNAL_ENERGY]);
             assert(fields[11+extra] == cell.U[hd_core::ENERGY]);
             assert(fields[12+extra] == cell.dual_energy_correction);
+            double mu_inv = 0.0;
+            for (int k = 0; k < hd_core::NCOMP; ++k)
+                mu_inv += W[hd_core::COMP(k)] * (1 + species[k].charge) / species[k].A;
+            if (W[hd_core::RHO] > 0.0)
+            {
+                const double mu = hd_core::NCOMP > 0 ? 1.0 / mu_inv : cell.mean_molecular_weight;
+                assert(near(fields[13+extra], mu));
+                const double temperature = W[hd_core::PRE] * mu / (W[hd_core::RHO] * physcon::R_g);
+                assert(std::abs(fields[14+extra] / temperature - 1.0) < 1e-11);
+            }
+            else
+                assert(fields[13+extra] == 0.0 && fields[14+extra] == 0.0);
             ++f;
         }
         assert(f == mesh.cells.size());
@@ -292,6 +305,12 @@ namespace
         cfg.t_end = 0.8;
         hd_user::UserHooks hooks;
         hooks.useroutput = user_output;
+        // A stale cache must neither leak into the CSV nor be overwritten by output.
+        for (auto& cell : mesh.cells)
+        {
+            cell.temperature = -123.0;
+            if constexpr (hd_core::NCOMP > 0) cell.mean_molecular_weight = -456.0;
+        }
         const auto before = mesh.cells;
         std::ostringstream log;
         auto* previous = std::cout.rdbuf(log.rdbuf());
@@ -331,6 +350,8 @@ namespace
         {
             assert(mesh.cells[f].U.data == before[f].U.data);
             assert(mesh.cells[f].gamma == before[f].gamma);
+            assert(mesh.cells[f].temperature == before[f].temperature);
+            assert(mesh.cells[f].mean_molecular_weight == before[f].mean_molecular_weight);
         }
         cfg.t_end = 10.0;
         cfg.maxsteps = 5;
@@ -341,6 +362,10 @@ namespace
         const double small_dt = 1.2345678901234567e-12;
         io::Output(mesh, cfg, {}, large_step, precise_time, small_dt);
         check_csv(snapshot(cfg, large_step), mesh, large_step, precise_time, small_dt);
+        auto vacuum = mesh;
+        for (auto& cell : vacuum.cells) cell.U = hd_core::Conserved{};
+        io::Output(vacuum, cfg, {}, 0, 0.0, 0.0);
+        check_csv(snapshot(cfg, 0), vacuum, 0, 0.0, 0.0);
         cfg.output_step_every = 0;
         expect_failure([&] { io::Output(mesh, cfg, hooks, 6, 0.6, 0.1); });
         cfg.output_step_every = 3;

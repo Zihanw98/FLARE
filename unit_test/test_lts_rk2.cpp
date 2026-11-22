@@ -113,7 +113,7 @@ public:
         if (calls == fail_at) throw std::runtime_error("injected flux failure");
         face_velocity = 0.0;
         face_speed = jump_after >= 0 && calls > jump_after ? 4.0 : 1.0;
-        return zero_flux ? Conserved{} : L.to_Conserved(gamma);
+        return zero_flux ? Conserved{} : L.to_Conserved_Default(gamma);
     }
     Conserved flux_with_pressure_hint(const hd_core::Primitives& L, const hd_core::Primitives& R,
                    int d, double gL, double gR, double& hint, double& face_speed, double& face_velocity) const override
@@ -363,6 +363,16 @@ void source_cache_stage_tests()
     config::SimulationConfig cfg; cfg.cfl = 0.2; cfg.lts_max_levels = 5;
     auto mesh = make_mesh(false);
     const auto before = mesh;
+    // Momentum limits must use a speed, not pressure. Make the source bound
+    // tighter than CFL, with P=1 while c=sqrt(1.4).
+    const hd_source::SourceList force{{"momentum rate", hd_source::SourceKind::General,
+        [](const MeshBlock& m, double, const config::SimulationConfig&,
+           std::vector<Conserved>& rhs, double&) {
+            for (auto flat : m.active_to_storage) rhs[flat][hd_core::MOMDEN(0)] += 1e4;
+        }}};
+    CHECK(near(step(mesh, solver, cfg, 0.0, 1.0, force),
+               0.1 * (0.2 + std::sqrt(1.4)) / 1e4, 1e-14));
+    mesh = before;
     auto energy_source = [](double rate) -> hd_source::SourceTerm {
         return {"constant energy rate", hd_source::SourceKind::Thermal,
             [rate](const MeshBlock& m, double, const config::SimulationConfig&,

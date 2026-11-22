@@ -74,6 +74,8 @@ namespace hd_time
                     + 0.5 * (stage.cells[flat].U + dt * rhs[flat]);
             }
             candidate.synchronize_dual_energy();
+            for (auto flat : candidate.active_to_storage)
+                hd_microphysics::refresh_thermodynamics(candidate.cells[flat]);
             return candidate;
         }
     }
@@ -127,6 +129,11 @@ namespace hd_time
                 dt *= 0.5;
                 continue;
             }
+            catch (const std::runtime_error&) {
+                performance::count(performance::Counter::RK2Rejected);
+                dt *= 0.5;
+                continue;
+            }
             boundary::FillBoundary(mesh_trial,time+dt,hooks);
             try {
                 hd_microphysics::refresh_thermodynamics(mesh_trial);
@@ -175,6 +182,11 @@ namespace hd_time
                 return dt;
             }
             catch (const std::invalid_argument&) {
+                performance::count(performance::Counter::RK2Rejected);
+                dt *= 0.5;
+                continue;
+            }
+            catch (const std::runtime_error&) {
                 performance::count(performance::Counter::RK2Rejected);
                 dt *= 0.5;
                 continue;

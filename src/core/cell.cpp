@@ -1,7 +1,9 @@
 #include "cell.h"
 #include "microphysics/composition/species.h"
 #include "microphysics/eos/eos.h"
+#include "microphysics/eos/nuclear.h"
 #include "physcon/constants.h"
+#include "physcon/unit.h"
 #include <cmath>
 #include <stdexcept>
 
@@ -66,16 +68,24 @@ namespace hd_core
             case Equation_of_State::IdealGas_Mixed:
             case Equation_of_State::Ionized:
             case Equation_of_State::Ionized_Radiative:
+            case Equation_of_State::Nuclear:
                 break;
             default:
                 throw std::invalid_argument("Invalid equation of state enum");
         }
-        if (!std::isfinite(temperature) || temperature <= 0.0
+        const bool nuclear = model == Equation_of_State::Nuclear;
+        if (!std::isfinite(temperature) || (nuclear ? temperature < 0.0 : temperature <= 0.0)
             || !std::isfinite(mean_molecular_weight) || mean_molecular_weight <= 0.0)
             throw std::invalid_argument(
                 "Get_Pressure_From_Updated_State requires finite positive T and mu");
 
         double pressure = rho / mean_molecular_weight * physcon::R_g * temperature;
+        if (nuclear)
+        {
+            double cold_pressure, cold_energy;
+            hd_microphysics::nuclear_cold_state(rho, gamma, cold_pressure, cold_energy);
+            pressure += cold_pressure;
+        }
         if (model == Equation_of_State::Ionized_Radiative)
         {
             const double T2 = temperature * temperature;
@@ -145,20 +155,39 @@ namespace hd_core
 
     double Cell::get_sound_speed(hd_microphysics::Equation_of_State model) const
     {
+        const double pressure = Get_Pressure_From_Updated_State(model);
+        if (U[RHO] == 0.0) return 0.0;
+        if (!std::isfinite(gamma) || gamma <= 1.0)
+            throw std::invalid_argument("get_sound_speed requires finite gamma > 1");
+        double sound_squared;
         if(model==hd_microphysics::Equation_of_State::IdealGas_Default || model == hd_microphysics::Equation_of_State::IdealGas_Mixed || model==hd_microphysics::Equation_of_State::Ionized)
         {
-            double pressure = Get_Pressure_From_Updated_State();
-            return std::sqrt(gamma * pressure / U[hd_core::RHO]);
+            sound_squared = gamma * (pressure / U[RHO]);
         }
-        if(model==hd_microphysics::Equation_of_State::Ionized_Radiative)
+        else if(model==hd_microphysics::Equation_of_State::Ionized_Radiative)
         {
             double pressure_gas = U[hd_core::RHO] / mean_molecular_weight * physcon::R_g * temperature;
             double pressure_rad = physcon::a_Rad / 3 * std::pow(temperature,4);
-            const double A = pressure_gas + 4.0 * pressure_rad;
-            const double B = pressure_gas / (gamma - 1) + 12.0 * pressure_rad;
-            
-            return std::sqrt((pressure_gas + A* A /B )/ U[hd_core::RHO]);
+            // Normalize by total pressure to avoid squaring a dimensional pressure.
+            const double beta = pressure_gas / pressure;
+            const double rad_fraction = pressure_rad / pressure;
+            const double A = beta + 4.0 * rad_fraction;
+            const double B = beta / (gamma - 1.0) + 12.0 * rad_fraction;
+            sound_squared = (pressure / U[RHO]) * (beta + A * A / B);
         }
-        throw std::runtime_error("Haven't implemented sound speed for this EoS");
+        else if (model == hd_microphysics::Equation_of_State::Nuclear)
+        {
+            double pc, uc;
+            hd_microphysics::nuclear_cold_state(U[RHO], gamma, pc, uc);
+            const double gc = U[RHO] > hd_microphysics::nuclear_density_cgs / physcon::units.unit_density
+                ? hd_microphysics::nuclear_gamma_stiff : gamma;
+            const double pt = U[RHO] * physcon::R_g * temperature / mean_molecular_weight;
+            sound_squared = (gc * pc + hd_microphysics::nuclear_gamma_thermal * pt) / U[RHO];
+        }
+        else
+            throw std::runtime_error("Haven't implemented sound speed for this EoS");
+        if (!std::isfinite(sound_squared) || sound_squared <= 0.0)
+            throw std::invalid_argument("get_sound_speed requires finite positive sound speed squared");
+        return std::sqrt(sound_squared);
     }
 }

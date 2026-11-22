@@ -38,8 +38,8 @@ void conversions()
         auto w = state(0.01 + (rng() % 1000), 100 + (rng() % 1000));
         for (int d = 0; d < hd_core::NDIM; ++d) w[hd_core::VEL(d)] = (static_cast<int>(rng() % 100) - 50) * 0.01;
         track_allocations = true;
-        const auto u = w.to_Conserved(gamma);
-        const auto recovered = u.to_Primtivies(gamma);
+        const auto u = w.to_Conserved_Default(gamma);
+        const auto recovered = u.to_Primitives_Default(gamma);
         track_allocations = false;
         CHECK(allocations == 0);
         // Original vector formulas provide an independent byte-level reference.
@@ -157,8 +157,8 @@ void roots()
         const double speed = std::max(std::abs(l[hd_core::VEL(d)]) + cl, std::abs(r[hd_core::VEL(d)]) + cr);
         const double mass_scale = std::max(l[hd_core::RHO], r[hd_core::RHO]) * speed;
         const double momentum_scale = mass_scale * speed + std::max(l[hd_core::PRE], r[hd_core::PRE]);
-        const double energy_scale = std::max(l.to_Conserved(gl)[hd_core::ENERGY] + l[hd_core::PRE],
-            r.to_Conserved(gr)[hd_core::ENERGY] + r[hd_core::PRE]) * speed;
+        const double energy_scale = std::max(l.to_Conserved_Default(gl)[hd_core::ENERGY] + l[hd_core::PRE],
+            r.to_Conserved_Default(gr)[hd_core::ENERGY] + r[hd_core::PRE]) * speed;
         for (int k = 0; k < hd_core::NHYDRO; ++k)
         {
             const double scale = k == hd_core::RHO ? mass_scale : (k == hd_core::ENERGY || k == hd_core::INTERNAL_ENERGY) ? energy_scale : momentum_scale;

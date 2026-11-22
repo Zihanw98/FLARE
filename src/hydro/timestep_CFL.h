@@ -29,7 +29,7 @@ namespace hydro
      * @param[in] mesh Allocated mesh with valid active states and positive cell widths.
      * @param[in] cfl Finite positive dimensionless CFL coefficient.
      * @return cfl divided by the largest active-cell sum of (absolute velocity + sound speed) / cell width.
-     * @pre Geometry and active cell states are initialized.
+     * @pre Geometry is initialized; active thermodynamic caches match current U (RhoE refreshed).
      * @throws std::invalid_argument If cfl or a converted gas state is invalid.
      * @throws std::runtime_error If a rate is non-finite or no positive active-cell rate is found.
      * @note Skips vacuum cells. Unlike the wave-record overload, an all-vacuum mesh raises an error; time integrators use the face-wave rate instead.

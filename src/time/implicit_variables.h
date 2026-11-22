@@ -8,9 +8,12 @@
 
 namespace hd_implicit::detail
 {
-// Local Newton coordinates: d(log rho), dv / velocity_scale, d(log p).
-// Cold cells use a linear total-thermal-energy increment in the ENERGY slot:
-// log(p) cannot represent E-K < 0, which dual energy deliberately permits.
+// Local Newton coordinates: d(log rho), dv / velocity_scale, d(log(E-K)).
+// E-K is the non-kinetic energy density, including ionization/radiation when used.
+// Cold cells use a linear non-kinetic-energy increment in the ENERGY slot:
+// log(E-K) cannot represent E-K < 0, which dual energy deliberately permits.
+// The independent INTERNAL_ENERGY and composition coordinates remain linear;
+// EoS validation of trial states enforces a positive thermal-energy budget.
 // The equations remain conservative. Row scaling is held fixed throughout
 // each Jacobian construction, linear solve and its line search.
 class LogVariables
@@ -24,6 +27,7 @@ class LogVariables
     std::vector<CellScale> cells_;
 
 public:
+    // Both states must have thermodynamics refreshed for their current active U.
     LogVariables(const hd_core::MeshBlock& old, const hd_core::MeshBlock& trial,
                  const std::vector<std::size_t>& active)
     {
@@ -49,7 +53,7 @@ public:
                 scale.residual[hd_core::MOMDEN(d)] = rho*scale.velocity;
             scale.residual[hd_core::ENERGY] = std::max(cell.U[hd_core::ENERGY], old.cells[flat].U[hd_core::ENERGY]);
             scale.residual[hd_core::INTERNAL_ENERGY] = std::max(
-                w[hd_core::PRE]/(cell.gamma-1), previous[hd_core::PRE]/(old.cells[flat].gamma-1));
+                cell.U.internal_energy(), old.cells[flat].U.internal_energy());
             // Additional conserved fields stay linear, with a density-based
             // scale; never drop them through the hydro-only primitive conversion.
             for (int k = hd_core::NHYDRO; k < hd_core::NVAR; ++k)
@@ -86,15 +90,16 @@ public:
         const double drho = w[hd_core::RHO]*std::expm1(alpha*dq[hd_core::RHO]);
         const double rho = w[hd_core::RHO]*std::exp(alpha*dq[hd_core::RHO]);
         const bool hot = base.U.total_energy_reliable();
-        const double pressure = hot ? w[hd_core::PRE]*std::exp(alpha*dq[hd_core::PRE]) : w[hd_core::PRE];
-        if (!std::isfinite(rho) || !std::isfinite(pressure) || rho <= 0 || pressure <= 0)
+        const double internal = base.U.internal_energy();
+        const double updated_internal = hot ? internal*std::exp(alpha*dq[hd_core::ENERGY]) : internal;
+        if (!std::isfinite(rho) || !std::isfinite(updated_internal) || rho <= 0 || updated_internal <= 0)
             throw std::invalid_argument("Log implicit update overflow/underflow");
         auto result = base.U;
         result[hd_core::RHO] = rho;
         // Increment form preserves the exact base state for dq=0, avoiding
         // primitive/conserved roundtrip noise in small finite differences.
         double energy_change = hot
-            ? w[hd_core::PRE]/(base.gamma-1)*std::expm1(alpha*dq[hd_core::PRE])
+            ? internal*std::expm1(alpha*dq[hd_core::ENERGY])
             : alpha*scale.residual[hd_core::ENERGY]*dq[hd_core::ENERGY];
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
@@ -121,7 +126,7 @@ public:
         du[hd_core::RHO] = w[hd_core::RHO]*dq[hd_core::RHO];
         du[hd_core::INTERNAL_ENERGY] = scale.residual[hd_core::INTERNAL_ENERGY]*dq[hd_core::INTERNAL_ENERGY];
         du[hd_core::ENERGY] = base.U.total_energy_reliable()
-            ? w[hd_core::PRE]/(base.gamma-1)*dq[hd_core::PRE]
+            ? base.U.internal_energy()*dq[hd_core::ENERGY]
             : scale.residual[hd_core::ENERGY]*dq[hd_core::ENERGY];
         for (int d = 0; d < hd_core::NDIM; ++d)
         {
