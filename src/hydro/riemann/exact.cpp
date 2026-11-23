@@ -8,6 +8,8 @@
 #include "microphysics/eos/eos.h"
 #include "microphysics/composition/species.h"
 #include "physcon/constants.h"
+#include "microphysics/eos/nuclear.h"
+#include "physcon/unit.h"
 #include "flux.h"
 #include <algorithm>
 #include <cmath>
@@ -57,13 +59,16 @@ namespace hydro
         // iteration. Constant specific ionization energy cancels in the Hugoniot.
         struct PressureWave
         {
-            double rho0, pressure, gamma, sound_speed;
+            double rho0, p0, gamma, sound_speed;
             double shock_a, shock_b;
             double rarefaction_exponent, rarefaction_coefficient;
             Equation_of_State model;
             double gas_fraction = 1.0, radiation_fraction = 0.0;
             double energy_scale, velocity_scale, e0, inner_tolerance;
             mutable std::optional<double> vacuum_value;
+            const double rho_n = hd_microphysics::nuclear_density_cgs/physcon::units.unit_density;
+            double p_th0;
+
 
             // Solve b*t + d*t^4 = 1 with 0<t<=1, b,d<=1 and b+d>=1.
             static double scaled_temperature(double b, double d)
@@ -85,14 +90,14 @@ namespace hydro
 
             PressureWave(const hd_core::Primitives& W, double g,
                          hd_microphysics::Equation_of_State model, double tolerance)
-                : rho0(W[hd_core::RHO]), pressure(W[hd_core::PRE]), gamma(g),
-                  sound_speed(std::sqrt(g * pressure / rho0)),
+                : rho0(W[hd_core::RHO]), p0(W[hd_core::PRE]), gamma(g),
+                  sound_speed(std::sqrt(g * p0 / rho0)),
                   shock_a(2 / ((g + 1) * rho0)),
-                  shock_b((g - 1) / (g + 1) * pressure),
+                  shock_b((g - 1) / (g + 1) * p0),
                   rarefaction_exponent((g - 1) / (2 * g)),
                   rarefaction_coefficient(2 * sound_speed / (g - 1)),
                   model(model),
-                  energy_scale(pressure/rho0), velocity_scale(std::sqrt(energy_scale)),
+                  energy_scale(p0/rho0), velocity_scale(std::sqrt(energy_scale)),
                   e0(energy_scale/(g-1)),
                   inner_tolerance(std::clamp(0.01*tolerance, 5e-14, 1e-10))
             {
@@ -102,6 +107,17 @@ namespace hydro
                     || model == Equation_of_State::IdealGas_Mixed
                     || model == Equation_of_State::Ionized)
                     return;
+                if(model == Equation_of_State::Nuclear)
+                {
+                    double p_c0,u_c0;
+                    hd_microphysics::nuclear_cold_state(rho0,gamma,p_c0,u_c0);
+                    p_th0 = p0 - p_c0;
+                    e0 = u_c0/rho0 + p_th0/(hd_microphysics::nuclear_gamma_thermal - 1.0) *rho0;
+                    const double gamma_c = rho0 > rho_n ? hd_microphysics::nuclear_gamma_stiff : gamma;
+                    sound_speed = sqrt((gamma_c * p_c0 + hd_microphysics::nuclear_gamma_thermal * p_th0)/rho0);
+                    return;
+                }
+
                 if (model != Equation_of_State::Ionized_Radiative)
                     throw std::invalid_argument("ExactSolver: unsupported equation of state");
                 hd_core::Cell context;
@@ -121,7 +137,7 @@ namespace hydro
                 // Logarithms avoid forming T^4 or rho*R at an extreme scale.
                 const double log_b = std::log(rho0) + std::log(R);
                 const double log_d = std::log(physcon::a_Rad/3.0);
-                const double log_p = std::log(pressure);
+                const double log_p = std::log(p0);
                 const bool gas_limited = log_p-log_b <= 0.25*(log_p-log_d);
                 const double log_T = gas_limited ? log_p-log_b : 0.25*(log_p-log_d);
                 // The limiting coefficient is exactly one, preserving the
@@ -266,50 +282,76 @@ namespace hydro
                 throw std::invalid_argument("ExactSolver: unsupported equation of state");
             }
 
-            // Return {f, df/dP}; sampling also receives rho and c by reference.
-            std::pair<double, double> evaluate_radiation(double p, double& density, double& c) const
+            double radiation_fundamental_derivative() const
             {
-                if (p == 0.0)
+                const double beta = gas_fraction/(gas_fraction+radiation_fraction);
+                const double A = 4.0-3.0*beta;
+                const double B = beta/(gamma-1.0)+12.0*(1.0-beta);
+                const double G1 = beta+A*A/B;
+                const double dG1_db = 1.0-6.0*A/B
+                    - (A/B)*(A/B)*(1.0/(gamma-1.0)-12.0);
+                const double db_dlnrho = -beta*(1.0-beta)*(3.0*A/B-1.0);
+                return 1.0+0.5*(G1-1.0+dG1_db*db_dlnrho/G1);
+            }
+
+            // State on this side's wave curve at a supplied pressure, in code units.
+            // This does not solve for star pressure or cache any sampled states.
+            // All interface sampling obtains density and sound speed here.
+            std::pair<double, double> wave_state_at_pressure(double p) const
+            {
+                if (!std::isfinite(p) || p < 0.0)
+                    throw std::invalid_argument("ExactSolver: invalid wave-state pressure");
+                if (model == Equation_of_State::Nuclear)
                 {
-                    density = c = 0.0;
-                    return {vacuum_limit(), 0.0};
+                    if(p==p0)
+                    {
+                        return {rho0,sound_speed};
+                    }
+                    if(p<p0)
+                    {
+                        
+                    }
+                    if(p>p0)
+                    {
+
+                    }
                 }
-                const double z = p/pressure, dz = (p-pressure)/pressure;
-                if (p == pressure)
+                if (model != Equation_of_State::IdealGas_Default
+                    && model != Equation_of_State::IdealGas_Mixed
+                    && model != Equation_of_State::Ionized
+                    && model != Equation_of_State::Ionized_Radiative)
+                    throw std::invalid_argument("ExactSolver: unsupported equation of state");
+                if (p == 0.0) return {0.0, 0.0};
+                if (p == p0) return {rho0, sound_speed};
+                
+                if (model != Equation_of_State::Ionized_Radiative)
                 {
-                    density = rho0;
-                    c = sound_speed;
-                    return {0.0, 1.0/(rho0*sound_speed)};
+                    const double ratio = p/p0;
+                    if (p > p0)
+                    {
+                        const double b = (gamma-1.0)/(gamma+1.0);
+                        const double density = rho0*(ratio+b)/(b*ratio+1.0);
+                        return {density, std::sqrt(gamma*p/density)};
+                    }
+                    return {rho0*std::pow(ratio, 1.0/gamma),
+                            sound_speed*std::pow(ratio, rarefaction_exponent)};
                 }
-                // Shock and isentropic curves agree through second order at the
-                // original state. Use that limit to avoid cancellation in H and
-                // log(P/P0); retain the first-order change in the shock speed.
+
+                const double z = p/p0, dz = (p-p0)/p0;
                 if (std::abs(dz) < 1e-7)
                 {
-                    const double beta = gas_fraction/(gas_fraction+radiation_fraction);
-                    const double A = 4.0-3.0*beta;
-                    const double B = beta/(gamma-1.0)+12.0*(1.0-beta);
-                    const double G1 = beta+A*A/B;
-                    const double dG1_db = 1.0-6.0*A/B
-                        - (A/B)*(A/B)*(1.0/(gamma-1.0)-12.0);
-                    const double db_dlnrho = -beta*(1.0-beta)*(3.0*A/B-1.0);
-                    const double fundamental = 1.0+0.5*(G1-1.0+dG1_db*db_dlnrho/G1);
-                    const double x = (p-pressure)/(rho0*sound_speed*sound_speed);
+                    const double fundamental = radiation_fundamental_derivative();
+                    const double x = (p-p0)/(rho0*sound_speed*sound_speed);
                     const double r = 1.0+x-(fundamental-1.0)*x*x;
                     double pg, pr;
-                    density = rho0*r;
-                    c = velocity_scale*std::sqrt(thermo(r, z, pg, pr).second);
-                    return {(p-pressure)/(rho0*sound_speed)*(1.0-0.5*fundamental*x),
-                            (1.0-fundamental*x)/(rho0*sound_speed)};
+                    return {rho0*r, velocity_scale*std::sqrt(thermo(r, z, pg, pr).second)};
                 }
-                if (p < pressure)
+                if (p < p0)
                 {
-                    const auto y = integrate(0.0, std::log(p)-std::log(pressure), {0.0, 0.0});
+                    const auto y = integrate(0.0, std::log(p)-std::log(p0), {0.0, 0.0});
                     const double r = std::exp(y.first);
                     double pg, pr;
-                    density = rho0*r;
-                    c = velocity_scale*std::sqrt(thermo(r, z, pg, pr).second);
-                    return {velocity_scale*y.second, 1.0/(density*c)};
+                    return {rho0*r, velocity_scale*std::sqrt(thermo(r, z, pg, pr).second)};
                 }
 
                 // H(r,z)=e(r,z)-e0-(z+1)/2*(1-1/r)=0, r>=1.
@@ -334,10 +376,34 @@ namespace hydro
                     if (n == 159)
                         throw std::runtime_error("ExactSolver: shock density did not converge");
                 }
-                const double r = lo+0.5*(hi-lo), D = (r-1.0)/r;
+                const double r = lo+0.5*(hi-lo);
                 double pg, pr;
-                c = velocity_scale*std::sqrt(thermo(r, z, pg, pr).second);
-                density = rho0*r;
+                return {rho0*r, velocity_scale*std::sqrt(thermo(r, z, pg, pr).second)};
+            }
+
+            // Velocity jump and pressure derivative only; no sampled-state outputs.
+            std::pair<double, double> evaluate_radiation(double p) const
+            {
+                if (p == 0.0) return {vacuum_limit(), 0.0};
+                if (p == p0) return {0.0, 1.0/(rho0*sound_speed)};
+                const double z = p/p0, dz = (p-p0)/p0;
+                // Weak-wave limit avoids cancellation in the Hugoniot relation.
+                if (std::abs(dz) < 1e-7)
+                {
+                    const double fundamental = radiation_fundamental_derivative();
+                    const double x = (p-p0)/(rho0*sound_speed*sound_speed);
+                    return {(p-p0)/(rho0*sound_speed)*(1.0-0.5*fundamental*x),
+                            (1.0-fundamental*x)/(rho0*sound_speed)};
+                }
+                const auto [density, c] = wave_state_at_pressure(p);
+                if (p < p0)
+                {
+                    const auto y = integrate(0.0, std::log(p)-std::log(p0), {0.0, 0.0});
+                    return {velocity_scale*y.second, 1.0/(density*c)};
+                }
+                const double r = density/rho0, D = (r-1.0)/r;
+                double pg, pr;
+                thermo(r, z, pg, pr);
                 const double A = pg+4.0*pr, B = pg/(gamma-1.0)+12.0*pr;
                 const double e_p = (B/A)/r;
                 const double e_rho = -(3.0*pr/r+(B/A)*(pg/r))/r;
@@ -346,7 +412,7 @@ namespace hydro
                 const double df_dp = (D+dz*dr_dp/r/r)/(2.0*f);
                 if (!std::isfinite(df_dp) || df_dp <= 0.0)
                     throw std::runtime_error("ExactSolver: invalid shock pressure derivative");
-                return {velocity_scale*f, velocity_scale/pressure*df_dp};
+                return {velocity_scale*f, velocity_scale/p0*df_dp};
             }
 
             // Return {wave value, pressure derivative}, sharing sqrt/pow work.
@@ -358,15 +424,15 @@ namespace hydro
                     || model == Equation_of_State::IdealGas_Mixed
                     || model == Equation_of_State::Ionized)
                 {
-                    if (trial_pressure > pressure)
+                    if (trial_pressure > p0)
                     {
                         const double root = std::sqrt(shock_a / (trial_pressure + shock_b));
                         return {
-                            (trial_pressure - pressure) * root,
-                            root * (1 - (trial_pressure - pressure) / (2 * (trial_pressure + shock_b)))
+                            (trial_pressure - p0) * root,
+                            root * (1 - (trial_pressure - p0) / (2 * (trial_pressure + shock_b)))
                         };
                     }
-                    const double power = std::pow(trial_pressure / pressure, rarefaction_exponent);
+                    const double power = std::pow(trial_pressure / p0, rarefaction_exponent);
                     return {
                         rarefaction_coefficient * (power - 1),
                         trial_pressure > 0
@@ -376,8 +442,7 @@ namespace hydro
                 }
                 if (model == Equation_of_State::Ionized_Radiative)
                 {
-                    double density, c;
-                    return evaluate_radiation(trial_pressure, density, c);
+                    return evaluate_radiation(trial_pressure);
                 }
                 throw std::invalid_argument("ExactSolver: unsupported equation of state");
             }
@@ -403,7 +468,7 @@ namespace hydro
             {
                 const double gamma = wave.gamma;
                 const double p = W[hd_core::PRE];
-                const double c = std::sqrt(gamma * p / W[hd_core::RHO]);
+                const double c = wave.wave_state_at_pressure(p).second;
                 const double factor = p_star > p
                     ? std::sqrt((gamma + 1.0) / (2.0 * gamma) * (p_star / p)
                                 + (gamma - 1.0) / (2.0 * gamma))
@@ -413,9 +478,9 @@ namespace hydro
             }
             if (wave.model == Equation_of_State::Ionized_Radiative)
             {
-                double speed = wave.sound_speed;
-                if (p_star > wave.pressure)
-                    speed = ((p_star-wave.pressure)/wave.rho0)/wave.evaluate(p_star).first;
+                double speed = wave.wave_state_at_pressure(wave.p0).second;
+                if (p_star > wave.p0)
+                    speed = ((p_star-wave.p0)/wave.rho0)/wave.evaluate(p_star).first;
                 return W[hd_core::VEL(direction)] + (side == Side::Left ? -speed : speed);
             }
             throw std::invalid_argument("ExactSolver: unsupported equation of state");
@@ -490,7 +555,7 @@ namespace hydro
                 || wave.model == Equation_of_State::IdealGas_Mixed
                 || wave.model == Equation_of_State::Ionized)
             {
-                const double rho_K = wave.rho0, p_K = wave.pressure, gamma_K = wave.gamma;
+                const double rho_K = wave.rho0, p_K = wave.p0, gamma_K = wave.gamma;
                 if(p_star>p_K)
                 {
                     //Shock
@@ -501,7 +566,7 @@ namespace hydro
                 else
                 {
                     //Rarefraction
-                    double c_K = std::sqrt(gamma_K*p_K/rho_K);
+                    double c_K = wave.wave_state_at_pressure(p_K).second;
                     return 2*c_K/(gamma_K-1)*(std::pow(p_star/p_K,(gamma_K-1)/(2*gamma_K))-1);
                 }
             }
@@ -520,11 +585,10 @@ namespace hydro
             {
                 const double gamma_K = wave.gamma;
                 const double g = gamma_K;
-                auto rho_K = K[hd_core::RHO];
                 auto v_nK = K[hd_core::VEL(direction)];
                 auto pre_K = K[hd_core::PRE];
-                auto c_sK = std::sqrt(gamma_K * pre_K/rho_K);
-                auto c_sK_star = c_sK * std::pow(pre_star/pre_K,(g-1)/(2*g));
+                auto c_sK = wave.wave_state_at_pressure(pre_K).second;
+                const auto [rho_star, c_sK_star] = wave.wave_state_at_pressure(pre_star);
                 auto v_rare_head = v_nK + (side==Side::Left? -1.0 : 1.0) * c_sK;
                 auto v_rare_tail = v_nstar + (side==Side::Left? -1.0 : 1.0) * c_sK_star;
                 if((side==Side::Left && v_rare_head >=0) || (side==Side::Right && v_rare_head<=0))
@@ -535,7 +599,6 @@ namespace hydro
                 {
                     if( (side==Side::Left && v_rare_tail <=0 )|| (side==Side::Right && v_rare_tail >=0) )
                     {
-                        auto rho_star = rho_K * std::pow(pre_star / pre_K, 1.0 / g);
                         hd_core::Primitives face = K;
                         face[hd_core::RHO] = rho_star;
                         face[hd_core::VEL(direction)] = v_nstar;
@@ -546,11 +609,10 @@ namespace hydro
                     else
                     {
                         auto v_nf = 1/(g+1)*((g-1)*v_nK +(side==Side::Left? 1.0:-1.0)* 2 *c_sK);
-                        auto c_sf = (side == Side::Left) ? v_nf : -v_nf;
-                        auto rho_f = rho_K * std::pow((c_sf/c_sK),2 / (g - 1));
-                        auto pre_f = pre_K * std::pow((c_sf/c_sK),2 * g / (g-1));
+                        auto pre_f = pre_K * std::pow(
+                            ((side == Side::Left) ? v_nf : -v_nf)/c_sK, 2*g/(g-1));
                         hd_core::Primitives face = K;
-                        face[hd_core::RHO] = rho_f;
+                        face[hd_core::RHO] = wave.wave_state_at_pressure(pre_f).first;
                         face[hd_core::VEL(direction)] = v_nf;
                         face[hd_core::PRE] = pre_f;
                         return face;
@@ -561,10 +623,10 @@ namespace hydro
             {
                 const double sign = side == Side::Left ? -1.0 : 1.0;
                 const double u0 = K[hd_core::VEL(direction)];
-                if (sign*(u0+sign*wave.sound_speed) <= 0.0) return K;
+                const double c0 = wave.wave_state_at_pressure(wave.p0).second;
+                if (sign*(u0+sign*c0) <= 0.0) return K;
                 hd_core::Primitives face = K;
-                double rho_star, c_star;
-                wave.evaluate_radiation(pre_star, rho_star, c_star);
+                const auto [rho_star, c_star] = wave.wave_state_at_pressure(pre_star);
                 if (sign*(v_nstar + sign*c_star) >= 0.0)
                 {
                     face[hd_core::RHO] = rho_star;
@@ -575,11 +637,12 @@ namespace hydro
                 // The face lies inside the fan. Solve u(P)+sign*c(P)=x/t=0.
                 // Use log pressure so near-vacuum fans do not need linear-P bisection.
                 auto characteristic = [&](double q) {
-                    double rho, c;
-                    const auto value = wave.evaluate_radiation(wave.pressure*std::exp(q), rho, c);
+                    const double p = wave.p0*std::exp(q);
+                    const double c = wave.wave_state_at_pressure(p).second;
+                    const auto value = wave.evaluate(p);
                     return sign*u0 + value.first + c;
                 };
-                double lo = pre_star > 0.0 ? std::log(pre_star)-std::log(wave.pressure) : -1.0;
+                double lo = pre_star > 0.0 ? std::log(pre_star)-std::log(wave.p0) : -1.0;
                 double hi = 0.0;
                 if (pre_star == 0.0)
                 {
@@ -598,9 +661,9 @@ namespace hydro
                     if (n == 99)
                         throw std::runtime_error("ExactSolver: rarefaction fan sample did not converge");
                 }
-                const double p = wave.pressure*std::exp(lo+0.5*(hi-lo));
-                double c;
-                const auto value = wave.evaluate_radiation(p, face[hd_core::RHO], c);
+                const double p = wave.p0*std::exp(lo+0.5*(hi-lo));
+                face[hd_core::RHO] = wave.wave_state_at_pressure(p).first;
+                const auto value = wave.evaluate(p);
                 face[hd_core::VEL(direction)] = u0 + sign*value.first;
                 face[hd_core::PRE] = p;
                 return face;
@@ -616,12 +679,10 @@ namespace hydro
             {
                 const double gamma_K = wave.gamma;
                 const double g = gamma_K;
-                const double b = (g-1)/(g+1);
-                auto rho_K = K[hd_core::RHO];
                 auto v_nK = K[hd_core::VEL(direction)];
                 auto pre_K = K[hd_core::PRE];
                 auto comp_ratio = pre_star / pre_K;
-                auto c_sK = std::sqrt(gamma_K * pre_K/rho_K);
+                auto c_sK = wave.wave_state_at_pressure(pre_K).second;
                 auto v_shock = v_nK + (side==Side::Left? -1.0 : 1.0) * c_sK * std::sqrt((g+1)/(2*g)*comp_ratio+(g-1)/(2*g));
                 if((v_shock>0 && side==Side::Left) || (v_shock<0 && side==Side::Right))
                 {
@@ -630,8 +691,7 @@ namespace hydro
                 else
                 {
                     hd_core::Primitives face = K;
-                    auto rho_star = rho_K * (comp_ratio + b) / (b*comp_ratio + 1);
-                    face[hd_core::RHO] = rho_star;
+                    face[hd_core::RHO] = wave.wave_state_at_pressure(pre_star).first;
                     face[hd_core::VEL(direction)] = v_nstar;
                     face[hd_core::PRE] = pre_star;
                     return face;
@@ -642,8 +702,7 @@ namespace hydro
                 const double speed = outer_wave_speed(K, wave, pre_star, side, direction);
                 if ((side == Side::Left && speed > 0.0) || (side == Side::Right && speed < 0.0)) return K;
                 hd_core::Primitives face = K;
-                double c;
-                wave.evaluate_radiation(pre_star, face[hd_core::RHO], c);
+                face[hd_core::RHO] = wave.wave_state_at_pressure(pre_star).first;
                 face[hd_core::VEL(direction)] = v_nstar;
                 face[hd_core::PRE] = pre_star;
                 return face;
@@ -1023,12 +1082,8 @@ namespace hydro
                 //-----------|~~~~~~~~|   vacuum    |~~~~~~~~|-------------
                 const double v_nL = W_L[hd_core::VEL(direction)];
                 const double v_nR = W_R[hd_core::VEL(direction)];
-                const double c_sL = std::sqrt(
-                gamma_L * W_L[hd_core::PRE] / W_L[hd_core::RHO]
-                );
-                const double c_sR = std::sqrt(
-                    gamma_R * W_R[hd_core::PRE] / W_R[hd_core::RHO]
-                );
+                const double c_sL = left.wave_state_at_pressure(left.p0).second;
+                const double c_sR = right.wave_state_at_pressure(right.p0).second;
                 const double S_VL = v_nL + 2.0 * c_sL / (gamma_L - 1.0);//(Left-Vacuum Interace velocity)
                 const double S_VR = v_nR - 2.0 * c_sR / (gamma_R - 1.0);
                 if(S_VL<=0 && S_VR>=0)
@@ -1076,7 +1131,7 @@ namespace hydro
                 //Gas expand to vacuum, producing rarefraction
                 //--------------------
                 const double v_n = gas[hd_core::VEL(direction)];
-                const double c_s = std::sqrt(gamma * gas[hd_core::PRE]/gas[hd_core::RHO]);
+                const double c_s = wave.wave_state_at_pressure(wave.p0).second;
                 const double S_V = v_n + (gas_side == Side::Left? 1.0 : -1.0) * 2.0 * c_s / (gamma - 1.0);
                 if((gas_side == Side::Left && S_V<= 0.0) || (gas_side==Side::Right && S_V>=0.0))
                 {
@@ -1185,7 +1240,7 @@ namespace hydro
                 //left gas to right vacuum
                 interfaceState = gas_to_vacuum(WL,*left,Side::Left,direction);
                 const double u = WL[hd_core::VEL(direction)];
-                const double c = left->sound_speed;
+                const double c = left->wave_state_at_pressure(left->p0).second;
                 min_wave_speed = u - c;
                 max_wave_speed = u - left->vacuum_limit();
             }
@@ -1194,7 +1249,7 @@ namespace hydro
                 //right gas to left vacuum
                 interfaceState = gas_to_vacuum(WR,*right,Side::Right,direction);
                 const double u = WR[hd_core::VEL(direction)];
-                const double c = right->sound_speed;
+                const double c = right->wave_state_at_pressure(right->p0).second;
                 min_wave_speed = u + right->vacuum_limit();
                 max_wave_speed = u + c;
             }

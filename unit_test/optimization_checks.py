@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import time
 
-TESTS = Path(__file__).resolve().parent
+TESTS = Path(__file__).resolve().parents[1] / "tests"
 CASES = ('sod_tube', 'File_Profile_2D', 'CCSN_MESA_day13')
 
 

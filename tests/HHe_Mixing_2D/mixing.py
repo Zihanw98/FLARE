@@ -7,8 +7,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from animate import read_snapshot, check_grid, edges, signature
-from animate3d import snapshot_files
-sys.path.insert(0, str(ROOT / "tests"))
+from unit_test.snapshot_io import snapshot_files
+sys.path.insert(0, str(ROOT / "unit_test"))
 from hydro_suite import parameters, require
 
 # CODATA constants match src/physcon/constants.h. Species masses use A*m_u.

@@ -1,5 +1,27 @@
 # 独立功能测试
 
+独立的 Python/C++ 测试、验证脚本与共用测试辅助代码统一放在 `unit_test/`。
+`tests/` 保留各算例的独立目录，不再放散落的 `.py`、`.cpp` 文件。
+后续新增测试脚本和驱动也放入 `unit_test/`。
+
+运行 Python 测试（在项目根目录执行）：
+
+```bash
+python3 -m unittest discover -s unit_test -p 'test_*.py'
+# 或使用统一入口；可设置 PYTHON 指向所需环境
+make -C unit_test python-check
+```
+
+Python 测试覆盖动画、快照读取、MESA 网格合并、H/He 分析与流体参考解。
+需要 NumPy、Matplotlib、Pillow；安装 Plotly 后也会执行 HTML 回归检查。
+`hydro_suite.py`、`gravity_checks.py` 是多个算例的共用运行/验证入口；
+`performance_checks.py`、`optimization_checks.py` 保留原有算例与输出路径，可用 `--help` 查看参数。
+
+原 `test_render3d.py` 所依赖的渲染模块已经删除，因此该孤立测试一并移除。
+现有算例仍需使用的快照读取与运行清单校验保留在 `snapshot_io.py`，不依赖渲染模块。
+
+以下为 C++ 测试用法。
+
 每组测试有自己的 `main()`，生成独立可执行文件，不启动 FLARE 模拟主循环，
 不需要用户问题文件，也不依赖 Sod 运行结果。使用 C++17 编译器和 GNU Make，
 无需额外 C++ 测试框架。
@@ -42,8 +64,8 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `units` | 非平凡质量、长度、时间、温度单位下的常量换算、跨编译单元共享常量、恢复 cgs |
 | `output_boundary` | 已有边界/输出测试：多层周期 ghost、角点、用户 hook、参数读取、CSV 和输出频率 |
 
-后两组复用 `tests/test_wave_timestep.cpp` 和 `tests/test_output_boundary.cpp`，
-避免复制测试代码。之前的 `tests/run_wave_timestep.sh` 也转到这个统一入口。
+波速和边界/输出测试源码也位于本目录：`test_wave_timestep.cpp` 和 `test_output_boundary.cpp`。
+`unit_test/run_wave_timestep.sh` 是这个统一入口的快捷调用。
 每组是独立程序，其中波速/积分器、边界/输出组同时包含相关模块的集成回归检查。
 
 编译产物在 `unit_test/build/ndim1/`、`ndim2/`、`ndim3/`。

@@ -179,7 +179,7 @@ MESA 短跑共求根 10,638,000 次，Newton 最大 35 次迭代，零失败、�
   原有 MESA 映射/注能/网格检查通过。
 
 复现命令：先构建三个算例，运行 `make -C unit_test -j4`、
-`python3 tests/optimization_checks.py --repeats 3` 和 `python3 tests/performance_checks.py`。
+`python3 unit_test/optimization_checks.py --repeats 3` 和 `python3 unit_test/performance_checks.py`。
 若保存了修改前的 `CASE.baseline`，给优化检查附加 `--baseline-dir DIR` 即可验证逐字节兼容。
 原始报告在 `output/optimization/validation.json`、各算例性能 JSON/TXT、
 `output/optimization/mesa_0p1.comparison.json`；0.1 s 新快照存放在该目录下的 `mesa_0p1/`，

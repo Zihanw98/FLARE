@@ -9,7 +9,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from animate3d import edges, read_snapshot, snapshot_files
+from unit_test.snapshot_io import edges, read_snapshot, snapshot_files
 
 
 def require(condition, message):

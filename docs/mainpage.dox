@@ -127,7 +127,7 @@ make -C unit_test -j4 test
 make -C tests/sod_tube -j4
 make -C tests/File_Profile_2D -j4
 make -C tests/CCSN_MESA_day13 -j4
-python3 tests/performance_checks.py
+python3 unit_test/performance_checks.py
 @endcode
 
 The integration checks use temporary outputs, compare off/summary/detail physics
@@ -182,9 +182,9 @@ iteration histogram buckets `0, 1-4, 5-8, 9-16, 17-32, 33-64, 65+`.
 
 @code{.sh}
 make -C unit_test -j4 TESTS=optimization
-python3 tests/optimization_checks.py --repeats 3
+python3 unit_test/optimization_checks.py --repeats 3
 # Optional original binaries named CASE.baseline:
-python3 tests/optimization_checks.py --baseline-dir /path/to/baselines
+python3 unit_test/optimization_checks.py --baseline-dir /path/to/baselines
 @endcode
 
 These checks compare bisection output byte for byte when original binaries are

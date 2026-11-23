@@ -1,4 +1,4 @@
-"""Run from the FLARE root: python -m unittest discover -s tests -p test_animate_streamlines.py."""
+"""Run from the FLARE root: python -m unittest discover -s unit_test -p test_animate_streamlines.py."""
 import unittest
 
 import numpy as np

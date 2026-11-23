@@ -2,6 +2,11 @@
 
 这个算例从一个晚期坍缩的 toy core 开始，展示中心密度越过核密度、EoS 变硬、核心反弹和激波向外传播。使用已有的牛顿自引力和球坐标源项，`HD_NDIM=1`、`HD_NCOMP=0`。没有能量注入，也没有调用 Saha。
 
+2026-11-23 的能量复核发现：现有 1536 单元、15 ms 运行的总能量（含自引力势能）
+增加了约 `1.2444e52 erg`，可由 PCM/HLL 质量通量与单元中心引力做功的不一致重建。
+因此，已有质量守恒和反弹形态检查不构成能量守恒或物理可信度验证，外层接近光速的
+结果不能用于物理预测。数值和复现方法见 [VALIDATION.md](VALIDATION.md) 的能量复核。
+
 ## EoS
 
 沿用已有的 `Equation_of_State::Nuclear` 枚举。参数暂时集中在
@@ -133,7 +138,9 @@ python3 animate.py tests/CCSN_Hybrid_1D/output_bounce_hires bounce \
 
 | 选项 | 含义（使用 `--cgs` 时） |
 | --- | --- |
-| `--log-x` / `--log-radius` | 右侧所有径向剖面的半径使用对数轴；左侧球面切面保持线性坐标 |
+| `--log-x` / `--log-radius` | 右侧所有径向剖面的半径使用对数轴；左侧由 `--log-map-radius` 独立控制 |
+| `--log-map-radius` | 左侧圆图也按对数半径展开，保持角度和圆形球壳 |
+| `--map-linthresh 1e4` | 左侧中心 0.1 km 内保留线性半径，处理 r=0；需要 `--log-map-radius` |
 | `--profile-range 1e4 1e7` / `--xlim 1e4 1e7` | 右侧半径显示 0.1–100 km；对数轴要求两个端点严格为正 |
 | `--rmax 1e7` | 左侧球面图显示至半径 100 km；未指定剖面范围时也控制剖面上限 |
 | `--density-min 1e8` | 密度色条和剖面纵轴从 10⁸ g cm⁻³ 开始，较低密度使用色条底端颜色 |
@@ -145,6 +152,42 @@ python3 animate.py tests/CCSN_Hybrid_1D/output_bounce_hires bounce \
 
 1500 km 全景使用 `--rmax 1.5e8 --profile-range 1e4 1.5e8`，并换用相应输出文件名。
 剖面范围可以独立于左侧图设置，例如左侧放大 100 km、右侧查看 0.1–1500 km。
+
+左右同时采用对数半径的演化动画：
+
+```bash
+python3 animate.py tests/CCSN_Hybrid_1D/output_bounce_hires bounce \
+  --plot spherical --cgs --log --log-x \
+  --log-map-radius --map-linthresh 1e4 \
+  --radial-grid tests/CCSN_Hybrid_1D/output_bounce_hires/grid.csv \
+  --rmax 1e7 --profile-range 1e4 1e7 \
+  --density-min 1e8 --map-pixels 801 --dpi 200 \
+  --stride 4 --fps 12 \
+  --output tests/CCSN_Hybrid_1D/output_bounce_hires/animations/bounce_viridis_cut1e8_logmap_100km.mp4
+```
+
+`--log-map-radius` 要求 `--plot spherical`。未指定 `--map-linthresh` 时，
+中心线性区半径取第一个正半径单元中心。其单位与绘图一致（`--cgs` 时为 cm），且必须小于左图外半径。
+显示半径采用 `s=r/r0`（r≤r0）和 `s=1+ln(r/r0)`（r>r0），其中 r0 为中心线性区半径。
+映射保持圆形和角度；对数区的相邻十倍半径占据相同径向距离，图上面积不代表物理面积。
+虚线圆环和沿轴刻度对应真实半径；HTML 悬停显示采样球壳中心的真实半径与物理量。
+MP4、GIF 和 HTML 共用同一球壳映射，原始数据不变。1500 km 版本将两个范围上限改为 `1.5e8`。
+
+已生成 1500 km GIF：`output_bounce_hires/animations/bounce_viridis_cut1e8_logmap_1500km.gif`，
+分辨率 2400×1800，328 帧，约 27.33 秒，循环播放；其物理时间与视图范围和同名 MP4 一致。
+
+把速度色标固定为 −0.1c 到 +0.1c（超范围使用两端颜色，速度剖面保留完整数值）：
+
+```bash
+python3 animate.py tests/CCSN_Hybrid_1D/output_bounce_hires bounce \
+  --plot spherical --cgs --log --log-x \
+  --log-map-radius --map-linthresh 1e4 \
+  --radial-grid tests/CCSN_Hybrid_1D/output_bounce_hires/grid.csv \
+  --rmax 1.5e8 --profile-range 1e4 1.5e8 \
+  --density-min 1e8 --velocity-min=-2.99792458e9 --velocity-max=2.99792458e9 \
+  --map-pixels 801 --dpi 200 --stride 4 --fps 12 \
+  --output tests/CCSN_Hybrid_1D/output_bounce_hires/animations/bounce_viridis_cut1e8_logmap_1500km_vlim0p1c.gif
+```
 
 EoS 单元测试：
 

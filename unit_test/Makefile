@@ -6,6 +6,7 @@ UNIT_DIR := $(patsubst %/,%,$(dir $(THIS_MAKEFILE)))
 ROOT := $(abspath $(UNIT_DIR)/..)
 CXX ?= g++
 AR ?= ar
+PYTHON ?= python3
 CXXFLAGS ?= -O1 -g -std=c++17 -Wall -Wextra -pedantic
 DIMENSIONS ?= 1 2 3
 NDIM ?= 1
@@ -29,9 +30,12 @@ FLAGS := $(INCLUDES) $(CPPFLAGS) $(CXXFLAGS) -DHD_NDIM=$(NDIM) -UNDEBUG
 LIBRARY := $(BUILD_DIR)/libflare.a
 BINARIES := $(addprefix $(BUILD_DIR)/test_,$(TESTS))
 SETTINGS := $(BUILD_DIR)/.build-settings
-vpath test_%.cpp $(UNIT_DIR) $(ROOT)/tests
+vpath test_%.cpp $(UNIT_DIR)
 
-.PHONY: test check FORCE
+.PHONY: test check python-check FORCE
+python-check:
+	cd "$(ROOT)" && $(PYTHON) -m unittest discover -s unit_test -p 'test_*.py'
+
 test:
 	+@set -eu; for dimension in $(DIMENSIONS); do \
 	    $(MAKE) --no-print-directory -f "$(THIS_MAKEFILE)" check NDIM=$$dimension; \

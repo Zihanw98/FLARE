@@ -34,7 +34,15 @@ range; color scales and profile y limits still use all cells and selected frames
 of the right-hand profiles only. --log-x (alias --log-radius) uses a logarithmic
 profile length axis; limits must be positive. Without explicit limits the lower
 bound is the first positive cell center when the domain reaches zero.
-Left-hand spherical maps keep signed linear coordinates.
+--log-map-radius also spreads the left spherical maps in logarithmic radius,
+preserving circular shells and angles. --map-linthresh R sets a small linear
+core to include r=0 (default: first positive cell center). Outside this core,
+equal radius ratios occupy equal radial distances. Axis ticks label physical
+radii along each axis; dashed circles mark those radii. R is in displayed units.
+These options require --plot spherical; --map-linthresh requires --log-map-radius.
+--velocity-min and --velocity-max set velocity color limits in displayed units
+(cm/s with --cgs). Out-of-range values use the endpoint colors; radial profiles
+and physical samples keep their full values.
 2D: rho/vx/vy/pressure maps, with x profiles at the nearest --slice-y row
 (default: domain midpoint), or y profiles at the nearest --slice-x column.
 These options are mutually exclusive. A dashed line marks the cut on each map.
@@ -289,11 +297,60 @@ def read_radial_grid(path, snapshot):
     return np.r_[left, right[-1]]
 
 
-def spherical_projection(snapshot, pixels=241, rmax=None):
+def radial_log_forward(radius, linthresh):
+    """Dimensionless display radius, linear at zero and C1 logarithmic outside."""
+    radius = np.asarray(radius)
+    return np.where(radius <= linthresh, radius / linthresh,
+                    1.0 + np.log(np.maximum(radius, linthresh)) - np.log(linthresh))
+
+
+def radial_log_inverse(distance, linthresh):
+    distance = np.asarray(distance)
+    return linthresh * np.where(distance <= 1.0, distance,
+                               np.exp(np.maximum(distance - 1.0, 0.0)))
+
+
+def map_linear_radius(snapshot, args):
+    """Resolve the optional logarithmic map's core in displayed length units."""
+    logarithmic = getattr(args, "log_map_radius", False)
+    core = getattr(args, "map_linthresh", None)
+    if core is not None and not logarithmic:
+        raise ValueError("--map-linthresh requires --log-map-radius")
+    if not logarithmic:
+        return None
+    if args.plot != "spherical":
+        raise ValueError("--log-map-radius requires --plot spherical")
+    if core is None:
+        positive = snapshot.x[snapshot.x > 0]
+        if not len(positive):
+            raise ValueError("--log-map-radius requires positive radial coordinates")
+        core = float(positive[0])
+    if not np.isfinite(core) or core <= 0:
+        raise ValueError("--map-linthresh must be finite and positive")
+    return core
+
+
+def radial_map_ticks(outer_distance, linthresh):
+    """Physical decade ticks, shared by Matplotlib and HTML; at most seven."""
+    outer = float(radial_log_inverse(outer_distance, linthresh))
+    powers = np.arange(np.floor(np.log10(linthresh)) + 1,
+                       np.floor(np.log10(outer) + 1e-12) + 1)
+    if len(powers) > 3:
+        powers = powers[np.linspace(0, len(powers) - 1, 3).round().astype(int)]
+    radii = 10.**powers
+    rings = radial_log_forward(radii, linthresh)
+    labels = [f"1e{int(power)}" for power in powers]
+    return (np.r_[-rings[::-1], 0., rings],
+            ["-" + label for label in labels[::-1]] + ["0"] + labels, rings)
+
+
+def spherical_projection(snapshot, pixels=241, rmax=None, linthresh=None):
     """Map a 1D radial grid onto a symmetry plane without interpolating states.
 
     Use supplied shell edges; otherwise infer them as in the Cartesian plots.
     The returned mask excludes both the exterior and any inner cavity.
+    With linthresh, sample uniformly in transformed radial distance, then invert
+    to physical radius before selecting a shell. Physical values are unchanged.
     """
     if not isinstance(pixels, (int, np.integer)) or pixels < 3:
         raise ValueError("--map-pixels must be an integer >= 3")
@@ -310,10 +367,21 @@ def spherical_projection(snapshot, pixels=241, rmax=None):
     outer = radial_edges[-1] if rmax is None else rmax
     if not np.isfinite(outer) or outer <= radial_edges[0]:
         raise ValueError("--rmax must be finite and greater than the inner shell edge")
-    axis = np.linspace(-outer, outer, pixels)
-    radius = np.hypot(axis[:, None], axis[None, :])
+    if linthresh is not None and (not np.isfinite(linthresh) or not 0 < linthresh < outer):
+        raise ValueError("--map-linthresh must be finite, positive and smaller than the map outer radius")
+    extent = outer if linthresh is None else float(radial_log_forward(outer, linthresh))
+    # Construct exactly opposite pairs, including pixels on the circular boundary.
+    half = (pixels - 1) / 2
+    axis = (np.arange(pixels) - half) / half * extent
+    distance = np.hypot(axis[:, None], axis[None, :])
+    if linthresh is None:
+        radius = distance
+    else:
+        # Exterior pixels are masked anyway; limit the inverse to avoid overflow.
+        radius = radial_log_inverse(np.minimum(distance, extent), linthresh)
+        radius = np.minimum(radius, outer)  # Include the surface despite roundoff.
     indices = np.searchsorted(radial_edges, radius, side="right") - 1
-    outside = (radius < radial_edges[0]) | (radius > min(outer, radial_edges[-1]))
+    outside = (distance > extent) | (radius < radial_edges[0]) | (radius > radial_edges[-1])
     return axis, np.clip(indices, 0, len(snapshot.x) - 1), outside
 
 
@@ -372,6 +440,16 @@ def density_color_scale(lower, upper, threshold):
     if not np.isfinite(densities).all() or np.any(densities <= 0):
         raise ValueError("--density-threshold window exceeds floating-point range")
     return np.log10(densities), np.array([0., .08, .25, .5, .85, 1.])
+
+
+def velocity_color_limits(lower, upper, minimum=None, maximum=None):
+    """Override the symmetric velocity color scale without changing samples."""
+    limit = max(abs(lower), abs(upper), 1e-12)
+    lo = -limit if minimum is None else minimum
+    hi = limit if maximum is None else maximum
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+        raise ValueError("Velocity color limits must be finite and satisfy minimum < maximum")
+    return lo, hi
 
 
 def density_normalization(knots, positions):
@@ -508,13 +586,15 @@ def animate(reference, records, lower, upper, args):
     if not args.show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm, LinearSegmentedColormap
+    from matplotlib.colors import LogNorm, Normalize, LinearSegmentedColormap
     from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter, writers
 
     is_2d, along_y, fixed_axis, cut_index, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
+    map_core = map_linear_radius(reference, args)
     projection = spherical_projection(reference, pixels=getattr(args, "map_pixels", 241),
-                                      rmax=args.rmax) if spherical else None
+                                      rmax=args.rmax, linthresh=map_core) if spherical else None
+    map_kind = "log-radius slice" if map_core is not None else "spherical slice"
     profile_edges = (reference.radial_edges.copy() if spherical and reference.radial_edges is not None
                      else edges(profile_axis))
     if spherical and args.rmax is not None and getattr(args, "profile_range", None) is None:
@@ -554,13 +634,15 @@ def animate(reference, records, lower, upper, args):
         elif name.startswith("comp_"):
             lo, hi = 0.0, 1.0
         elif name in ("vx", "vy"):
-            hi = max(abs(lo), abs(hi), 1e-12)
-            lo = -hi
+            lo, hi = velocity_color_limits(lo, hi, getattr(args, "velocity_min", None),
+                                            getattr(args, "velocity_max", None))
         elif lo == hi:
             pad = max(abs(lo) * 0.01, 1e-12)
             lo, hi = lo - pad, hi + pad
         left, right = axes[k]
         color_scale = {"norm": LogNorm(vmin=lo, vmax=hi)} if logarithmic else {"vmin": lo, "vmax": hi}
+        if name in ("vx", "vy"):
+            color_scale = {"norm": Normalize(vmin=lo, vmax=hi, clip=True)}
         threshold = getattr(args, "density_threshold", None) if name == "rho" else None
         if threshold is not None:
             knots, positions = density_color_scale(lo, hi, threshold)
@@ -586,11 +668,21 @@ def animate(reference, records, lower, upper, args):
             right.axhline(threshold, color="#ad2844", ls="--", lw=1.2,
                           label=f"Threshold = {threshold:.2g}")
             right.legend(loc="lower left", fontsize=8)
-        left.set(title=label + (" (spherical slice)" if spherical else ""),
+        left.set(title=label + ((f"\n({map_kind})" if map_core is not None else f" ({map_kind})") if spherical else ""),
                  xlabel=coordinate_label("x" if spherical else reference.xlabel, reference.cgs))
         if spherical:
             outer = projection[0][-1]
             left.set(ylabel=coordinate_label("z", reference.cgs), aspect="equal", xlim=(-outer, outer), ylim=(-outer, outer))
+            if map_core is not None:
+                from matplotlib.patches import Circle
+                ticks, tick_labels, rings = radial_map_ticks(outer, map_core)
+                left.set_xticks(ticks, tick_labels, fontsize=8, rotation=45, ha="right")
+                left.set_yticks(ticks, tick_labels, fontsize=8)
+                left.set(xlabel=coordinate_label("r along x", reference.cgs),
+                         ylabel=coordinate_label("r along z", reference.cgs))
+                for radius in rings:
+                    left.add_patch(Circle((0, 0), radius, fill=False, edgecolor="gray",
+                                          linewidth=0.6, linestyle="--", alpha=0.6))
         elif is_2d:
             left.set(ylabel=coordinate_label("y", reference.cgs), aspect="equal")
             mark_cut = left.axvline if along_y else left.axhline
@@ -635,8 +727,10 @@ def animate(reference, records, lower, upper, args):
         if signature(path) != stamp:
             raise ValueError(f"Snapshot changed since scanning: {path}; rerun")
         time_label = f"t = {snapshot.time:.7g}" + (" s" if reference.cgs else "") if snapshot.time is not None else "time unavailable"
+        map_note = (f"\nRadial log map; linear core r <= {map_core:.3g}"
+                    + (" cm" if reference.cgs else "") if map_core is not None else "")
         title.set_text(f"{args.prefix} | {'1D spherical' if spherical else '2D' if is_2d else '1D'} | step {step} | {time_label}"
-                       f" | frame {index + 1}/{len(records)}")
+                       f" | frame {index + 1}/{len(records)}" + map_note)
         for k, (mesh, line) in enumerate(zip(maps, lines)):
             if spherical:
                 mesh.set_data(map_values(snapshot, k))
@@ -657,6 +751,8 @@ def animate(reference, records, lower, upper, args):
             plt.show()
         else:
             suffix = ("_spherical" if spherical else "") + ("_cgs" if reference.cgs else "") + ("_log" if args.log else "")
+            if map_core is not None:
+                suffix += "_logmap"
             destination = args.output or args.directory / "animations" / f"{args.prefix.rstrip('_')}{suffix}_evolution.gif"
             if destination.suffix.lower() == ".mp4":
                 if not writers.is_available("ffmpeg"):
@@ -762,7 +858,11 @@ async function draw() {
                         : viewer.logFields[Math.floor(i / 2)]
                         ? physical.map(row => row.map(v => v === null ? null : Math.log10(v)))
                         : physical;
-                    return {...trace, z, customdata: physical};
+                    const customdata = viewer.radialLog
+                        ? viewer.radialMap.map(row => row.map(j => j < 0 ? [null, null]
+                            : [field[0][j], viewer.radialLog.centers[j]]))
+                        : physical;
+                    return {...trace, z, customdata};
                 }
                 const y = viewer.alongY ? field.map(row => row[viewer.cut]) : field[viewer.cut];
                 return {...trace, y};
@@ -818,12 +918,14 @@ def save_plotly(reference, records, lower, upper, args):
 
     is_2d, along_y, fixed_axis, cut, profile_axis, profile_label, cut_label = select_profile(reference, args)
     spherical = args.plot == "spherical"
+    map_core = map_linear_radius(reference, args)
     projection = spherical_projection(reference, pixels=getattr(args, "map_pixels", 241),
-                                      rmax=args.rmax) if spherical else None
+                                      rmax=args.rmax, linthresh=map_core) if spherical else None
+    map_kind = "log-radius slice" if map_core is not None else "spherical slice"
     titles = []
     for name, label, _ in reference.fields:
         label = display_label(name, label, spherical, reference.cgs)
-        titles.extend((label + (" (spherical slice)" if spherical else ""),
+        titles.extend((label + ((f"<br>({map_kind})" if map_core is not None else f" ({map_kind})") if spherical else ""),
                        f"{label}({'r' if spherical else 'y' if along_y else 'x'}){cut_label}"))
     fig = make_subplots(rows=len(reference.fields), cols=2, horizontal_spacing=0.18,
                         vertical_spacing=min(0.09, 0.5 / max(len(reference.fields) - 1, 1)),
@@ -862,8 +964,8 @@ def save_plotly(reference, records, lower, upper, args):
         elif name.startswith("comp_"):
             lo, hi = 0.0, 1.0
         elif name in ("vx", "vy"):
-            hi = max(abs(lo), abs(hi), 1e-12)
-            lo = -hi
+            lo, hi = velocity_color_limits(lo, hi, getattr(args, "velocity_min", None),
+                                            getattr(args, "velocity_max", None))
         elif lo == hi:
             pad = max(abs(lo) * 0.01, 1e-12)
             lo, hi = lo - pad, hi + pad
@@ -882,13 +984,17 @@ def save_plotly(reference, records, lower, upper, args):
         axis_number = 2 * k + 1
         axis_suffix = str(axis_number) if axis_number > 1 else ""
         domain = fig.layout[f"yaxis{axis_suffix}"].domain
+        map_hover = (f"x=%{{x:.6g}}" + ("<br>z=%{y:.6g}" if spherical else "<br>y=%{y:.6g}" if is_2d else "")
+                     + f"<br>{label}=%{{customdata:.6g}}<extra></extra>")
+        if map_core is not None:
+            map_hover = ("shell center r=%{customdata[1]:.6g}" + (" cm" if reference.cgs else "")
+                         + f"<br>{label}=%{{customdata[0]:.6g}}<extra></extra>")
         fig.add_trace(go.Heatmap(
             x=xedges, y=yedges, z=[], name=label,
             colorscale=cmap, zmin=lo, zmax=hi, zauto=False, zsmooth=False,
             colorbar=dict(x=0.435, y=sum(domain) / 2, len=domain[1] - domain[0],
                           thickness=12, outlinewidth=0, tickfont=dict(size=10), **color_ticks),
-            hovertemplate=f"x=%{{x:.6g}}" + ("<br>z=%{y:.6g}" if spherical else "<br>y=%{y:.6g}" if is_2d else "")
-                          + f"<br>{label}=%{{customdata:.6g}}<extra></extra>"), row=row, col=1)
+            hovertemplate=map_hover), row=row, col=1)
         fig.add_trace(go.Scatter(x=plotted_axis, y=[], mode="lines", name=label,
                                 line=dict(color="#176b87", width=2),
                                 hovertemplate=f"{profile_label}=%{{x:.6g}}<br>{label}=%{{y:.6g}}<extra></extra>"),
@@ -901,6 +1007,19 @@ def save_plotly(reference, records, lower, upper, args):
             outer = float(projection[0][-1])
             fig.update_xaxes(range=[-outer, outer], row=row, col=1)
             fig.update_yaxes(range=[-outer, outer], row=row, col=1)
+            if map_core is not None:
+                ticks, tick_labels, rings = radial_map_ticks(outer, map_core)
+                fig.update_xaxes(title_text=coordinate_label("r along x", reference.cgs),
+                                 tickmode="array", tickvals=ticks.tolist(), ticktext=tick_labels,
+                                 tickangle=-45,
+                                 row=row, col=1)
+                fig.update_yaxes(title_text=coordinate_label("r along z", reference.cgs),
+                                 tickmode="array", tickvals=ticks.tolist(), ticktext=tick_labels,
+                                 row=row, col=1)
+                for radius in rings:
+                    fig.add_shape(type="circle", x0=-radius, x1=radius, y0=-radius, y1=radius,
+                                  line=dict(color="gray", width=0.6, dash="dash"), opacity=0.6,
+                                  row=row, col=1)
         if is_2d or spherical:
             fig.update_yaxes(scaleanchor=f"x{axis_suffix}", scaleratio=1, constrain="domain", row=row, col=1)
         if is_2d:
@@ -933,6 +1052,8 @@ def save_plotly(reference, records, lower, upper, args):
                       template="plotly_white", showlegend=False, uirevision="fixed-grid",
                       font=dict(family="Arial, sans-serif", size=12))
     heading = f"{args.prefix} · {'1D spherical' if spherical else '2D' if is_2d else '1D'}"
+    if map_core is not None:
+        heading += f" · radial log map; linear core r <= {map_core:.3g}" + (" cm" if reference.cgs else "")
     settings = dict(heading=heading, fps=args.fps, is2d=is_2d, alongY=along_y, cut=cut,
                     spherical=spherical, cgs=reference.cgs,
                     densityScale=density_scale,
@@ -940,12 +1061,16 @@ def save_plotly(reference, records, lower, upper, args):
                     figure=json.loads(fig.to_json()))
     if spherical:
         settings["radialMap"] = np.where(projection[2], -1, projection[1]).tolist()
+    if map_core is not None:
+        settings["radialLog"] = dict(linthresh=map_core, centers=reference.x.tolist())
 
     def safe_json(value):
         # A filename prefix may contain HTML/script delimiters.
         return json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":")).replace("<", "\\u003c")
 
     suffix = ("_spherical" if spherical else "") + ("_cgs" if reference.cgs else "") + ("_log" if args.log else "")
+    if map_core is not None:
+        suffix += "_logmap"
     destination = args.output or args.directory / "animations" / f"{args.prefix.rstrip('_')}{suffix}_evolution.html"
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8") as stream:
@@ -999,8 +1124,16 @@ def main():
                         help="Emphasize density near this value in displayed units; requires --log")
     parser.add_argument("--density-max", type=float,
                         help="Density color/profile upper limit in displayed units")
+    parser.add_argument("--velocity-min", type=float,
+                        help="Velocity color lower limit (cm/s with --cgs); lower values use the bottom color")
+    parser.add_argument("--velocity-max", type=float,
+                        help="Velocity color upper limit (cm/s with --cgs); higher values use the top color")
     parser.add_argument("--log-x", "--log-radius", action="store_true",
-                        help="Logarithmic horizontal length axis on right-hand profiles; spherical maps stay linear")
+                        help="Logarithmic horizontal length axis on right-hand profiles")
+    parser.add_argument("--log-map-radius", action="store_true",
+                        help="Logarithmic radius on left spherical maps, preserving circular shells")
+    parser.add_argument("--map-linthresh", type=float,
+                        help="Linear core radius for --log-map-radius (default: first positive cell center; cm with --cgs)")
     parser.add_argument("--profile-range", "--xlim", type=float, nargs=2, metavar=("MIN", "MAX"),
                         help="Right-hand profile length range (cm with --cgs, otherwise code units)")
     parser.add_argument("--plot", choices=("cartesian", "spherical"), default="cartesian",
@@ -1031,6 +1164,13 @@ def main():
         parser.error("Require stride >= 1, dpi >= 1 and finite fps > 0")
     if args.map_pixels < 3:
         parser.error("--map-pixels must be >= 3")
+    if args.log_map_radius and args.plot != "spherical":
+        parser.error("--log-map-radius requires --plot spherical")
+    if args.map_linthresh is not None:
+        if not args.log_map_radius:
+            parser.error("--map-linthresh requires --log-map-radius")
+        if not np.isfinite(args.map_linthresh) or args.map_linthresh <= 0:
+            parser.error("--map-linthresh must be finite and positive")
     if args.density_min is not None and (not np.isfinite(args.density_min) or args.density_min <= 0):
         parser.error("--density-min must be finite and positive")
     if args.density_max is not None:
@@ -1038,6 +1178,12 @@ def main():
             parser.error("--density-max must be finite and positive")
         if args.density_threshold is not None:
             parser.error("--density-max cannot be combined with --density-threshold")
+    if any(value is not None and not np.isfinite(value)
+           for value in (args.velocity_min, args.velocity_max)):
+        parser.error("--velocity-min and --velocity-max must be finite")
+    if (args.velocity_min is not None and args.velocity_max is not None
+            and args.velocity_min >= args.velocity_max):
+        parser.error("--velocity-min must be smaller than --velocity-max")
     if args.profile_range is not None:
         lo, hi = args.profile_range
         if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:

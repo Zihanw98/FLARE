@@ -101,7 +101,7 @@ Python 根据这些元数据识别 H/He；即使物种索引改变，也不会�
 
 色标在整段动画中固定，速度分量色标以零为中心，组分及混合指标范围固定为 `[0,1]`。
 绘图复用根目录 `animate.py` 的 CSV 读取、网格检查和坐标边界函数，
-以及 `animate3d.py` 的运行清单读取。ghost 不参与绘图或积分。
+以及 `unit_test/snapshot_io.py` 的运行清单读取。ghost 不参与绘图或积分。
 默认最多选取 60 帧并保留首末帧，`--max-frames 120 --stride 1 --fps 10 --dpi 100`
 可调整输出。每帧对应一个选中快照，播放间隔并非等物理时间。
 
@@ -120,7 +120,7 @@ H、He、总质量及总能量的最大相对漂移均不超过 `2.23e-16`；
 Python 回归测试（包括合成数据、打乱行序、物种索引交换、温度单位、坏数据拒绝、GIF 帧数）：
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m unittest discover -s unit_test -p 'test_*.py'
 make -C unit_test -j4 test
 make -C unit_test -j4 check NDIM=2 CPPFLAGS=-DHD_NCOMP=3 \
   BUILD_DIR="$PWD/unit_test/build/ndim2_species" \

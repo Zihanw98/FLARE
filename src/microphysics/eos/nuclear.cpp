@@ -35,26 +35,25 @@ void evaluate_nuclear_eos(hd_core::Cell& cell, EoSInput input, double& pressure)
     double pc, uc;
     nuclear_cold_state(rho, cell.gamma, pc, uc);
     const double b = rho * physcon::R_g / cell.mean_molecular_weight;
-    const double gm1 = nuclear_gamma_thermal - 1.0;
-    double thermal;
+    double thermal_energy_density;
     if (input == EoSInput::RhoT)
-        thermal = b * cell.temperature / gm1;
+        thermal_energy_density = b * cell.temperature / (nuclear_gamma_thermal - 1.0);
     else if (input == EoSInput::RhoP)
-        thermal = (pressure - pc) / gm1;
+        thermal_energy_density = (pressure - pc) / (nuclear_gamma_thermal - 1.0);
     else
-        thermal = cell.U.internal_energy() - uc;
+        thermal_energy_density = cell.U.internal_energy() - uc;
 
     // Only absorb subtraction roundoff at T=0; no physical energy floor or U repair.
-    if (!std::isfinite(thermal) || thermal < -1e-12 * uc)
+    if (!std::isfinite(thermal_energy_density) || thermal_energy_density < -1e-12 * uc)
         throw std::invalid_argument("Nuclear requires nonnegative thermal energy (u >= u_cold, P >= P_cold)");
-    thermal = std::max(0.0, thermal);
-    cell.temperature = thermal * gm1 / b;
+    thermal_energy_density = std::max(0.0, thermal_energy_density);
+    cell.temperature = thermal_energy_density * (nuclear_gamma_thermal - 1.0) / b;
     if (input != EoSInput::RhoP)
-        pressure = pc + gm1 * thermal;
+        pressure = pc + (nuclear_gamma_thermal - 1.0) * thermal_energy_density;
     if (input != EoSInput::RhoE)
     {
-        cell.U[hd_core::INTERNAL_ENERGY] = uc + thermal;
-        cell.U[hd_core::ENERGY] = uc + thermal + cell.U.kinetic_energy();
+        cell.U[hd_core::INTERNAL_ENERGY] = uc + thermal_energy_density;
+        cell.U[hd_core::ENERGY] = uc + thermal_energy_density + cell.U.kinetic_energy();
     }
 }
 }

@@ -8,7 +8,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "unit_test"))
 from hydro_suite import parameters, read_frame, require, snapshot_files
 
 
