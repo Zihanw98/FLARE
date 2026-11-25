@@ -67,6 +67,7 @@ namespace hydro
             double energy_scale, velocity_scale, e0, inner_tolerance;
             mutable std::optional<double> vacuum_value;
             const double rho_n = hd_microphysics::nuclear_density_cgs/physcon::units.unit_density;
+            double p_n,u_n;
             double p_th0;
 
 
@@ -112,9 +113,16 @@ namespace hydro
                     double p_c0,u_c0;
                     hd_microphysics::nuclear_cold_state(rho0,gamma,p_c0,u_c0);
                     p_th0 = p0 - p_c0;
-                    e0 = u_c0/rho0 + p_th0/(hd_microphysics::nuclear_gamma_thermal - 1.0) *rho0;
+                    if (!std::isfinite(p_th0) || p_th0 <
+                        -1e-12 * (hd_microphysics::nuclear_gamma_thermal - 1.0) * u_c0)
+                        throw std::invalid_argument("ExactSolver: negative initial Nuclear thermal energy");
+                    p_th0 = std::max(0.0, p_th0);
+                    e0 = u_c0/rho0 + p_th0/(hd_microphysics::nuclear_gamma_thermal - 1.0) / rho0;
                     const double gamma_c = rho0 > rho_n ? hd_microphysics::nuclear_gamma_stiff : gamma;
                     sound_speed = sqrt((gamma_c * p_c0 + hd_microphysics::nuclear_gamma_thermal * p_th0)/rho0);
+                    hd_microphysics::nuclear_cold_state(rho_n, gamma, p_n, u_n);
+                    if (!std::isfinite(e0) || !std::isfinite(sound_speed) || sound_speed <= 0.0)
+                        throw std::runtime_error("ExactSolver: invalid initial Nuclear state");
                     return;
                 }
 
@@ -253,6 +261,8 @@ namespace hydro
 
             double vacuum_limit() const
             {
+                if (model == Equation_of_State::Nuclear)
+                    return evaluate(0.0).first;
                 if (model == Equation_of_State::IdealGas_Default
                     || model == Equation_of_State::IdealGas_Mixed
                     || model == Equation_of_State::Ionized)
@@ -297,24 +307,128 @@ namespace hydro
             // State on this side's wave curve at a supplied pressure, in code units.
             // This does not solve for star pressure or cache any sampled states.
             // All interface sampling obtains density and sound speed here.
-            std::pair<double, double> wave_state_at_pressure(double p) const
+            // At the Nuclear kink, integration may request the high-density limit.
+            std::pair<double, double> wave_state_at_pressure(double p, bool high_density_limit = false) const
             {
                 if (!std::isfinite(p) || p < 0.0)
                     throw std::invalid_argument("ExactSolver: invalid wave-state pressure");
                 if (model == Equation_of_State::Nuclear)
                 {
-                    if(p==p0)
-                    {
-                        return {rho0,sound_speed};
-                    }
-                    if(p<p0)
-                    {
-                        
-                    }
-                    if(p>p0)
-                    {
+                    if (p == 0.0) return {0.0, 0.0};
+                    if (p == p0 && !(rho0 == rho_n && high_density_limit))
+                        return {rho0, sound_speed};
 
+                    double rho_w = rho0;
+                    if (p < p0)
+                    {
+                        const double p_transition = p_n + p_th0 * std::pow(
+                            rho_n / rho0, hd_microphysics::nuclear_gamma_thermal);
+                        if (rho0 > rho_n && p == p_transition)
+                            rho_w = rho_n;
+                        else
+                        {
+                            // Bisect log(rho/rho0), so near-vacuum states do not
+                            // require hundreds of linear-density halvings.
+                            double lower = (std::log(p) - std::log(p0)) /
+                                std::min(gamma, hd_microphysics::nuclear_gamma_thermal);
+                            double upper = 0.0;
+                            bool converged = false;
+                            for (int i = 0; i < 160; ++i)
+                            {
+                                const double middle = lower + 0.5 * (upper - lower);
+                                rho_w = rho0 * std::exp(middle);
+                                double pc, uc;
+                                hd_microphysics::nuclear_cold_state(rho_w, gamma, pc, uc);
+                                const double p_trial = pc + p_th0 * std::exp(
+                                    hd_microphysics::nuclear_gamma_thermal * middle);
+                                if (middle == lower || middle == upper || p_trial == p
+                                    || upper - lower <= 0.1 * inner_tolerance)
+                                {
+                                    converged = true;
+                                    break;
+                                }
+                                if (p_trial > p) upper = middle; else lower = middle;
+                            }
+                            if (!converged)
+                                throw std::runtime_error("ExactSolver: rarefaction density did not converge");
+                        }
                     }
+                    else if (p > p0)
+                    {
+                        double pc0, uc0;
+                        hd_microphysics::nuclear_cold_state(rho0, gamma, pc0, uc0);
+                        const double gamma_c = rho0 >= rho_n
+                            ? hd_microphysics::nuclear_gamma_stiff : gamma;
+                        const double c02 = (gamma_c * pc0
+                            + hd_microphysics::nuclear_gamma_thermal * p_th0) / rho0;
+                        const double x = ((p - p0) / rho0) / c02;
+                        const double fundamental = 1.0 + 0.5 *
+                            (gamma_c * (gamma_c - 1.0) * pc0
+                             + hd_microphysics::nuclear_gamma_thermal
+                               * (hd_microphysics::nuclear_gamma_thermal - 1.0) * p_th0)
+                            / (rho0 * c02);
+                        const double weak_density = rho0 * (1.0 + x - (fundamental - 1.0) * x * x);
+                        // Shock and isentrope agree through second order. Avoid
+                        // subtracting nearly identical energies for weak shocks;
+                        // never extend this smooth expansion across the kink.
+                        if ((p - p0) / p0 < 1e-6
+                            && (rho0 >= rho_n || weak_density < rho_n))
+                            rho_w = weak_density;
+                        else
+                        {
+                            double lower = rho0;
+                            double upper = rho_n * std::pow(p / p_n, 1.0 /
+                                (p > p_n ? hd_microphysics::nuclear_gamma_stiff : gamma));
+                            auto H = [&](double rho)
+                            {
+                                double pc, uc;
+                                hd_microphysics::nuclear_cold_state(rho, gamma, pc, uc);
+                                const double e = uc / rho + (p - pc) /
+                                    ((hd_microphysics::nuclear_gamma_thermal - 1.0) * rho);
+                                return e - e0 - 0.5 * (p + p0) * ((rho - rho0) / rho0 / rho);
+                            };
+                            const double h_lower = H(lower), h_upper = H(upper);
+                            const double roundoff = 64.0 * std::numeric_limits<double>::epsilon()
+                                * std::max(std::abs(e0), p / rho0);
+                            if (!std::isfinite(upper) || upper < lower
+                                || !std::isfinite(h_lower) || !std::isfinite(h_upper)
+                                || h_lower < -roundoff || h_upper > roundoff)
+                                throw std::runtime_error("ExactSolver: invalid shock density bracket");
+                            bool converged = false;
+                            for (int i = 0; i < 160; ++i)
+                            {
+                                rho_w = lower + 0.5 * (upper - lower);
+                                const double value = H(rho_w);
+                                if (!std::isfinite(value))
+                                    throw std::runtime_error("ExactSolver: nonfinite shock residual");
+                                if (rho_w == lower || rho_w == upper || value == 0.0
+                                    || upper - lower <= inner_tolerance * (rho_w - rho0))
+                                {
+                                    converged = true;
+                                    break;
+                                }
+                                if (value > 0.0) lower = rho_w; else upper = rho_w;
+                            }
+                            if (!converged)
+                                throw std::runtime_error("ExactSolver: shock density did not converge");
+                        }
+                    }
+                    double pc, uc;
+                    hd_microphysics::nuclear_cold_state(rho_w, gamma, pc, uc);
+                    // Use the isentrope directly during expansion, avoiding
+                    // cancellation in p-pc for nearly cold states.
+                    double pt = p <= p0 ? p_th0 * std::pow(rho_w / rho0,
+                        hd_microphysics::nuclear_gamma_thermal) : p - pc;
+                    if (pt < -1e-12 * (hd_microphysics::nuclear_gamma_thermal - 1.0) * uc)
+                        throw std::runtime_error("ExactSolver: negative Nuclear wave thermal energy");
+                    pt = std::max(0.0, pt);
+                    const double gamma_c = rho_w > rho_n || (rho_w == rho_n && high_density_limit)
+                        ? hd_microphysics::nuclear_gamma_stiff : gamma;
+                    const double c = std::sqrt((gamma_c * pc
+                        + hd_microphysics::nuclear_gamma_thermal * pt) / rho_w);
+                    if (!std::isfinite(c) || c <= 0.0)
+                        throw std::runtime_error("ExactSolver: invalid Nuclear wave sound speed");
+                    return {rho_w, c};
                 }
                 if (model != Equation_of_State::IdealGas_Default
                     && model != Equation_of_State::IdealGas_Mixed
@@ -415,6 +529,151 @@ namespace hydro
                 return {velocity_scale*f, velocity_scale/p0*df_dp};
             }
 
+            // Nuclear velocity jump and pressure derivative, for one original state.
+            std::pair<double, double> evaluate_nuclear(double trial_pressure) const
+            {
+                if (trial_pressure == p0)
+                    return {0.0, (1.0 / rho0) / sound_speed};
+                if (trial_pressure == 0.0 && vacuum_value)
+                    return {*vacuum_value, 0.0};
+                const auto [rho, c_s] = wave_state_at_pressure(trial_pressure);
+
+                if (trial_pressure > p0)
+                {
+                    double pc, uc;
+                    hd_microphysics::nuclear_cold_state(rho, gamma, pc, uc);
+                    const double pt = std::max(0.0, trial_pressure - pc);
+                    const double gamma_c = rho > rho_n
+                        ? hd_microphysics::nuclear_gamma_stiff : gamma;
+                    const double dp = trial_pressure - p0;
+                    if (dp / p0 < 1e-6 && (rho0 >= rho_n || rho < rho_n))
+                    {
+                        // Endpoint expansion of the weak-wave integral.
+                        const double fundamental = 1.0 + 0.5 *
+                            (gamma_c * (gamma_c - 1.0) * pc
+                             + hd_microphysics::nuclear_gamma_thermal
+                               * (hd_microphysics::nuclear_gamma_thermal - 1.0) * pt)
+                            / (rho * c_s * c_s);
+                        const double x = (dp / rho) / (c_s * c_s);
+                        return {(dp / rho / c_s) * (1.0 + 0.5 * fundamental * x),
+                                (1.0 / rho) / c_s};
+                    }
+                    const double volume_jump = ((rho - rho0) / rho0) / rho;
+                    const double f = std::sqrt(dp) * std::sqrt(volume_jump);
+                    // Implicit differentiation of H(rho,p)=0:
+                    // drho/dp = -H_p/H_rho. Multiply both derivatives by
+                    // rho or rho^2 to avoid unnecessary small denominators.
+                    const double h_p_times_rho =
+                        1.0 / (hd_microphysics::nuclear_gamma_thermal - 1.0)
+                        - 0.5 * (rho - rho0) / rho0;
+                    const double h_rho_times_rho2 = pc
+                        - (gamma_c * pc + pt) / (hd_microphysics::nuclear_gamma_thermal - 1.0)
+                        - 0.5 * (trial_pressure + p0);
+                    const double drho_dp = -rho * h_p_times_rho / h_rho_times_rho2;
+                    const double df_dp = (volume_jump + (dp / rho) * (drho_dp / rho)) / (2.0 * f);
+                    if (!std::isfinite(f) || f <= 0.0
+                        || !std::isfinite(df_dp) || df_dp <= 0.0)
+                        throw std::runtime_error("ExactSolver: invalid Nuclear shock wave");
+                    return {f, df_dp};
+                }
+
+                // Standard RK4 for df/dx = q/(rho(q)c(q)), x=log(q/p0).
+                // Compare one full step with two half steps to adapt h.
+                const double p_transition = p_n + p_th0 * std::pow(
+                    rho_n / rho0, hd_microphysics::nuclear_gamma_thermal);
+                auto log_ratio = [&](double p)
+                {
+                    return p > 0.5 * p0 ? std::log1p((p - p0) / p0)
+                        : std::log(p) - std::log(p0);
+                };
+                const double x_transition = rho0 > rho_n ? log_ratio(p_transition) : 0.0;
+                auto pressure_at = [&](double x)
+                {
+                    if (x == 0.0) return p0;
+                    if (rho0 > rho_n && x == x_transition) return p_transition;
+                    return x > -0.5 ? p0 * std::exp(x) : std::exp(std::log(p0) + x);
+                };
+                int steps = 0;
+                auto integrate_segment = [&](double from, double to, bool high_limit)
+                {
+                    auto integrand = [&](double x)
+                    {
+                        const double q = pressure_at(x);
+                        const auto [density, sound] = wave_state_at_pressure(q, high_limit);
+                        const double value = (q / density) / sound;
+                        if (!std::isfinite(value) || value <= 0.0)
+                            throw std::runtime_error("ExactSolver: invalid Nuclear rarefaction integrand");
+                        return value;
+                    };
+                    // The RHS has no dependence on f, so RK4's two midpoint
+                    // evaluations coincide; only three function calls are needed.
+                    auto rk4 = [&](double a, double b)
+                    {
+                        const double middle = a + 0.5 * (b - a);
+                        const double k1 = integrand(a);
+                        const double k2 = integrand(middle);
+                        const double k3 = k2;
+                        const double k4 = integrand(b);
+                        return ((b - a) / 6.0) * (k1 + 2.0*k2 + 2.0*k3 + k4);
+                    };
+                    double x = from, h = -std::min(0.25, from - to), integral = 0.0;
+                    while (x > to)
+                    {
+                        if (++steps > 100000)
+                            throw std::runtime_error("ExactSolver: Nuclear rarefaction integration limit");
+                        const double next = std::max(to, x + h);
+                        const double middle = x + 0.5 * (next - x);
+                        if (next == x || middle == x || middle == next)
+                            throw std::runtime_error("ExactSolver: Nuclear rarefaction step underflow");
+                        const double step = next - x;
+                        const double coarse = rk4(x, next);
+                        const double fine = rk4(x, middle) + rk4(middle, next);
+                        const double error = std::abs(fine - coarse) / 15.0;
+                        // Positive integrand: local relative error budgets
+                        // add without cancellation along the rarefaction.
+                        const double tolerance = std::max(inner_tolerance, 128.0 *
+                            std::numeric_limits<double>::epsilon()) * std::abs(fine);
+                        if (error <= tolerance)
+                        {
+                            integral += fine + (fine - coarse) / 15.0;
+                            x = next;
+                        }
+                        const double factor = error == 0.0 ? 2.0 :
+                            std::clamp(0.9 * std::pow(tolerance / error, 0.2), 0.2, 2.0);
+                        h = -std::min(1.0, std::abs(step) * factor);
+                    }
+                    return integral;
+                };
+                auto integrate_range = [&](double from, double to)
+                {
+                    if (from == to) return 0.0;
+                    if (rho0 > rho_n && to < x_transition && x_transition < from)
+                        return integrate_segment(from, x_transition, true)
+                             + integrate_segment(x_transition, to, false);
+                    return integrate_segment(from, to, rho0 > rho_n && to >= x_transition);
+                };
+                if (trial_pressure > 0.0)
+                    return {integrate_range(0.0, log_ratio(trial_pressure)), (1.0 / rho) / c_s};
+
+                // At p=0 only f is used to bracket the outer solve. Integrate
+                // toward vacuum until the remaining velocity integral is bounded.
+                double f = 0.0, x = 0.0;
+                for (int i = 0; i < 160; ++i)
+                {
+                    f += integrate_range(x, x - 4.0);
+                    x -= 4.0;
+                    const auto [density, sound] = wave_state_at_pressure(pressure_at(x));
+                    if (density < rho_n && 2.0 * sound /
+                        (std::min(gamma, hd_microphysics::nuclear_gamma_thermal) - 1.0)
+                        <= inner_tolerance * std::max(sound_speed, std::abs(f)))
+                    {
+                        vacuum_value = f;
+                        return {f, 0.0}; // derivative placeholder, not df/dp at vacuum
+                    }
+                }
+                throw std::runtime_error("ExactSolver: Nuclear vacuum limit did not converge");
+            }
+
             // Return {wave value, pressure derivative}, sharing sqrt/pow work.
             std::pair<double, double> evaluate(double trial_pressure) const
             {
@@ -444,6 +703,9 @@ namespace hydro
                 {
                     return evaluate_radiation(trial_pressure);
                 }
+                if (model == Equation_of_State::Nuclear)
+                    return evaluate_nuclear(trial_pressure);
+
                 throw std::invalid_argument("ExactSolver: unsupported equation of state");
             }
         };
