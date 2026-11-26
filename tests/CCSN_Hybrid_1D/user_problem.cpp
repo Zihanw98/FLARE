@@ -26,11 +26,11 @@ void initialize(hd_core::MeshBlock& mesh, const config::SimulationConfig& cfg)
         || cfg.upper[0] > 1e10 || cfg.upper[0] < 3e8 || cfg.nactive[0] < 128
         || std::abs(cfg.gamma - 4.0/3.0) > 1e-12 || eos_type != Equation_of_State::Nuclear
         || !cfg.spherical_gravity_enabled || !cfg.spherical_self_gravity_enabled
-        || cfg.spherical_central_mass != 0.0 || cfg.riemann_solver != "hll"
+        || cfg.spherical_central_mass != 0.0
         || cfg.constant_gravity_enabled || cfg.constant_heating_enabled
         || mesh.bc_lower[0] != boundary::BoundaryCondition::Reflective
         || mesh.bc_upper[0] != boundary::BoundaryCondition::User)
-        throw std::invalid_argument("CCSN toy requires Nuclear/HLL, gamma=4/3, spherical self gravity, no central mass/heating, reflective/outflow boundaries and 3e8<=rmax<=1e10 cm");
+        throw std::invalid_argument("CCSN toy requires Nuclear EoS, gamma=4/3, spherical self gravity, no central mass/heating, reflective/outflow boundaries and 3e8<=rmax<=1e10 cm");
 
     // Fine at r=0, gradually stretched outward; no change to framework mesh rules.
     constexpr double stretch_radius = 2e6;

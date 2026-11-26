@@ -23,6 +23,8 @@ namespace hydro
      * are frozen across its waves; Saha and radiation transport are not solved.
      * Constant specific ionization energy cancels from the wave relations and
      * is restored by the existing EoS conversion when building the energy flux.
+     * Nuclear uses the low-density cold exponent supplied on each side and
+     * samples isentropic expansion across the nuclear-density transition and into vacuum.
      */
     class ExactSolver final: public RiemannSolver
     {
@@ -44,8 +46,8 @@ namespace hydro
              * @param[in] left Primitive state immediately to the left of the face.
              * @param[in] right Primitive state immediately to the right of the face.
              * @param[in] direction Face-normal axis in [0, hd_core::NDIM).
-             * @param[in] gamma_L Left gas thermal adiabatic index greater than one.
-             * @param[in] gamma_R Right gas thermal adiabatic index greater than one.
+             * @param[in] gamma_L Left gas adiabatic index (low-density cold exponent for Nuclear).
+             * @param[in] gamma_R Right gas adiabatic index (low-density cold exponent for Nuclear).
              * @param[out] face_speed Maximum absolute outer wave speed, for CFL control.
              * @param[out] face_velocity Signed sampled normal fluid velocity, for pressure work.
              * @return Conserved flux in the positive axis direction; the exact solver returns zero when the sampled interface is vacuum.

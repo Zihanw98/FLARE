@@ -1,6 +1,5 @@
 #include "test_support.h"
-// PressureWave is private to this translation unit. Exercise it directly while
-// the public Nuclear Exact solver remains intentionally disabled.
+// Include the implementation to test the private PressureWave against analytic curves.
 #include "hydro/riemann/exact.cpp"
 
 namespace
@@ -97,6 +96,27 @@ void hybrid_shocks()
     for (double thermal : {0.0, 0.8})
     {
         const auto w = wave(initial_density, 4.0/3.0, thermal);
+        hd_core::Primitives upstream{};
+        upstream[hd_core::RHO] = w.rho0;
+        upstream[hd_core::PRE] = w.p0;
+        const int normal = hd_core::NDIM - 1;
+        const double u0 = 0.3*w.sound_speed;
+        upstream[hd_core::VEL(normal)] = u0;
+        auto check_outer_speed = [&](double p, double relative_speed) {
+            relative(hydro::outer_wave_speed(upstream, w, p, hydro::Side::Left, normal),
+                     u0 - relative_speed);
+            relative(hydro::outer_wave_speed(upstream, w, p, hydro::Side::Right, normal),
+                     u0 + relative_speed);
+        };
+        // The rarefaction head travels in the original gas, even across the kink or into vacuum.
+        for (double p : {0.0, 0.1*w.p0, w.p0})
+            check_outer_speed(p, w.sound_speed);
+        if (initial_density == 1.0)
+        {
+            const double c_high = std::sqrt((nuclear_gamma_stiff*w.p_n
+                + nuclear_gamma_thermal*w.p_th0) / w.rho_n);
+            check_outer_speed(std::nextafter(w.p0, std::numeric_limits<double>::infinity()), c_high);
+        }
         for (double compression : {1.0001, 1.02, 1.5, 3.0})
         {
             // Prescribe density, solve the Hugoniot explicitly for pressure.
@@ -111,6 +131,7 @@ void hybrid_shocks()
             CHECK(p > w.p0);
             const auto state = w.wave_state_at_pressure(p);
             relative(state.first, rho);
+            check_outer_speed(p, std::sqrt((p-w.p0)/d)/w.rho0);
             const auto [f, df] = w.evaluate(p);
             relative(f, std::sqrt((p-w.p0)*d));
             const double h = 1e-5*(p-w.p0);

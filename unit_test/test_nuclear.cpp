@@ -71,11 +71,10 @@ void check_eos()
     }
 }
 
-void check_flux()
+void check_flux(const std::string& name)
 {
     eos_type = model;
-    expect_throw<std::invalid_argument>([] { hydro::make_riemann_solver("exact",1e-10,100); });
-    const auto solver = hydro::make_riemann_solver("hll",1e-10,100);
+    const auto solver = hydro::make_riemann_solver(name,1e-10,100);
     Cell c;
     c.gamma = 4.0/3;
     c.U[RHO] = 3e14;
@@ -96,7 +95,61 @@ void check_flux()
     CHECK(std::abs(wall[RHO]) < 1e-12*std::abs(expected[RHO]));
     CHECK(velocity == 0);
     CHECK(near(wall[ENERGY],0));
+    const auto collision = solver->flux(w,reflected,0,c.gamma,c.gamma,speed,velocity);
+    CHECK(collision[MOMDEN(0)] > p);
+    CHECK(velocity == 0.0 && collision[RHO] == 0.0);
     eos_type = Equation_of_State::IdealGas_Default;
+}
+
+void check_exact_vacuum(const hydro::RiemannSolver& solver)
+{
+    const double g = 4.0/3.0, stiff = nuclear_gamma_stiff;
+    const double rn = nuclear_density_cgs / physcon::units.unit_density;
+    Primitives gas{}, vacuum{}, face{};
+    gas[RHO] = 2.0*rn;
+    face[RHO] = rn;
+    double uc;
+    nuclear_cold_state(gas[RHO], g, gas[PRE], uc);
+    nuclear_cold_state(rn, g, face[PRE], uc);
+
+    // Choose the incident velocity so the face lies between the two sonic
+    // characteristics at the kink. Integrate the two cold polytropes analytically.
+    const double c0 = std::sqrt(stiff*gas[PRE]/gas[RHO]);
+    const double c_high = std::sqrt(stiff*face[PRE]/rn);
+    const double c_low = std::sqrt(g*face[PRE]/rn);
+    const double gain_to_kink = 2.0*(c0-c_high)/(stiff-1.0);
+    const double gain_to_vacuum = gain_to_kink + 2.0*c_low/(g-1.0);
+    const int d = NDIM-1;
+    double speed, velocity, hint = gas[PRE];
+    for (double sign : {1.0, -1.0})
+    {
+        face[VEL(d)] = sign*0.5*(c_low+c_high);
+        gas[VEL(d)] = face[VEL(d)] - sign*gain_to_kink;
+        const auto expected = hydro::physical_flux(face, d, g);
+        const auto one_sided = solver.flux_with_pressure_hint(
+            sign > 0 ? gas : vacuum, sign > 0 ? vacuum : gas, d, g, g, hint, speed, velocity);
+        for (int k=0; k<NVAR; ++k) CHECK(near(one_sided[k], expected[k], 2e-9));
+        CHECK(near(velocity, face[VEL(d)], 2e-9));
+        CHECK(near(speed, std::max(std::abs(gas[VEL(d)]-sign*c0),
+                                   std::abs(gas[VEL(d)]+sign*gain_to_vacuum)), 2e-9));
+        CHECK(hint == 0.0);
+
+        // A second gas receding beyond the vacuum edge gives the same face state.
+        auto other = gas;
+        other[VEL(d)] = gas[VEL(d)] + sign*3.0*gain_to_vacuum;
+        const auto generated = solver.flux(sign > 0 ? gas : other, sign > 0 ? other : gas,
+                                           d, g, g, speed, velocity);
+        for (int k=0; k<NVAR; ++k) CHECK(near(generated[k], expected[k], 2e-9));
+        CHECK(near(velocity, face[VEL(d)], 2e-9));
+    }
+    auto left = gas, right = gas;
+    left[VEL(d)] = -2.0*gain_to_vacuum;
+    right[VEL(d)] = 2.0*gain_to_vacuum;
+    const auto central = solver.flux(left, right, d, g, g, speed, velocity);
+    CHECK(central.data == Conserved{}.data && velocity == 0.0);
+    CHECK(near(speed, right[VEL(d)]+c0));
+    const auto empty = solver.flux(vacuum, vacuum, d, g, g, speed, velocity);
+    CHECK(empty.data == Conserved{}.data && speed == 0.0 && velocity == 0.0);
 }
 }
 
@@ -105,10 +158,14 @@ int main()
     return run_test("nuclear",[] {
         physcon::units.init_unitsystem_MLT(1,1,1,1);
         check_eos();
-        check_flux();
+        for (const char* name : {"hll", "exact", "exact_bisection"}) check_flux(name);
         // The same physical model must survive non-CGS density/energy/T units.
         physcon::units.init_unitsystem_RHOLV(1e12,1e6,1e9,1e10);
         check_eos();
+        eos_type = model;
+        for (const char* name : {"exact", "exact_bisection"})
+            check_exact_vacuum(*hydro::make_riemann_solver(name,1e-10,100));
+        eos_type = Equation_of_State::IdealGas_Default;
         physcon::units.init_unitsystem_MLT(1,1,1,1);
     });
 }

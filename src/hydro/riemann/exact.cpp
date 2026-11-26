@@ -325,6 +325,12 @@ namespace hydro
                             rho_n / rho0, hd_microphysics::nuclear_gamma_thermal);
                         if (rho0 > rho_n && p == p_transition)
                             rho_w = rho_n;
+                        else if (p_th0 == 0.0)
+                        {
+                            const double gamma_c = p > p_n
+                                ? hd_microphysics::nuclear_gamma_stiff : gamma;
+                            rho_w = rho_n * std::pow(p / p_n, 1.0 / gamma_c);
+                        }
                         else
                         {
                             // Bisect log(rho/rho0), so near-vacuum states do not
@@ -422,7 +428,10 @@ namespace hydro
                     if (pt < -1e-12 * (hd_microphysics::nuclear_gamma_thermal - 1.0) * uc)
                         throw std::runtime_error("ExactSolver: negative Nuclear wave thermal energy");
                     pt = std::max(0.0, pt);
+                    // A tiny compression from the kink may round back to rho_n.
+                    const bool compressing_from_kink = p > p0 && rho0 == rho_n;
                     const double gamma_c = rho_w > rho_n || (rho_w == rho_n && high_density_limit)
+                        || compressing_from_kink
                         ? hd_microphysics::nuclear_gamma_stiff : gamma;
                     const double c = std::sqrt((gamma_c * pc
                         + hd_microphysics::nuclear_gamma_thermal * pt) / rho_w);
@@ -543,7 +552,7 @@ namespace hydro
                     double pc, uc;
                     hd_microphysics::nuclear_cold_state(rho, gamma, pc, uc);
                     const double pt = std::max(0.0, trial_pressure - pc);
-                    const double gamma_c = rho > rho_n
+                    const double gamma_c = rho > rho_n || rho0 == rho_n
                         ? hd_microphysics::nuclear_gamma_stiff : gamma;
                     const double dp = trial_pressure - p0;
                     if (dp / p0 < 1e-6 && (rho0 >= rho_n || rho < rho_n))
@@ -738,11 +747,16 @@ namespace hydro
                 return W[hd_core::VEL(direction)]
                     + (side == Side::Left ? -1.0 : 1.0) * c * factor;
             }
-            if (wave.model == Equation_of_State::Ionized_Radiative)
+            if (wave.model == Equation_of_State::Ionized_Radiative
+                || wave.model == Equation_of_State::Nuclear)
             {
-                double speed = wave.wave_state_at_pressure(wave.p0).second;
+                double speed = wave.sound_speed; // Rarefaction head in the upstream rest frame.
                 if (p_star > wave.p0)
-                    speed = ((p_star-wave.p0)/wave.rho0)/wave.evaluate(p_star).first;
+                {
+                    // Momentum jump: P_star - P0 = rho0 * |S - u0| * |u_star - u0|.
+                    const double velocity_jump = wave.evaluate(p_star).first;
+                    speed = ((p_star - wave.p0) / wave.rho0) / velocity_jump;
+                }
                 return W[hd_core::VEL(direction)] + (side == Side::Left ? -speed : speed);
             }
             throw std::invalid_argument("ExactSolver: unsupported equation of state");
@@ -832,7 +846,7 @@ namespace hydro
                     return 2*c_K/(gamma_K-1)*(std::pow(p_star/p_K,(gamma_K-1)/(2*gamma_K))-1);
                 }
             }
-            if (wave.model == Equation_of_State::Ionized_Radiative)
+            if (wave.model == Equation_of_State::Ionized_Radiative || wave.model == Equation_of_State::Nuclear)
             {
                 return wave.evaluate(p_star).first;
             }
@@ -881,7 +895,7 @@ namespace hydro
                     }
                 }
             }
-            if (wave.model == Equation_of_State::Ionized_Radiative)
+            if (wave.model == Equation_of_State::Ionized_Radiative || wave.model == Equation_of_State::Nuclear)
             {
                 const double sign = side == Side::Left ? -1.0 : 1.0;
                 const double u0 = K[hd_core::VEL(direction)];
@@ -913,6 +927,38 @@ namespace hydro
                         if (lo <= -640.0)
                             throw std::runtime_error("ExactSolver: cannot bracket rarefaction fan sample");
                         lo = std::max(-640.0, 2.0*lo);
+                    }
+                }
+                //Special treatment for nuclear EoS
+                if (wave.model == Equation_of_State::Nuclear && wave.rho0 > wave.rho_n)
+                {
+                    // Total pressure where this isentrope reaches nuclear density.
+                    const double p_tr = wave.p_n + wave.p_th0 * std::pow(
+                        wave.rho_n / wave.rho0, hd_microphysics::nuclear_gamma_thermal);
+
+                    if (pre_star <= p_tr)
+                    {
+                        const double u_tr = u0 + sign * wave.evaluate(p_tr).first;
+                        const double c_low  = wave.wave_state_at_pressure(p_tr, false).second;
+                        const double c_high = wave.wave_state_at_pressure(p_tr, true).second;
+
+                        // Same signed characteristic as characteristic(q), on each side of the kink.
+                        const double h_low  = sign * u_tr + c_low;
+                        const double h_high = sign * u_tr + c_high;
+
+                        if (h_low <= 0.0 && h_high >= 0.0)
+                        {
+                            face[hd_core::RHO] = wave.rho_n;
+                            face[hd_core::VEL(direction)] = u_tr;
+                            face[hd_core::PRE] = p_tr;
+                            return face;
+                        }
+
+                        const double q_tr = std::log(p_tr) - std::log(wave.p0);
+                        if (h_low > 0.0)
+                            hi = std::min(hi, q_tr);  // Root lies below p_tr.
+                        else
+                            lo = std::max(lo, q_tr);  // Root lies above p_tr.
                     }
                 }
                 for (int n = 0; n < 100; ++n)
@@ -959,7 +1005,7 @@ namespace hydro
                     return face;
                 }
             }
-            if (wave.model == Equation_of_State::Ionized_Radiative)
+            if (wave.model == Equation_of_State::Ionized_Radiative || wave.model == Equation_of_State::Nuclear)
             {
                 const double speed = outer_wave_speed(K, wave, pre_star, side, direction);
                 if ((side == Side::Left && speed > 0.0) || (side == Side::Right && speed < 0.0)) return K;
@@ -1150,8 +1196,8 @@ namespace hydro
             const double rho_L = W_L[hd_core::RHO], rho_R = W_R[hd_core::RHO];
             const double pre_L = W_L[hd_core::PRE], pre_R = W_R[hd_core::PRE];
             const double v_nL = W_L[hd_core::VEL(direction)], v_nR = W_R[hd_core::VEL(direction)];
-            if (left.model == Equation_of_State::Ionized_Radiative
-                && pre_L == pre_R && v_nL == v_nR)
+            if (pre_L == pre_R && v_nL == v_nR
+                && (left.model == Equation_of_State::Ionized_Radiative || left.model == Equation_of_State::Nuclear))
             {
                 record.failed = false;
                 return std::pair<double, double>{pre_L, v_nL};
@@ -1256,8 +1302,8 @@ namespace hydro
             RootSolveRecord record;
             const double pre_L = W_L[hd_core::PRE], pre_R = W_R[hd_core::PRE];
             const double v_nL = W_L[hd_core::VEL(direction)], v_nR = W_R[hd_core::VEL(direction)];
-            if (left.model == Equation_of_State::Ionized_Radiative
-                && pre_L == pre_R && v_nL == v_nR)
+            if (pre_L == pre_R && v_nL == v_nR
+                && (left.model == Equation_of_State::Ionized_Radiative || left.model == Equation_of_State::Nuclear))
             {
                 record.failed = false;
                 return std::pair<double, double>{pre_L, v_nL};
@@ -1360,7 +1406,8 @@ namespace hydro
                 //Though there is no star region. In this case, the interface between the tail of rarefraction and vacuum is equivalent to star region, because they are both the boundary of rarefraction(tail).
                 //So S_V is v_nstar because it's the speed of boundary, and p_star =0.0, because it can make c_sK_star = 0, the v_rare_tail = S_V....everything fine!
             }
-            if (left.model == Equation_of_State::Ionized_Radiative)
+            if (left.model == Equation_of_State::Ionized_Radiative
+                || left.model == Equation_of_State::Nuclear)
             {
                 const double S_VL = W_L[hd_core::VEL(direction)]-left.vacuum_limit();
                 const double S_VR = W_R[hd_core::VEL(direction)]+right.vacuum_limit();
@@ -1403,7 +1450,8 @@ namespace hydro
                 //Though there is no star region. In this case, the interface between the tail of rarefraction and vacuum is equivalent to star region, because they are both the boundary of rarefraction(tail).
                 //So S_V is v_nstar because it's the speed of boundary, and p_star =0.0, because it can make c_sK_star = 0, the v_rare_tail = S_V....everything fine!
             }
-            if (wave.model == Equation_of_State::Ionized_Radiative)
+            if (wave.model == Equation_of_State::Ionized_Radiative
+                || wave.model == Equation_of_State::Nuclear)
             {
                 const double S_V = gas[hd_core::VEL(direction)]
                     + (gas_side == Side::Left ? -1.0 : 1.0)*wave.vacuum_limit();
@@ -1475,6 +1523,7 @@ namespace hydro
                 case Equation_of_State::IdealGas_Mixed:
                 case Equation_of_State::Ionized:
                 case Equation_of_State::Ionized_Radiative:
+                case Equation_of_State::Nuclear:
                     break;
                 default:
                     throw std::invalid_argument("ExactSolver: unsupported equation of state");

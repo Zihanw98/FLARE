@@ -48,7 +48,8 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `cell_conversion` | Cell 的 EoS 转换：副本隔离、Setter 只写 U、失败时状态不变、双能量选择、全局/显式 EoS、真空；`HD_NCOMP=2` 时额外检查 H I/H II 混合物的全部四种 EoS |
 | `eos` | RhoT/RhoP/RhoE 往返、热力学合法性、显式模型声速、真空；`HD_NCOMP=2` 时检查 Mixed/Ionized/辐射分支 |
 | `exact_eos` | `HD_NCOMP=2`：辐射通量、gamma=4/3 解析参照、稀疏波/激波/真空、接触间断、电离能输运以及周期网格守恒 |
-| `nuclear_wave` | Nuclear 内部波函数：理想气体解析极限、跨核密度稀疏波与真空极限、独立 Hugoniot 激波状态、导数差分、弱激波及代码单位变换；尚不开放 Nuclear Exact 通量接口 |
+| `nuclear` | Nuclear 热力学转换、声速和单位变换，HLL 与两种 exact 的公开通量接口，以及初始和生成真空的界面采样 |
+| `nuclear_wave` | Nuclear 单侧波函数的理想气体解析极限、跨核密度稀疏波与真空极限、独立 Hugoniot 激波状态、导数差分、弱激波及代码单位变换 |
 | `species` | 物种表、单态索引、按 `(Z,A)` 查询所有已激活电离态索引（按电荷排序，含负离子） |
 | `initialization` | 普通 profile 与 MESA 网格、流体状态读取及错误回滚 |
 | `profile_composition` | 专用 `HD_NCOMP=10` 测试：基态输入、可选电离态、同位素别名、MESA 核素映射、质量分数校验与回滚 |
