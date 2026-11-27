@@ -1,0 +1,62 @@
+{
+  "flare_hll": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 100938990106.44923,
+    "shock_mass_msun": 5.1754933295385825,
+    "shock_bracket_cm": [
+      100514260401.19853,
+      101386416206.75204
+    ],
+    "energy_residual_over_bomb": 0.0022555067943236602,
+    "mass_change": 1.0591720385200176e-06,
+    "max_speed_cms": 1028014225.1598331,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 0.9999968437893991,
+    "energy_residual_after_actual_heating_over_bomb": 0.0022586630049246104,
+    "initial_max_relative_errors": {
+      "rho": 0.0,
+      "p": 2.220446049250313e-16,
+      "r": 0.0,
+      "m": 8.739675649849232e-13
+    },
+    "shock_radius_vs_snec_ideal_percent": -0.8493779942024826
+  },
+  "snec_ideal": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 101803688231.57474,
+    "shock_mass_msun": 5.17628395175911,
+    "shock_bracket_cm": [
+      101553492707.54523,
+      102196902652.90259
+    ],
+    "energy_residual_over_bomb": 0.019136307877362403,
+    "mass_change": 0.0,
+    "max_speed_cms": 1074925623.5099647,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0096832770103743,
+    "energy_residual_after_actual_heating_over_bomb": 0.00945303086698801,
+    "shock_radius_vs_snec_ideal_percent": 0.0
+  },
+  "flare_exact": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 100938990106.44923,
+    "shock_mass_msun": 5.1754816721706565,
+    "shock_bracket_cm": [
+      100514260401.19853,
+      101386416206.75204
+    ],
+    "energy_residual_over_bomb": 0.0022373881873414617,
+    "mass_change": 5.823497624124485e-07,
+    "max_speed_cms": 1027693256.1393771,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0000005186431489,
+    "energy_residual_after_actual_heating_over_bomb": 0.0022368695441925546,
+    "initial_max_relative_errors": {
+      "rho": 0.0,
+      "p": 2.220446049250313e-16,
+      "r": 0.0,
+      "m": 8.739675649849232e-13
+    },
+    "shock_radius_vs_snec_ideal_percent": -0.8493779942024826
+  }
+}

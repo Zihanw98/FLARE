@@ -1,0 +1,8 @@
+{
+  "prefix_end_s": 0.003,
+  "prefix_snapshot_count": 87,
+  "prefix_byte_identical": true,
+  "exact_snapshot_times_match_run_log": 457,
+  "completed_exact_run_logs_identical": true,
+  "note": "A residual pilot was terminated. Its potentially overwritten early output was independently reproduced in a unique directory and verified byte-for-byte identical; no snapshot repairs were needed."
+}

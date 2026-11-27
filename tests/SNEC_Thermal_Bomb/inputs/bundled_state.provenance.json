@@ -1,0 +1,28 @@
+{
+  "source_run": "output_radial02/snec_initial",
+  "radial_cap": 0.02,
+  "model": {
+    "active_cells": 1532,
+    "inner_radius_cm": 1461624498.900409,
+    "outer_radius_cm": 109039831363267.84,
+    "excised_mass_g": 2.98735784e+33,
+    "envelope_mass_g": 2.1316822289999986e+34,
+    "bomb_cells_snec": 14,
+    "bomb_support_mass_msun": 0.10367322472381196,
+    "bomb_energy_erg": 1.6e+51,
+    "bomb_duration_s": 0.1,
+    "gamma": 1.4
+  },
+  "flare_head": "83fe3d7c046716637ac2d9fb32cefaf97774aceb",
+  "input_hashes": {
+    "snec_input13.short": "76ae6e24601d2b90d40e42006b186a470e2d4063f118ca37136d494eeebc5aa1",
+    "GridPattern.dat": "f194ba0c7c0d1bf10c1d79ed8a12ddc52e2fe59a49c7e2fae57f52633025aa48",
+    "snec_input13.iso.dat": "1264dda2ea4aa11cb7c62814455f80c4671582598f45d726132b4a680c42bcbb"
+  },
+  "adapter_sha256": "d1a2878cbab099e4e7ba132b7503a0bb02cbfe9ec2f98931de88dd9ad081fff2",
+  "bundled_files": {
+    "initial_shells.dat": "7d6b30999be9c29c01aa83ff5092bf296f10f5697a1930652fa42248f7890c97",
+    "bomb.dat": "0345f7e1c875b3f568944a902cd2ae29a6fd95da3b7f4c6f3a91fd2c42d2f1ac",
+    "parameters.txt": "af915a7f908f33545f2ed57a0c65bcb52261a8fb548b15efb26b5905a0dc4b02"
+  }
+}

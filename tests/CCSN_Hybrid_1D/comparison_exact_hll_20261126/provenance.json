@@ -1,0 +1,11 @@
+{
+  "baseline_commit": "83fe3d7c046716637ac2d9fb32cefaf97774aceb",
+  "source_sha256": {
+    "src/hydro/riemann/exact.cpp": "73b91b20db0c73bced2a7fe2ab3162031d89574955e7d24c2094753295f0b7c0",
+    "src/hydro/riemann/hll.cpp": "89e1710112aeadc84d9ce32d6203381d35a8b2560f21ff4e64d2c31e881bf4f4",
+    "src/source/gravity.cpp": "4cc9425cc048dc6b459db823a0081cf25b67f5b5c9c25deb89206b48728701f6",
+    "tests/CCSN_Hybrid_1D/user_problem.cpp": "8809d4d1a97e408badd7f8e4b5436d693242041b9898d2d858633b67ef5882c9"
+  },
+  "tests": "make -C unit_test -j4 check NDIM=1 TESTS=\"nuclear_wave nuclear optimization\"",
+  "note": "Exact uses verified positive-pressure lower bounds before vacuum integration, pressure-based rarefaction sound-speed branch selection at the nuclear kink, and endpoint quadrature for indivisible floating-point intervals. HLL code and gravity coupling unchanged."
+}

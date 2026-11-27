@@ -430,9 +430,16 @@ namespace hydro
                     pt = std::max(0.0, pt);
                     // A tiny compression from the kink may round back to rho_n.
                     const bool compressing_from_kink = p > p0 && rho0 == rho_n;
-                    const double gamma_c = rho_w > rho_n || (rho_w == rho_n && high_density_limit)
-                        || compressing_from_kink
-                        ? hd_microphysics::nuclear_gamma_stiff : gamma;
+                    // Near the kink the density root has a finite tolerance.
+                    // On an isentrope, pressure identifies the side exactly;
+                    // a rounded density must not switch the sound-speed branch.
+                    const double p_transition = p_n + p_th0 * std::pow(
+                        rho_n / rho0, hd_microphysics::nuclear_gamma_thermal);
+                    const bool stiff = p < p0
+                        ? (p > p_transition || (p == p_transition && high_density_limit))
+                        : (rho_w > rho_n || (rho_w == rho_n && high_density_limit)
+                           || compressing_from_kink);
+                    const double gamma_c = stiff ? hd_microphysics::nuclear_gamma_stiff : gamma;
                     const double c = std::sqrt((gamma_c * pc
                         + hd_microphysics::nuclear_gamma_thermal * pt) / rho_w);
                     if (!std::isfinite(c) || c <= 0.0)
@@ -630,10 +637,18 @@ namespace hydro
                     {
                         if (++steps > 100000)
                             throw std::runtime_error("ExactSolver: Nuclear rarefaction integration limit");
-                        const double next = std::max(to, x + h);
+                        double next = std::max(to, x + h);
+                        if (next == x) next = std::nextafter(x, to);
                         const double middle = x + 0.5 * (next - x);
-                        if (next == x || middle == x || middle == next)
-                            throw std::runtime_error("ExactSolver: Nuclear rarefaction step underflow");
+                        if (middle == x || middle == next)
+                        {
+                            // Adjacent floating-point endpoints cannot supply
+                            // RK4 midpoints. Integrate this last machine interval
+                            // with its endpoint values instead of subdividing it.
+                            integral += (next - x) * 0.5 * (integrand(x) + integrand(next));
+                            x = next;
+                            continue;
+                        }
                         const double step = next - x;
                         const double coarse = rk4(x, next);
                         const double fine = rk4(x, middle) + rk4(middle, next);
@@ -1207,13 +1222,29 @@ namespace hydro
                 const auto l = left.evaluate(p), r = right.evaluate(p);
                 return std::pair<double, double>{l.first + r.first + v_nR - v_nL, l.second + r.second};
             };
-            if (residual(0).first >= 0)
+            // Try nearby positive pressures before the expensive Nuclear
+            // integral to vacuum. Accept only a verified lower bound;
+            // strong expansions retain the original vacuum check.
+            double low = 0, high = std::max(pre_L, pre_R);
+            if (left.model == Equation_of_State::Nuclear)
+            {
+                double candidate = std::min(pre_L, pre_R);
+                for (int attempt = 0; attempt < 8 && candidate > 0.0; ++attempt)
+                {
+                    if (residual(candidate).first <= 0.0)
+                    {
+                        low = candidate;
+                        break;
+                    }
+                    candidate *= 0.5;
+                }
+            }
+            if (low == 0.0 && residual(0).first >= 0)
             {
                 record.failed = false;
                 record.vacuum = true;
                 return std::nullopt;
             }
-            double low = 0, high = std::max(pre_L, pre_R);
             while (residual(high).first < 0)
             {
                 high *= 2;
@@ -1313,13 +1344,26 @@ namespace hydro
                 return wave_condition(p, left) +
                     wave_condition(p, right) + v_nR - v_nL;
             };
-            if (residual(0) >= 0)
+            double low = 0, high = std::max(pre_L, pre_R);
+            if (left.model == Equation_of_State::Nuclear)
+            {
+                double candidate = std::min(pre_L, pre_R);
+                for (int attempt = 0; attempt < 8 && candidate > 0.0; ++attempt)
+                {
+                    if (residual(candidate) <= 0.0)
+                    {
+                        low = candidate;
+                        break;
+                    }
+                    candidate *= 0.5;
+                }
+            }
+            if (low == 0.0 && residual(0) >= 0)
             {
                 record.failed = false;
                 record.vacuum = true;
                 return std::nullopt;
             }
-            double low = 0, high = std::max(pre_L, pre_R);
             while (residual(high) < 0)
             {
                 high *= 2;

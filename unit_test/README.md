@@ -17,6 +17,20 @@ Python 测试覆盖动画、快照读取、MESA 网格合并、H/He 分析与流
 `hydro_suite.py`、`gravity_checks.py` 是多个算例的共用运行/验证入口；
 `performance_checks.py`、`optimization_checks.py` 保留原有算例与输出路径，可用 `--help` 查看参数。
 
+CCSN 的 Exact/HLL 对照使用 `compare_ccsn_solvers.py`，例如：
+
+```bash
+python3 unit_test/compare_ccsn_solvers.py \
+  --exact tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/exact/output \
+  --hll tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/hll/output \
+  --output tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/analysis \
+  --end 0.0104
+```
+
+脚本检查初态一致性与每帧热力学状态，并输出中心密度、反弹、激波、质量和
+气体加自引力总能量对照。引力势能按分片常密度球壳积分；不为 Exact 套用 HLL
+质量通量诊断。反弹时刻取已保存快照的中心密度峰值，未完成的运行会明确标记。
+
 原 `test_render3d.py` 所依赖的渲染模块已经删除，因此该孤立测试一并移除。
 现有算例仍需使用的快照读取与运行清单校验保留在 `snapshot_io.py`，不依赖渲染模块。
 
@@ -49,7 +63,7 @@ make -C unit_test -j4 TESTS="mesh facefield godunov" DIMENSIONS="2 3"
 | `eos` | RhoT/RhoP/RhoE 往返、热力学合法性、显式模型声速、真空；`HD_NCOMP=2` 时检查 Mixed/Ionized/辐射分支 |
 | `exact_eos` | `HD_NCOMP=2`：辐射通量、gamma=4/3 解析参照、稀疏波/激波/真空、接触间断、电离能输运以及周期网格守恒 |
 | `nuclear` | Nuclear 热力学转换、声速和单位变换，HLL 与两种 exact 的公开通量接口，以及初始和生成真空的界面采样 |
-| `nuclear_wave` | Nuclear 单侧波函数的理想气体解析极限、跨核密度稀疏波与真空极限、独立 Hugoniot 激波状态、导数差分、弱激波及代码单位变换 |
+| `nuclear_wave` | Nuclear 单侧波函数的理想气体解析极限、跨核密度稀疏波与真空极限、独立 Hugoniot 激波状态、导数差分、弱激波及代码单位变换；Newton/二分星区求解的正压力区间、强膨胀回退和生成真空；转折压力两侧极短积分与单侧声速 |
 | `species` | 物种表、单态索引、按 `(Z,A)` 查询所有已激活电离态索引（按电荷排序，含负离子） |
 | `initialization` | 普通 profile 与 MESA 网格、流体状态读取及错误回滚 |
 | `profile_composition` | 专用 `HD_NCOMP=10` 测试：基态输入、可选电离态、同位素别名、MESA 核素映射、质量分数校验与回滚 |
@@ -143,3 +157,17 @@ MESA 保持原始六行表头格式，通过 `name_base` 匹配 `h1`、`he3`、`
 两个读取入口都会拒绝重复/歧义组分列、负值、超过 1 或非有限值，以及
 `|sum(X)-1| >= 1e-6` 的行。总和只包括映射到已激活物种的输入；若漏掉有显著丰度的
 核素会报错，不会自动归一化。读取阶段不调用 Saha，也不重新计算电离能或 EoS。
+
+## SNEC / FLARE thermal-bomb 对照
+
+`snec_thermal_bomb.cpp` 是 testcase 的初始化与质量坐标加热适配器；
+`compare_snec_thermal_bomb.py` 负责重新编译本地 SNEC、生成共同初态、运行和比较。
+配置、profile fixtures、可独立运行的转换初态和结果说明位于
+[`tests/SNEC_Thermal_Bomb`](../tests/SNEC_Thermal_Bomb/README.md)。不修改求解器源码。
+
+```bash
+python3 unit_test/compare_snec_thermal_bomb.py run \
+  --output tests/SNEC_Thermal_Bomb/output_new --radial-cap 0.02
+python3 unit_test/compare_snec_thermal_bomb.py analyze \
+  --output tests/SNEC_Thermal_Bomb/output_new
+```

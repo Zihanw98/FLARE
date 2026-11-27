@@ -1,0 +1,25 @@
+# CGS units; Newtonian self-gravitating toy core, no composition or heating.
+equation_of_state = Nuclear
+geometry = spherical
+nxa = 768
+nxg = 2
+x_lower = 0
+x_upper = 1e10
+gamma = 1.3333333333333333
+spherical_gravity_enabled = true
+spherical_self_gravity_enabled = true
+spherical_gravity_central_mass = 0
+constant_gravity_enabled = false
+constant_heating_enabled = false
+boundary_x_lower = reflective
+boundary_x_upper = user
+riemann_solver = exact
+spatial_scheme = godunov
+reconstructor = PCM
+time_integrator = rk2
+cfl = 0.35
+t_end = 0.0104
+maxsteps = 200000
+output_step_every = 10
+output_directory = /home/u0190250/Research/FLARE/tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/exact/output
+output_suffix = bounce

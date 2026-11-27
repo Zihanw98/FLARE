@@ -1,0 +1,94 @@
+{
+  "snec_ideal": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 122903604405.12068,
+    "shock_mass_msun": 5.1927640147367535,
+    "shock_bracket_cm": [
+      110556463783.36278,
+      242395831272.47296
+    ],
+    "energy_residual_over_bomb": 0.012803631952422031,
+    "mass_change": 0.0,
+    "max_speed_cms": 935876977.0618345,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0096832770103743,
+    "energy_residual_after_actual_heating_over_bomb": 0.003120354942047765,
+    "shock_radius_vs_snec_ideal_percent": 0.0
+  },
+  "flare_hll": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 298416925306.8194,
+    "shock_mass_msun": 5.230487626481879,
+    "shock_bracket_cm": [
+      241380034200.33594,
+      745675127276.3497
+    ],
+    "energy_residual_over_bomb": 0.019215685470588537,
+    "mass_change": 1.059172056283586e-06,
+    "max_speed_cms": 644352267.1878389,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 0.9999968437893991,
+    "energy_residual_after_actual_heating_over_bomb": 0.01921884168118937,
+    "initial_max_relative_errors": {
+      "rho": 0.0,
+      "p": 2.220446049250313e-16,
+      "r": 0.0,
+      "m": 8.049116928532385e-13
+    },
+    "shock_radius_vs_snec_ideal_percent": 142.80567421209503
+  },
+  "flare_exact": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 298416925306.8194,
+    "shock_mass_msun": 5.231179862404427,
+    "shock_bracket_cm": [
+      241380034200.33594,
+      745675127276.3497
+    ],
+    "energy_residual_over_bomb": 0.019394191231938324,
+    "mass_change": 5.823497781776155e-07,
+    "max_speed_cms": 643713434.3054084,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0000005186431489,
+    "energy_residual_after_actual_heating_over_bomb": 0.019393672588789546,
+    "initial_max_relative_errors": {
+      "rho": 0.0,
+      "p": 2.220446049250313e-16,
+      "r": 0.0,
+      "m": 8.049116928532385e-13
+    },
+    "shock_radius_vs_snec_ideal_percent": 142.80567421209503
+  },
+  "snec_paczynski_rad": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 119253412163.21222,
+    "shock_mass_msun": 5.1927640147367535,
+    "shock_bracket_cm": [
+      105460131110.35765,
+      241827598743.66644
+    ],
+    "energy_residual_over_bomb": 0.0130748589805718,
+    "mass_change": 0.0,
+    "max_speed_cms": 845779819.7343061,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0099902239728118,
+    "energy_residual_after_actual_heating_over_bomb": 0.003084635007760017,
+    "shock_radius_vs_snec_ideal_percent": -2.9699635414080494
+  },
+  "flare_exact_2x": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 241380034200.33597,
+    "shock_mass_msun": 5.2188242912032425,
+    "shock_bracket_cm": [
+      198390032903.93417,
+      272878810259.03265
+    ],
+    "energy_residual_over_bomb": 0.007190982144118007,
+    "mass_change": -9.668233669213322e-08,
+    "max_speed_cms": 724736400.100894,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 0.9999982864625686,
+    "energy_residual_after_actual_heating_over_bomb": 0.007192695681549455,
+    "shock_radius_vs_snec_ideal_percent": 96.39784802786392
+  }
+}

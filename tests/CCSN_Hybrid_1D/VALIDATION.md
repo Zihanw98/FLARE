@@ -198,3 +198,87 @@ python unit_test/ccsn_bounce_diagnostics.py \
 该缺陷在固定状态的空间离散 RHS 中已经存在，单独缩小时间步不能消除。
 修复需要以实际面质量通量和一致的势差计算引力能量交换，并对势的时间变化及
 积分阶段作一致处理；提高重构阶数或加密网格只能缓解误差，不能替代守恒耦合。
+
+
+## Nuclear Exact 与 HLL 对照（2026-11-26）
+
+本次检查时 Nuclear 已接通 Exact 波函数、星区压力求解、激波/稀疏波采样、
+核密度处单侧声速、真空和公开通量接口。此前文档中的“拒绝 Nuclear/exact 配对”
+是早期实现的历史记录，不再描述当前接口。
+
+不过完整 CCSN 首次运行在 9.1856756 ms 后报
+`ExactSolver: Nuclear rarefaction step underflow`，中心密度已经超过核密度。
+新增独立回归也复现：初始密度为核密度的 1.0001 倍、热/冷压力比 0.01，
+试探压力位于转折压力下方约 1e-12 时失败。
+
+本次在 `src/hydro/riemann/exact.cpp` 做了以下局部修改：
+
+- 稀疏波声速的冷指数由试探压力相对该等熵线转折压力的位置确定。
+  密度求根存在容差，直接以其近似值判断转折点两侧可能把声速切到错误分支。
+- RK4 的区间缩到浮点数无法提供中点时，以相邻端点积分该机器精度区间，
+  不再继续缩步；普通区间仍使用原 RK4 和步长加倍误差估计。
+- Nuclear 星区压力求解先寻找经过残差符号验证的正压力下界，找不到时仍回到
+  原来的真空极限检查，避免普通界面每次都积分到真空。Newton 和二分法均处理。
+
+测试位于 `unit_test/test_nuclear_wave.cpp`。除了既有解析极限、Hugoniot、
+导数和真空检查，还覆盖正压力区间、强膨胀回退、转折压力两侧 1e-14 的扰动，
+以及初始密度紧贴核密度；均在 CGS 和非平凡代码单位下执行。
+
+```bash
+make -C unit_test -j4 check NDIM=1 TESTS='nuclear_wave nuclear optimization'
+make -C tests/CCSN_Hybrid_1D -j4
+```
+
+这三组测试全部通过。计算参数保存在
+`comparison_exact_hll_20261126/{exact,hll}/parameters.txt`：768 个球壳、PCM、RK2、
+CFL=0.35、终止时间 10.4 ms，初态、边界和引力相同，仅求解器与输出目录不同。
+原失败运行在 `exact_failed_kink/`，不作为完整反弹结果。`provenance.json`
+记录基线提交和运行源码的 SHA-256。
+
+```bash
+tests/CCSN_Hybrid_1D/flare -par tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/exact/parameters.txt
+tests/CCSN_Hybrid_1D/flare -par tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/hll/parameters.txt
+python3 unit_test/compare_ccsn_solvers.py \
+  --exact tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/exact/output \
+  --hll tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/hll/output \
+  --output tests/CCSN_Hybrid_1D/comparison_exact_hll_20261126/analysis \
+  --end 0.0104
+```
+
+两组均完成到 10.4 ms，初始网格与状态一致，通过每帧有限值、正密度、非负热内能、
+EoS 一致性、质量守恒、核密度穿越、反弹和向外传播激波检查。
+
+| 诊断 | Exact | HLL |
+| --- | ---: | ---: |
+| 步数 | 4544 | 4503 |
+| 中心首次越过核密度 / ms | 9.16629 | 9.23126 |
+| 中心密度峰值时刻 / ms | 9.61157 | 9.59298 |
+| 峰值中心密度 / g cm⁻³ | 2.5164909e+14 | 2.3953800e+14 |
+| 10.4 ms 激波半径 / km | 66.66380 | 65.01346 |
+| 最大质量相对误差 | 4.441e-16 | 8.882e-16 |
+| 全程最大绝对速度 / c | 0.266557 | 0.263539 |
+| 总能量增加量 / erg | 1.5635367e+52 | 1.6328236e+52 |
+| 能量增加量 / 初始引力势能绝对值 | 0.603087 | 0.629812 |
+| 累计双能量修正最大绝对值 / erg | 0.0 | 0.0 |
+| 本次墙钟时间 / s | 608.50 | 4.86 |
+
+反弹时刻取每 10 步保存快照的中心密度最大值；并非连续时间拟合。
+激波半径沿用算例的有限宽度压缩前沿诊断。两个解在本分辨率下接近，
+Exact 峰值中心密度约高 5.06%，最终激波半径约大 2.54%。这不是网格收敛验证。
+
+总能量使用气体能量加分片常密度球壳的自引力势能；初值为 -5.0464229e51 erg。
+Exact 与 HLL 的终值分别为 +1.0588944e52 和 +1.1281813e52 erg。
+Exact 的能量漂移仅比 HLL 小约 4.24%，仍相当于初始引力势能绝对值的 60.3%。
+两组双能量修正均为零，外边界气体能流的快照积分约 -4.85e31 erg，可以忽略。
+目前引力能量源项仍是单元中心的动量密度乘加速度，没有采用面质量通量的守恒做功。
+因此换成 Exact 没有消除之前讨论的引力耦合问题。
+
+本次 Exact 的 CPU user 时间为 608.05 s，HLL 为 4.81 s；这只是本机本算例记录，
+不是跨机器性能基准。修复后求解仍包含数值 Hugoniot 反解和稀疏波积分，成本明显较高。
+对照图、完整数值与历史数据在 `comparison_exact_hll_20261126/analysis/`。
+
+输出核对时停止了一个工具中断后仍在运行的早期试跑进程。为排除其对输出的影响，
+在独立目录 `exact_prefix_check/` 从初态重跑到 3 ms；此前的 87 个共同快照与
+交付数据逐字节相同，无需修补任何快照。全部 457 个 Exact 快照的时间均与完整
+运行日志相符，两个已完成 Exact 运行的日志也逐字节一致。记录见
+`analysis/output_audit.json`。中断、失败及前段复核的耗时不计入上表完整运行时间。

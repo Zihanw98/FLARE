@@ -157,6 +157,76 @@ void hybrid_shocks()
         }
     }
 }
+
+void pressure_brackets()
+{
+    // Below nuclear density, equal cold/thermal exponents give an
+    // independent gamma-law oracle for the complete star-pressure solve.
+    const double g = nuclear_gamma_thermal;
+    const auto left = wave(0.001, g, 0.7);
+    const auto right = wave(0.002, g, 0.7);
+    hd_core::Primitives L{}, R{};
+    L[hd_core::RHO] = left.rho0; L[hd_core::PRE] = left.p0;
+    R[hd_core::RHO] = right.rho0; R[hd_core::PRE] = right.p0;
+    auto reference = [&](const hydro::PressureWave& w, double p) {
+        if (p <= w.p0)
+            return 2.0*w.sound_speed/(g-1.0)
+                * std::expm1((g-1.0)/(2*g)*std::log(p/w.p0));
+        return (p-w.p0)*std::sqrt(2.0/((g+1.0)*w.rho0)
+                /(p+(g-1.0)/(g+1.0)*w.p0));
+    };
+    // Positive lower bounds, bracket expansion, and the vacuum-limit fallback.
+    for (double ratio : {0.25, 1.5, 8.0, 1e-4})
+    {
+        const double p = ratio*left.p0;
+        const double fL = reference(left, p), fR = reference(right, p);
+        R[hd_core::VEL(0)] = -fL-fR;
+        for (auto method : {hydro::ExactPressureMethod::SafeguardedNewton,
+                            hydro::ExactPressureMethod::Bisection})
+        {
+            const auto star = hydro::solve_star(L, R, left, right, 1e-9,
+                                               200, 0, method, 0.0);
+            CHECK(star.has_value());
+            relative(star->first, p, 2e-8);
+            relative(star->second, -fL, 2e-8);
+        }
+    }
+    R[hd_core::VEL(0)] = 2.1*(left.sound_speed+right.sound_speed)/(g-1.0);
+    for (auto method : {hydro::ExactPressureMethod::SafeguardedNewton,
+                        hydro::ExactPressureMethod::Bisection})
+        CHECK(!hydro::solve_star(L, R, left, right, 1e-9, 200, 0, method, 0.0));
+}
+
+void near_transition_integrals()
+{
+    for (double density : {1.0+1e-12, 1.0001, 1.01, 1.2, 2.0})
+    for (double thermal : {0.01, 0.8})
+    {
+        const auto w = wave(density, 4.0/3.0, thermal);
+        const double pt = w.p_n + w.p_th0*std::pow(w.rho_n/w.rho0, nuclear_gamma_thermal);
+        const double ft = w.evaluate(pt).first;
+        for (double offset : {-1e-10, -1e-12, -1e-14, 1e-14, 1e-12, 1e-10})
+        {
+            const double p = pt*(1.0+offset);
+            try
+            {
+                const auto [f, df] = w.evaluate(p);
+                CHECK(std::isfinite(f) && std::isfinite(df));
+                const double c = std::sqrt(((offset > 0 ? nuclear_gamma_stiff : w.gamma)*w.p_n
+                                  + nuclear_gamma_thermal*(pt-w.p_n))/w.rho_n);
+                relative(df, 1.0/(w.rho_n*c), 2e-9);
+                CHECK(std::abs(f-ft) <= 2*std::abs(p-pt)/(w.rho_n*c)
+                      + 1e-9*std::abs(ft));
+            }
+            catch (...)
+            {
+                std::cerr << "transition density=" << density << " thermal=" << thermal
+                          << " offset=" << offset << '\n';
+                throw;
+            }
+        }
+    }
+}
 }
 
 int main()
@@ -169,6 +239,8 @@ int main()
             ideal_limit();
             cold_transition();
             hybrid_shocks();
+            pressure_brackets();
+            near_transition_integrals();
             expect_throw<std::invalid_argument>([] { wave(0.5,4.0/3.0,-0.1); });
         }
         physcon::units.init_unitsystem_MLT(1,1,1,1);

@@ -1,0 +1,78 @@
+{
+  "snec_ideal": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 101323301909.35487,
+    "shock_mass_msun": 5.175310431141771,
+    "shock_bracket_cm": [
+      101049801987.57,
+      101877465281.2858
+    ],
+    "energy_residual_over_bomb": 0.018492230100120372,
+    "mass_change": 0.0,
+    "max_speed_cms": 1059351388.3146199,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0096832770103743,
+    "energy_residual_after_actual_heating_over_bomb": 0.008808953089746163,
+    "shock_radius_vs_snec_ideal_percent": 0.0
+  },
+  "flare_hll": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 100736954649.30205,
+    "shock_mass_msun": 5.174707979284695,
+    "shock_bracket_cm": [
+      99928708379.23514,
+      101593243370.62747
+    ],
+    "energy_residual_over_bomb": 0.003769837855792839,
+    "mass_change": 1.0591720431829543e-06,
+    "max_speed_cms": 1005856904.6364003,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 0.9999968437893991,
+    "energy_residual_after_actual_heating_over_bomb": 0.0037729940663937533,
+    "initial_max_relative_errors": {
+      "rho": 0.0,
+      "p": 2.220446049250313e-16,
+      "r": 0.0,
+      "m": 8.244516180866412e-13
+    },
+    "shock_radius_vs_snec_ideal_percent": -0.5786894514919982
+  },
+  "flare_exact": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 100736954649.30205,
+    "shock_mass_msun": 5.174700441307956,
+    "shock_bracket_cm": [
+      99928708379.23514,
+      101593243370.62747
+    ],
+    "energy_residual_over_bomb": 0.003829824444134482,
+    "mass_change": 5.823497641888054e-07,
+    "max_speed_cms": 1005324114.1835002,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0000005186431489,
+    "energy_residual_after_actual_heating_over_bomb": 0.003829305800985505,
+    "initial_max_relative_errors": {
+      "rho": 0.0,
+      "p": 2.220446049250313e-16,
+      "r": 0.0,
+      "m": 8.244516180866412e-13
+    },
+    "shock_radius_vs_snec_ideal_percent": -0.5786894514919982
+  },
+  "snec_paczynski_rad": {
+    "final_time_s": 100.0,
+    "shock_radius_cm": 89664633797.10046,
+    "shock_mass_msun": 5.163350823605843,
+    "shock_bracket_cm": [
+      89536365636.06717,
+      89968400877.41006
+    ],
+    "energy_residual_over_bomb": 0.01756048875182697,
+    "mass_change": 0.0,
+    "max_speed_cms": 981152900.1245638,
+    "finite_positive": true,
+    "injected_energy_over_nominal": 1.0099902239728118,
+    "energy_residual_after_actual_heating_over_bomb": 0.007570264779015234,
+    "shock_radius_vs_snec_ideal_percent": -11.506403653015973
+  }
+}
